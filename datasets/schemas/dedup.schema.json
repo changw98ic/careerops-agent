@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://careerops.local/schemas/dedup.schema.json",
+  "title": "Cross-source posting deduplication pair",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sample_id", "group_id", "split", "synthetic", "posting_a", "posting_b", "gold"],
+  "properties": {
+    "sample_id": {"type": "string", "minLength": 1},
+    "group_id": {"type": "string", "minLength": 1},
+    "split": {"enum": ["development", "validation", "holdout"]},
+    "synthetic": {"type": "boolean"},
+    "posting_a": {"$ref": "#/$defs/posting"},
+    "posting_b": {"$ref": "#/$defs/posting"},
+    "gold": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relationship", "hard_negative", "evidence"],
+      "properties": {
+        "relationship": {"enum": ["same_job", "different_job", "review_required"]},
+        "hard_negative": {"type": "boolean"},
+        "evidence": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "adjudication_reason": {"type": ["string", "null"]}
+      }
+    }
+  },
+  "$defs": {
+    "posting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "external_id", "company", "title", "location", "canonical_url", "content_sha256"],
+      "properties": {
+        "source": {"type": "string"},
+        "external_id": {"type": "string"},
+        "company": {"type": "string"},
+        "title": {"type": "string"},
+        "location": {"type": ["string", "null"]},
+        "canonical_url": {"type": "string", "format": "uri"},
+        "content_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      }
+    }
+  }
+}

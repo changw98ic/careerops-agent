@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://careerops.local/schemas/reconciliation.schema.json",
+  "title": "External side-effect reconciliation fault trace",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sample_id", "group_id", "split", "synthetic", "action", "fault", "provider_observation", "gold"],
+  "properties": {
+    "sample_id": {"type": "string", "minLength": 1},
+    "group_id": {"type": "string", "minLength": 1},
+    "split": {"enum": ["development", "validation", "holdout"]},
+    "synthetic": {"type": "boolean"},
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "idempotency_key", "request_fingerprint", "payload_sha256"],
+      "properties": {
+        "kind": {"enum": ["fake_write", "gmail_send", "calendar_insert"]},
+        "idempotency_key": {"type": "string"},
+        "request_fingerprint": {"type": "string"},
+        "payload_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      }
+    },
+    "fault": {"enum": ["none", "before_call_crash", "after_call_before_commit", "timeout_without_effect", "timeout_with_success", "duplicate_receipt", "credential_revoke", "ambiguous_lookup"]},
+    "provider_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["call_response", "lookup_result", "receipt_count"],
+      "properties": {
+        "call_response": {"enum": ["success", "validation_error", "timeout", "connection_lost", "not_called"]},
+        "lookup_result": {"enum": ["found_exact", "not_found", "ambiguous", "unavailable"]},
+        "receipt_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "gold": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["final_state", "automatic_retry", "provider_effect_count", "manual_queue", "audit_required"],
+      "properties": {
+        "final_state": {"enum": ["succeeded", "failed", "cancelled", "reconciliation_required"]},
+        "automatic_retry": {"type": "boolean"},
+        "provider_effect_count": {"type": "integer", "minimum": 0, "maximum": 1},
+        "manual_queue": {"type": "boolean"},
+        "audit_required": {"const": true},
+        "reason_code": {"type": "string"}
+      }
+    }
+  }
+}

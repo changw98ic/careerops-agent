@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://careerops.local/schemas/remote.schema.json",
+  "title": "Remote eligibility evaluation case",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sample_id", "group_id", "split", "synthetic", "job", "candidate", "gold"],
+  "properties": {
+    "sample_id": {"type": "string", "minLength": 1},
+    "group_id": {"type": "string", "minLength": 1},
+    "split": {"enum": ["development", "validation", "holdout"]},
+    "synthetic": {"type": "boolean"},
+    "job": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_url", "language", "location_text", "description_text", "content_sha256"],
+      "properties": {
+        "source_url": {"type": "string", "format": "uri"},
+        "language": {"enum": ["zh", "en", "mixed"]},
+        "location_text": {"type": "string"},
+        "description_text": {"type": "string"},
+        "content_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["country", "city", "timezone", "work_authorization"],
+      "properties": {
+        "country": {"const": "CN"},
+        "city": {"type": "string"},
+        "timezone": {"const": "Asia/Shanghai"},
+        "work_authorization": {"enum": ["china_only", "specified", "unknown"]}
+      }
+    },
+    "gold": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "hard_gate", "evidence_spans", "abstain_allowed"],
+      "properties": {
+        "label": {"enum": ["china_eligible", "china_ineligible", "global_remote", "apac_ambiguous", "unknown"]},
+        "hard_gate": {"enum": ["pass", "fail", "unknown"]},
+        "evidence_spans": {"type": "array", "items": {"type": "string"}},
+        "abstain_allowed": {"type": "boolean"},
+        "reason_code": {"type": "string"}
+      }
+    }
+  }
+}

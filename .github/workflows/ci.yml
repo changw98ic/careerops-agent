@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_PROJECT_ENVIRONMENT: venv
+  UV_NO_PROGRESS: "1"
+
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.16"
+          enable-cache: true
+      - run: uv sync --frozen --all-groups
+      - run: make verify
+      - run: uv run bandit -q -r src
+      - run: python3 -S scripts/verify_no_secrets.py
+
+  postgres:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17.5-alpine3.22@sha256:6567bca8d7bc8c82c5922425a0baee57be8402df92bae5eacad5f01ae9544daa
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-only-disposable-postgres
+          POSTGRES_DB: careerops_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d careerops_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.16"
+          enable-cache: true
+      - run: uv sync --frozen --all-groups
+      - name: Bootstrap capability roles
+        env:
+          PGPASSWORD: ci-only-disposable-postgres
+        run: psql -h 127.0.0.1 -U postgres -d careerops_test -v ON_ERROR_STOP=1 -f src/careerops/infrastructure/database/bootstrap_roles.sql
+      - name: Run real PostgreSQL migration and capability tests
+        env:
+          CAREEROPS_TEST_DATABASE_URL: postgresql+psycopg://postgres:ci-only-disposable-postgres@127.0.0.1:5432/careerops_test
+        run: make verify-db
+
+  compose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CAREEROPS_DB_OWNER_USER: careerops_owner
+      CAREEROPS_DB_OWNER_PASSWORD: ci-only-owner-password
+      CAREEROPS_DB_NAME: careerops
+      CAREEROPS_DB_RUNTIME_USER: careerops_runtime
+      CAREEROPS_DB_RUNTIME_PASSWORD: ci-only-runtime-password
+      CAREEROPS_REDIS_PASSWORD: ci-only-redis-password
+      CAREEROPS_TEMPORAL_DB_USER: temporal_runtime
+      CAREEROPS_TEMPORAL_DB_PASSWORD: ci-only-temporal-password
+      CAREEROPS_TEMPORAL_DB_NAME: temporal
+      CAREEROPS_TEMPORAL_VISIBILITY_DB_NAME: temporal_visibility
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Validate Compose contract
+        run: docker compose config --quiet
+      - name: Start M0 topology
+        run: docker compose up --build --wait
+      - name: Verify API and console
+        run: |
+          curl --fail --silent http://127.0.0.1:8000/api/v1/health/ready
+          curl --fail --silent http://127.0.0.1:8000/login | grep -q 'CareerOps</title>'
+          test "$(docker compose ps --services --status running | sort | tr '\n' ' ')" = "api postgres redis temporal temporal-ui workflow-worker "
+      - name: Capture service state
+        if: always()
+        run: docker compose ps
+      - name: Stop M0 topology
+        if: always()
+        run: docker compose down --volumes --remove-orphans

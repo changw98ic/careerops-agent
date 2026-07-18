@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://careerops.local/schemas/evidence_match.schema.json",
+  "title": "Requirement to candidate evidence judgment",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sample_id", "group_id", "split", "synthetic", "requirement", "candidate_evidence", "gold"],
+  "properties": {
+    "sample_id": {"type": "string", "minLength": 1},
+    "group_id": {"type": "string", "minLength": 1, "description": "Job or evidence-bundle group."},
+    "split": {"enum": ["development", "validation", "holdout"]},
+    "synthetic": {"type": "boolean"},
+    "requirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "kind", "source_span"],
+      "properties": {
+        "text": {"type": "string"},
+        "kind": {"enum": ["must", "preferred", "responsibility", "hard_gate"]},
+        "source_span": {"type": "string"}
+      }
+    },
+    "candidate_evidence": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["evidence_id", "repository", "commit", "path", "symbol", "snippet_sha256"],
+      "properties": {
+        "evidence_id": {"type": "string"},
+        "repository": {"type": "string"},
+        "commit": {"type": "string"},
+        "path": {"type": "string"},
+        "symbol": {"type": ["string", "null"]},
+        "snippet_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      }
+    },
+    "gold": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["match", "positive_claim_allowed", "reason"],
+      "properties": {
+        "match": {"enum": ["strong", "partial", "transferable", "unsupported", "hard_fail"]},
+        "positive_claim_allowed": {"type": "boolean"},
+        "reason": {"type": "string"}
+      }
+    }
+  }
+}

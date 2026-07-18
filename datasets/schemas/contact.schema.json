@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://careerops.local/schemas/contact.schema.json",
+  "title": "Public recruiting contact evaluation case",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sample_id", "group_id", "split", "synthetic", "source", "candidate", "gold"],
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "object",
+          "required": ["kind", "url_or_thread_ref"],
+          "properties": {
+            "kind": {"const": "established_thread"},
+            "url_or_thread_ref": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "object",
+          "required": ["kind", "url_or_thread_ref"],
+          "properties": {
+            "kind": {
+              "enum": ["job_page", "careers_page", "ats", "official_recruiting_page"]
+            },
+            "url_or_thread_ref": {"type": "string", "format": "uri", "maxLength": 8192}
+          }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "sample_id": {"type": "string", "minLength": 1},
+    "group_id": {"type": "string", "minLength": 1},
+    "split": {"enum": ["development", "validation", "holdout"]},
+    "synthetic": {"type": "boolean"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "url_or_thread_ref", "captured_at", "evidence_text", "content_sha256"],
+      "properties": {
+        "kind": {"enum": ["job_page", "careers_page", "ats", "official_recruiting_page", "established_thread"]},
+        "url_or_thread_ref": {
+          "oneOf": [
+            {"type": "string", "format": "uri", "maxLength": 8192},
+            {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"}
+          ]
+        },
+        "captured_at": {"type": "string", "format": "date-time"},
+        "evidence_text": {"type": "string"},
+        "content_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["address", "display_name", "domain_matches_company"],
+      "properties": {
+        "address": {"type": "string"},
+        "display_name": {"type": ["string", "null"]},
+        "domain_matches_company": {"type": "boolean"}
+      }
+    },
+    "gold": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["classification", "publicly_listed", "guessed", "allowed_actions"],
+      "properties": {
+        "classification": {"enum": ["recruiting_contact", "ordinary_employee", "generic_non_recruiting", "invalid", "review_required"]},
+        "publicly_listed": {"type": "boolean"},
+        "guessed": {"type": "boolean"},
+        "allowed_actions": {"type": "array", "uniqueItems": true, "items": {"enum": ["display", "review", "draft", "send"]}},
+        "reason": {"type": "string"}
+      }
+    }
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://careerops.local/schemas/email.schema.json",
+  "title": "Redacted recruiting email thread evaluation case",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sample_id", "group_id", "split", "synthetic", "privacy", "thread", "gold"],
+  "properties": {
+    "sample_id": {"type": "string", "minLength": 1},
+    "group_id": {"type": "string", "minLength": 1, "description": "Thread/recruiter group."},
+    "split": {"enum": ["development", "validation", "holdout"]},
+    "synthetic": {"type": "boolean"},
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_authorized", "redacted", "pii_scan_passed", "raw_committed_to_git"],
+      "properties": {
+        "source_authorized": {"type": "boolean"},
+        "redacted": {"type": "boolean"},
+        "pii_scan_passed": {"type": "boolean"},
+        "raw_committed_to_git": {"const": false}
+      }
+    },
+    "thread": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["language", "sender_domain_class", "subject", "messages", "content_sha256"],
+      "properties": {
+        "language": {"enum": ["zh", "en", "mixed"]},
+        "sender_domain_class": {"enum": ["company", "ats", "agency", "unknown", "suspicious"]},
+        "subject": {"type": "string"},
+        "messages": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "content_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      }
+    },
+    "gold": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["category", "high_risk", "required_review", "application_linkable", "time_mentions"],
+      "properties": {
+        "category": {"enum": ["screen", "interview", "rejection", "offer", "document_request", "salary", "visa", "assessment", "follow_up", "unknown", "non_recruiting"]},
+        "high_risk": {"type": "array", "uniqueItems": true, "items": {"enum": ["offer", "document", "salary", "visa", "relocation", "tax", "background", "identity", "bank", "suspicious_sender", "none"]}},
+        "required_review": {"type": "boolean"},
+        "application_linkable": {"type": "boolean"},
+        "time_mentions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source_text", "utc", "source_timezone", "abstain"],
+            "properties": {
+              "source_text": {"type": "string"},
+              "utc": {"type": ["string", "null"], "format": "date-time"},
+              "source_timezone": {"type": ["string", "null"]},
+              "abstain": {"type": "boolean"}
+            }
+          }
+        }
+      }
+    }
+  }
+}

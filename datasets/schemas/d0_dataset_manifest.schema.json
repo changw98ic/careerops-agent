@@ -1,0 +1,128 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://careerops.local/schemas/d0_dataset_manifest.schema.json",
+    "title": "CareerOps D0 dataset evidence manifest",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "version",
+        "dataset_id",
+        "dataset_version",
+        "schema",
+        "guide",
+        "source",
+        "artifact",
+        "splits",
+        "groups",
+        "labels",
+        "pii_scan"
+    ],
+    "properties": {
+        "version": {"type": "integer", "const": 1},
+        "dataset_id": {"type": "string", "minLength": 1},
+        "dataset_version": {"type": "string", "minLength": 1, "maxLength": 128},
+        "schema": {"type": "string", "maxLength": 512, "pattern": "^datasets/schemas/[^/]+\\.schema\\.json$"},
+        "guide": {"type": "string", "maxLength": 512, "pattern": "^datasets/labeling-guides/[^/]+\\.md$"},
+        "source": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "source_manifest",
+                "source_manifest_sha256",
+                "consent_ref",
+                "consent_sha256",
+                "retention_ref",
+                "retention_sha256"
+            ],
+            "properties": {
+                "source_manifest": {"type": "string", "minLength": 1, "maxLength": 512},
+                "source_manifest_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+                "consent_ref": {"type": "string", "minLength": 1, "maxLength": 512},
+                "consent_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+                "retention_ref": {"type": "string", "minLength": 1, "maxLength": 512},
+                "retention_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+            }
+        },
+        "artifact": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "sha256", "row_count", "real_count", "synthetic_count"],
+            "properties": {
+                "path": {"type": "string", "minLength": 1, "maxLength": 512},
+                "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+                "row_count": {"type": "integer", "minimum": 0},
+                "real_count": {"type": "integer", "minimum": 0},
+                "synthetic_count": {"type": "integer", "minimum": 0}
+            }
+        },
+        "splits": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["development", "validation", "holdout"],
+            "properties": {
+                "development": {"type": "integer", "minimum": 0},
+                "validation": {"type": "integer", "minimum": 0},
+                "holdout": {"type": "integer", "minimum": 0}
+            }
+        },
+        "groups": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["total_count", "split_counts"],
+            "properties": {
+                "total_count": {"type": "integer", "minimum": 0},
+                "split_counts": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["development", "validation", "holdout"],
+                    "properties": {
+                        "development": {"type": "integer", "minimum": 0},
+                        "validation": {"type": "integer", "minimum": 0},
+                        "holdout": {"type": "integer", "minimum": 0}
+                    }
+                }
+            }
+        },
+        "labels": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "implementer",
+                "independent_reviewer",
+                "adjudicator",
+                "review",
+                "double_labeled_count",
+                "categorical_kappa",
+                "structured_exact_agreement",
+                "adjudication_complete"
+            ],
+            "properties": {
+                "implementer": {"type": "string", "minLength": 1, "maxLength": 256},
+                "independent_reviewer": {"type": "string", "minLength": 1, "maxLength": 256},
+                "adjudicator": {"type": "string", "minLength": 1, "maxLength": 256},
+                "review": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["path", "sha256"],
+                    "properties": {
+                        "path": {"type": "string", "minLength": 1, "maxLength": 512},
+                        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+                    }
+                },
+                "double_labeled_count": {"type": "integer", "minimum": 0},
+                "categorical_kappa": {"type": "number", "minimum": 0, "maximum": 1},
+                "structured_exact_agreement": {"type": "number", "minimum": 0, "maximum": 1},
+                "adjudication_complete": {"type": "boolean"}
+            }
+        },
+        "pii_scan": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "sha256"],
+            "properties": {
+                "path": {"type": "string", "minLength": 1, "maxLength": 512},
+                "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+            }
+        }
+    }
+}

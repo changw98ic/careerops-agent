@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://careerops.local/schemas/policy_injection.schema.json",
+  "title": "Policy and prompt-injection adversarial case",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sample_id", "group_id", "split", "synthetic", "channel", "payload", "trusted_context", "gold"],
+  "properties": {
+    "sample_id": {"type": "string", "minLength": 1},
+    "group_id": {"type": "string", "minLength": 1},
+    "split": {"enum": ["development", "validation", "holdout"]},
+    "synthetic": {"type": "boolean"},
+    "channel": {"enum": ["webpage", "job_description", "email", "signature", "attachment_text", "calendar_description", "model_output"]},
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content", "attack_types", "content_sha256"],
+      "properties": {
+        "content": {"type": "string"},
+        "attack_types": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["ignore_policy", "recipient_change", "secret_exfiltration", "scope_expansion", "tool_call", "attachment_smuggling", "unicode_obfuscation", "html_obfuscation", "social_engineering"]}},
+        "content_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      }
+    },
+    "trusted_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action_kind", "trusted_target", "approval_present", "release_qualified"],
+      "properties": {
+        "action_kind": {"type": "string"},
+        "trusted_target": {"type": ["string", "null"]},
+        "approval_present": {"type": "boolean"},
+        "release_qualified": {"type": "boolean"}
+      }
+    },
+    "gold": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy_decision", "recipient_may_change", "tool_effects", "review_required"],
+      "properties": {
+        "policy_decision": {"enum": ["deny", "require_approval", "allow"]},
+        "recipient_may_change": {"const": false},
+        "tool_effects": {"const": 0},
+        "review_required": {"type": "boolean"},
+        "reason_codes": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://careerops.local/schemas/calendar.schema.json",
+  "title": "Calendar scheduling and race scenario",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sample_id", "group_id", "split", "synthetic", "request", "policy", "busy", "fault", "gold"],
+  "properties": {
+    "sample_id": {"type": "string", "minLength": 1},
+    "group_id": {"type": "string", "minLength": 1},
+    "split": {"enum": ["development", "validation", "holdout"]},
+    "synthetic": {"type": "boolean"},
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_text", "source_timezone", "duration_minutes", "now_utc"],
+      "properties": {
+        "source_text": {"type": "string"},
+        "source_timezone": {"type": ["string", "null"]},
+        "duration_minutes": {"type": "integer", "minimum": 1, "maximum": 480},
+        "now_utc": {"type": "string", "format": "date-time"}
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate_timezone", "minimum_notice_minutes", "buffer_minutes", "daily_limit", "weekly_limit"],
+      "properties": {
+        "candidate_timezone": {"const": "Asia/Shanghai"},
+        "minimum_notice_minutes": {"type": "integer", "minimum": 0},
+        "buffer_minutes": {"type": "integer", "minimum": 0},
+        "daily_limit": {"type": "integer", "minimum": 1},
+        "weekly_limit": {"type": "integer", "minimum": 1}
+      }
+    },
+    "busy": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["calendar_id_hash", "start_utc", "end_utc"],
+        "properties": {
+          "calendar_id_hash": {"type": "string"},
+          "start_utc": {"type": "string", "format": "date-time"},
+          "end_utc": {"type": "string", "format": "date-time"}
+        }
+      }
+    },
+    "fault": {"enum": ["none", "conflict_before_final_freebusy", "conflict_after_final_freebusy", "timeout_with_success", "after_call_before_commit", "duplicate_click"]},
+    "gold": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["normalized_utc", "source_timezone", "abstain", "create_allowed", "event_effect_count", "conflict_detected", "manual_queue", "confirmation_send_count"],
+      "properties": {
+        "normalized_utc": {"type": ["string", "null"], "format": "date-time"},
+        "source_timezone": {"type": ["string", "null"]},
+        "abstain": {"type": "boolean"},
+        "create_allowed": {"type": "boolean"},
+        "event_effect_count": {"type": "integer", "minimum": 0, "maximum": 1},
+        "conflict_detected": {"type": "boolean"},
+        "manual_queue": {"type": "boolean"},
+        "confirmation_send_count": {"const": 0}
+      }
+    }
+  }
+}

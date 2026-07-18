@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "status": "planned",
+  "created_at": "2026-07-17T00:00:00Z",
+  "split_policy": {"development": 0.6, "validation": 0.2, "holdout": 0.2, "group_aware": true},
+  "roles": {
+    "data_curator": "repository_owner",
+    "independent_reviewer": null,
+    "adjudicator": null
+  },
+  "quality": {
+    "pilot_fraction": 0.1,
+    "safety_double_label_fraction": 1.0,
+    "other_double_label_fraction_min": 0.2,
+    "categorical_kappa_min": 0.8,
+    "structured_exact_agreement_min": 0.95,
+    "pii_scan_passed": false
+  },
+  "datasets": [
+    {"id": "discovery_parser", "minimum_final": 350, "pilot_required": 35, "pilot_actual": 0, "schema": "datasets/schemas/discovery_parser.schema.json", "guide": "datasets/labeling-guides/discovery_parser.md", "categorical_gold_field": "adapter", "safety_critical": false, "manifest": null},
+    {"id": "dedup", "minimum_final": 600, "pilot_required": 60, "pilot_actual": 0, "schema": "datasets/schemas/dedup.schema.json", "guide": "datasets/labeling-guides/dedup.md", "categorical_gold_field": "relationship", "safety_critical": false, "manifest": null},
+    {"id": "remote", "minimum_final": 400, "pilot_required": 40, "pilot_actual": 0, "schema": "datasets/schemas/remote.schema.json", "guide": "datasets/labeling-guides/remote.md", "categorical_gold_field": "label", "safety_critical": true, "manifest": null},
+    {"id": "evidence_match", "minimum_final": 250, "pilot_required": 25, "pilot_actual": 0, "schema": "datasets/schemas/evidence_match.schema.json", "guide": "datasets/labeling-guides/evidence_match.md", "categorical_gold_field": "match", "safety_critical": false, "manifest": null},
+    {"id": "contact", "minimum_final": 250, "pilot_required": 25, "pilot_actual": 0, "schema": "datasets/schemas/contact.schema.json", "guide": "datasets/labeling-guides/contact.md", "categorical_gold_field": "classification", "safety_critical": false, "manifest": null},
+    {"id": "email", "minimum_final": 400, "pilot_required": 40, "pilot_actual": 0, "schema": "datasets/schemas/email.schema.json", "guide": "datasets/labeling-guides/email.md", "categorical_gold_field": "category", "safety_critical": true, "manifest": null},
+    {"id": "policy_injection", "minimum_final": 250, "pilot_required": 25, "pilot_actual": 0, "schema": "datasets/schemas/policy_injection.schema.json", "guide": "datasets/labeling-guides/policy_injection.md", "categorical_gold_field": "policy_decision", "safety_critical": true, "manifest": null},
+    {"id": "calendar", "minimum_final": 240, "pilot_required": 24, "pilot_actual": 0, "schema": "datasets/schemas/calendar.schema.json", "guide": "datasets/labeling-guides/calendar.md", "categorical_gold_field": "create_allowed", "safety_critical": true, "manifest": null},
+    {"id": "reconciliation", "minimum_final": 120, "pilot_required": 12, "pilot_actual": 0, "schema": "datasets/schemas/reconciliation.schema.json", "guide": "datasets/labeling-guides/reconciliation.md", "categorical_gold_field": "final_state", "safety_critical": true, "manifest": null}
+  ],
+  "release_qualification_allowed": false,
+  "blocking_reasons": [
+    "independent reviewer and adjudicator are not assigned",
+    "pilot rows and per-dataset manifests are not collected",
+    "PII/secret scan evidence is not present"
+  ]
+}

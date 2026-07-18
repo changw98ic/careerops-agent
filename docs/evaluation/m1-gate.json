@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "status": "contract_ready_pilot_pending",
+  "authoritative_plan": ".omx/plans/careerops-agent-mvp-plan.md",
+  "risk_decisions": ".omx/plans/careerops-agent-risk-closure.md",
+  "contracts": {
+    "scope": "docs/adr/0001-mvp-scope.md",
+    "job_model": "docs/adr/0002-canonical-job-model.md",
+    "side_effects": "docs/adr/0003-side-effect-authority.md",
+    "google_oauth": "docs/adr/0004-google-oauth-scopes.md",
+    "storage_retention": "docs/adr/0005-storage-and-retention.md",
+    "model_privacy": "docs/adr/0006-model-privacy.md",
+    "console_auth": "docs/adr/0007-console-auth.md",
+    "compensation": "docs/adr/0008-compensation-normalization.md",
+    "threat_model": "docs/security/threat-model.md",
+    "metrics": "docs/evaluation/metric-contracts.md",
+    "d0_ownership": "docs/evaluation/d0-ownership.md",
+    "d0_dataset_manifest_schema": "datasets/schemas/d0_dataset_manifest.schema.json",
+    "d0_scan_report_schema": "datasets/schemas/d0_scan_report.schema.json",
+    "d0_label_review_schema": "datasets/schemas/d0_label_review.schema.json"
+  },
+  "required_metric_ids": [
+    "discovery.careers_recall.v1",
+    "parser.required_field_micro_accuracy.v1",
+    "dedup.pairwise.v1",
+    "remote.macro_f1.v1",
+    "remote.hard_false_allow.v1",
+    "contact.precision.v1",
+    "match.evidence_coverage.v1",
+    "email.classification_macro_f1.v1",
+    "email.high_risk_recall.v1",
+    "time.exact_normalized.v1",
+    "side_effect.coverage.v1",
+    "safety.incidents.v1",
+    "calendar.external_race.v1",
+    "side_effect.ambiguous_handling.v1"
+  ],
+  "dataset_contracts": [
+    "discovery_parser",
+    "dedup",
+    "remote",
+    "evidence_match",
+    "contact",
+    "email",
+    "policy_injection",
+    "calendar",
+    "reconciliation"
+  ],
+  "full_gate_requires": {
+    "pilot_manifest_status": "completed",
+    "independent_reviewer_identity": true,
+    "safety_double_label_fraction": 1.0,
+    "other_double_label_fraction_min": 0.2,
+    "categorical_kappa_min": 0.8,
+    "structured_exact_agreement_min": 0.95,
+    "pii_scan_passed": true
+  }
+}

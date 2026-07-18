@@ -1,0 +1,30 @@
+#!/bin/sh
+set -eu
+
+: "${CAREEROPS_DB_RUNTIME_USER:?CAREEROPS_DB_RUNTIME_USER is required}"
+: "${CAREEROPS_DB_RUNTIME_PASSWORD:?CAREEROPS_DB_RUNTIME_PASSWORD is required}"
+: "${CAREEROPS_TEMPORAL_DB_USER:?CAREEROPS_TEMPORAL_DB_USER is required}"
+: "${CAREEROPS_TEMPORAL_DB_PASSWORD:?CAREEROPS_TEMPORAL_DB_PASSWORD is required}"
+: "${CAREEROPS_TEMPORAL_DB_NAME:?CAREEROPS_TEMPORAL_DB_NAME is required}"
+: "${CAREEROPS_TEMPORAL_VISIBILITY_DB_NAME:?CAREEROPS_TEMPORAL_VISIBILITY_DB_NAME is required}"
+
+psql --set ON_ERROR_STOP=1 \
+    --username "$POSTGRES_USER" \
+    --dbname "$POSTGRES_DB" \
+    --set runtime_user="$CAREEROPS_DB_RUNTIME_USER" \
+    --set runtime_password="$CAREEROPS_DB_RUNTIME_PASSWORD" \
+    --set temporal_user="$CAREEROPS_TEMPORAL_DB_USER" \
+    --set temporal_password="$CAREEROPS_TEMPORAL_DB_PASSWORD" \
+    --set temporal_db="$CAREEROPS_TEMPORAL_DB_NAME" \
+    --set temporal_visibility_db="$CAREEROPS_TEMPORAL_VISIBILITY_DB_NAME" <<'SQL'
+CREATE ROLE :"runtime_user"
+    LOGIN PASSWORD :'runtime_password'
+    NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+GRANT careerops_api TO :"runtime_user";
+
+CREATE ROLE :"temporal_user"
+    LOGIN PASSWORD :'temporal_password'
+    NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+CREATE DATABASE :"temporal_db" OWNER :"temporal_user";
+CREATE DATABASE :"temporal_visibility_db" OWNER :"temporal_user";
+SQL

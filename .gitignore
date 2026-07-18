@@ -1,0 +1,24 @@
+.DS_Store
+.env
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Private evaluation material is referenced by manifests, never committed.
+datasets/private/
+datasets/raw/
+datasets/holdout/
+
+# Runtime state and decrypted/temporary secrets.
+data/
+secrets/
+*.log

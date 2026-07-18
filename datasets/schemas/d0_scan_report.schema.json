@@ -1,0 +1,180 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://careerops.local/schemas/d0_scan_report.schema.json",
+    "title": "CareerOps D0 technical pattern scan report",
+    "description": "Evidence from a deterministic technical pattern scan only. This report does not assert legal, privacy, consent, or source-lawfulness clearance.",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "version",
+        "scan_scope",
+        "dataset_id",
+        "dataset_version",
+        "artifact_sha256",
+        "tool",
+        "tool_version",
+        "rule_set_version",
+        "rule_set_sha256",
+        "scanned_at",
+        "unsuppressed_findings_count",
+        "unsuppressed_findings",
+        "reviewed_suppressions"
+    ],
+    "properties": {
+        "version": {
+            "type": "integer",
+            "const": 2
+        },
+        "scan_scope": {
+            "type": "string",
+            "const": "technical_patterns_only"
+        },
+        "dataset_id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "dataset_version": {
+            "type": "string",
+            "maxLength": 128,
+            "pattern": ".*\\S.*"
+        },
+        "artifact_sha256": {
+            "$ref": "#/$defs/sha256",
+            "description": "Digest of the exact dataset artifact scanned; the verifier must recompute it."
+        },
+        "tool": {
+            "type": "string",
+            "maxLength": 128,
+            "pattern": ".*\\S.*"
+        },
+        "tool_version": {
+            "type": "string",
+            "maxLength": 128,
+            "pattern": ".*\\S.*"
+        },
+        "rule_set_version": {
+            "type": "string",
+            "maxLength": 128,
+            "pattern": ".*\\S.*"
+        },
+        "rule_set_sha256": {
+            "$ref": "#/$defs/sha256",
+            "description": "Digest of the deterministic scanner rule definition; the verifier must compare it with the running scanner."
+        },
+        "scanned_at": {
+            "type": "string",
+            "format": "date-time"
+        },
+        "unsuppressed_findings_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Must exactly equal the length of unsuppressed_findings; the verifier enforces equality."
+        },
+        "unsuppressed_findings": {
+            "type": "array",
+            "maxItems": 50000,
+            "items": {
+                "$ref": "#/$defs/finding"
+            },
+            "uniqueItems": true,
+            "description": "Unsuppressed scanner findings. The release gate requires this array to be empty after exact scanner recomputation."
+        },
+        "reviewed_suppressions": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": {
+                "$ref": "#/$defs/reviewed_suppression"
+            },
+            "uniqueItems": true,
+            "description": "Human-reviewed technical suppressions. The verifier must recompute findings and compare every binding field exactly."
+        }
+    },
+    "$defs": {
+        "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+        },
+        "finding": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "finding_id",
+                "rule_id",
+                "target_ref"
+            ],
+            "properties": {
+                "finding_id": {
+                    "$ref": "#/$defs/sha256"
+                },
+                "rule_id": {
+                    "type": "string",
+                    "maxLength": 128,
+                    "pattern": ".*\\S.*"
+                },
+                "target_ref": {
+                    "type": "string",
+                    "maxLength": 256,
+                    "pattern": ".*\\S.*",
+                    "description": "A redacted deterministic location reference; it must not contain matched secret or PII text."
+                }
+            }
+        },
+        "reviewed_suppression": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "finding_id",
+                "rule_id",
+                "target_ref",
+                "reason_code",
+                "reviewer_id",
+                "reviewed_at",
+                "evidence_ref",
+                "evidence_sha256"
+            ],
+            "properties": {
+                "finding_id": {
+                    "$ref": "#/$defs/sha256"
+                },
+                "rule_id": {
+                    "type": "string",
+                    "maxLength": 128,
+                    "pattern": ".*\\S.*"
+                },
+                "target_ref": {
+                    "type": "string",
+                    "maxLength": 256,
+                    "pattern": ".*\\S.*",
+                    "description": "Must exactly match the recomputed finding target and contain no matched value."
+                },
+                "reason_code": {
+                    "type": "string",
+                    "enum": [
+                        "documented_false_positive",
+                        "public_recruiting_contact",
+                        "synthetic_test_fixture"
+                    ]
+                },
+                "reviewer_id": {
+                    "type": "string",
+                    "maxLength": 256,
+                    "pattern": ".*\\S.*"
+                },
+                "reviewed_at": {
+                    "type": "string",
+                    "format": "date-time"
+                },
+                "evidence_ref": {
+                    "type": "string",
+                    "maxLength": 512,
+                    "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?=.*\\S)[^:\\\\\u0000]+$",
+                    "description": "Repository-relative review evidence. The verifier must resolve it without symlink escape and verify its contents bind this dataset version, artifact digest, and finding."
+                },
+                "evidence_sha256": {
+                    "$ref": "#/$defs/sha256",
+                    "description": "Integrity of the referenced evidence only; it is not legal, privacy, consent, or source-lawfulness clearance."
+                }
+            }
+        }
+    }
+}

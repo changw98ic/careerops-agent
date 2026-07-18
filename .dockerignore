@@ -1,0 +1,16 @@
+.git
+.github
+.omx
+.pytest_cache
+.ruff_cache
+.venv
+venv
+__pycache__
+*.py[cod]
+*.sqlite3
+.env
+.env.*
+data
+datasets
+docs
+tests

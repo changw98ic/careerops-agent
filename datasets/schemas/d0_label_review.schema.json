@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://careerops.local/schemas/d0_label_review.schema.json",
+  "title": "D0 Label Review Evidence",
+  "description": "Strict identity-bound row evidence for D0 label-review agreement and disagreement adjudication. Declared metrics are intentionally outside this schema and must be recomputed from rows.",
+  "$comment": "This schema validates structure. Release verification MUST also use load_label_review_evidence, which enforces cross-field actor independence and disagreement/status invariants that standard JSON Schema cannot compare.",
+  "oneOf": [
+    {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "$ref": "#/$defs/row"
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rows"],
+      "properties": {
+        "rows": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "$ref": "#/$defs/row"
+          }
+        },
+        "metrics": true,
+        "declared_metrics": true
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "labelValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["annotator_id", "label", "value"],
+      "properties": {
+        "annotator_id": {
+          "type": "string",
+          "pattern": ".*\\S.*"
+        },
+        "label": {
+          "type": "string",
+          "pattern": ".*\\S.*"
+        },
+        "value": true
+      }
+    },
+    "adjudication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "adjudicator_id",
+        "final_label",
+        "final_value",
+        "reason",
+        "evidence_ref",
+        "evidence_sha256"
+      ],
+      "properties": {
+        "adjudicator_id": {
+          "type": "string",
+          "pattern": ".*\\S.*"
+        },
+        "final_label": {
+          "type": "string",
+          "pattern": ".*\\S.*"
+        },
+        "final_value": true,
+        "reason": {
+          "type": "string",
+          "pattern": ".*\\S.*"
+        },
+        "evidence_ref": {
+          "type": "string",
+          "maxLength": 512,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?=.*\\S)[^:\\\\\\u0000]+$"
+        },
+        "evidence_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "nonAdjudicatedRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sample_id", "primary", "adjudication_status"],
+      "properties": {
+        "sample_id": {
+          "type": "string",
+          "pattern": ".*\\S.*"
+        },
+        "primary": {
+          "$ref": "#/$defs/labelValue"
+        },
+        "secondary": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/labelValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "adjudication_status": {
+          "enum": ["not_required", "pending"]
+        }
+      }
+    },
+    "adjudicatedRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sample_id",
+        "primary",
+        "secondary",
+        "adjudication_status",
+        "adjudication"
+      ],
+      "properties": {
+        "sample_id": {
+          "type": "string",
+          "pattern": ".*\\S.*"
+        },
+        "primary": {
+          "$ref": "#/$defs/labelValue"
+        },
+        "secondary": {
+          "$ref": "#/$defs/labelValue"
+        },
+        "adjudication_status": {
+          "const": "adjudicated"
+        },
+        "adjudication": {
+          "$ref": "#/$defs/adjudication"
+        }
+      }
+    },
+    "row": {
+      "description": "Cross-field identity and disagreement semantics are enforced by the authoritative Python loader in addition to this structural schema.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/nonAdjudicatedRow"
+        },
+        {
+          "$ref": "#/$defs/adjudicatedRow"
+        }
+      ]
+    }
+  }
+}

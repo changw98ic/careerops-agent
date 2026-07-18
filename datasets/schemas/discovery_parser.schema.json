@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://careerops.local/schemas/discovery_parser.schema.json",
+  "title": "Discovery and parser evaluation row",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sample_id", "group_id", "split", "synthetic", "source", "gold"],
+  "properties": {
+    "sample_id": {"type": "string", "minLength": 1},
+    "group_id": {"type": "string", "minLength": 1, "description": "Company/domain group used for leakage-safe splitting."},
+    "split": {"enum": ["development", "validation", "holdout"]},
+    "synthetic": {"type": "boolean"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "url", "captured_at", "content_sha256", "terms_status"],
+      "properties": {
+        "kind": {"enum": ["greenhouse", "lever", "ashby", "json_ld", "sitemap", "static_html", "closed_or_changed"]},
+        "url": {"type": "string", "format": "uri"},
+        "captured_at": {"type": "string", "format": "date-time"},
+        "content_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "terms_status": {"enum": ["allowed", "unknown", "blocked"]},
+        "snapshot_ref": {"type": "string"}
+      }
+    },
+    "gold": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["official_careers_entry", "adapter", "postings"],
+      "properties": {
+        "official_careers_entry": {"type": ["string", "null"], "format": "uri"},
+        "adapter": {"enum": ["greenhouse", "lever", "ashby", "json_ld", "sitemap", "static_html", "unsupported"]},
+        "postings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["external_id", "canonical_url", "company", "title", "location", "description_present", "active"],
+            "properties": {
+              "external_id": {"type": "string"},
+              "canonical_url": {"type": "string", "format": "uri"},
+              "company": {"type": "string"},
+              "title": {"type": "string"},
+              "location": {"type": ["string", "null"]},
+              "description_present": {"type": "boolean"},
+              "active": {"type": "boolean"}
+            }
+          }
+        },
+        "unsupported_reason": {"type": ["string", "null"]}
+      }
+    },
+    "adjudication": {"type": ["object", "null"]}
+  }
+}

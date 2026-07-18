@@ -22,6 +22,7 @@ dependencies = [
 [project.scripts]
 careerops = "careerops:main"
 careerops-bootstrap = "careerops.cli.auth:main"
+careerops-d0 = "careerops.cli.d0:main"
 careerops-worker = "careerops.infrastructure.temporal.worker:main"
 careerops-worker-health = "careerops.infrastructure.temporal.health:main"
 
@@ -42,6 +43,9 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/careerops"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"scripts/verify_m1.py" = "careerops/_trusted/verify_m1.py"
 
 [tool.pytest.ini_options]
 addopts = "-ra --strict-config --strict-markers"

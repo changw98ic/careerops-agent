@@ -1,7 +1,7 @@
 UV_PROJECT_ENVIRONMENT := venv
 export UV_PROJECT_ENVIRONMENT
 
-.PHONY: audit bootstrap coverage format migrate migration-check run security setup verify \
+.PHONY: audit bootstrap coverage d0-scaffold d0-status d0-validate format migrate migration-check run security setup verify \
 	verify-compose verify-db verify-m0 verify-m1 verify-m1-contracts verify-m1-full \
 	verify-temporal
 
@@ -18,6 +18,17 @@ run:
 
 bootstrap:
 	uv run careerops-bootstrap
+
+d0-status:
+	uv run careerops-d0 --root . status
+
+d0-scaffold:
+	@test -n "$(D0_DATASET)" || \
+		(echo "D0_DATASET is required (for example: D0_DATASET=discovery_parser)"; exit 2)
+	uv run careerops-d0 --root . scaffold --dataset "$(D0_DATASET)"
+
+d0-validate:
+	uv run careerops-d0 --root . validate
 
 format:
 	uv run ruff format .

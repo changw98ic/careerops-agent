@@ -72,6 +72,25 @@ visible directory. This avoids a macOS edge case where Python skips editable-ins
 files that have inherited the hidden flag from `.venv/`, while preserving immediate source
 updates during development.
 
+## D0 pilot intake
+
+Use the intake CLI to inspect evidence-derived progress, create explicitly incomplete working
+skeletons, and run the frozen verifier:
+
+```bash
+make d0-status
+D0_DATASET=discovery_parser make d0-scaffold
+uv run careerops-d0 --root . scaffold --dataset dedup
+make d0-validate  # expected to fail until all 286 real pilot rows are accepted
+```
+
+Scaffolds are never added to the pilot plan automatically and are not evidence. Do not put raw
+PII, credentials, private correspondence, or unredacted candidate material in this public
+repository. The first operational tranche is 35 `discovery_parser` rows plus 60 `dedup` rows;
+the full gate remains closed until all nine datasets reach 286 independently reviewed real
+rows. Follow the [D0 pilot intake runbook](docs/runbooks/d0-pilot-intake.md) for roles, storage,
+review thresholds, and stop rules.
+
 ## Verification
 
 ```bash
@@ -161,4 +180,6 @@ production-ready claim:
   must continue to fail rather than accept synthetic substitutes.
 
 See [the ADR index](docs/adr/README.md) and
-[threat model](docs/security/threat-model.md) before widening any capability.
+[threat model](docs/security/threat-model.md) before widening any capability. Report security
+issues through the private channel described in [SECURITY.md](SECURITY.md), never through a
+public issue containing sensitive evidence.

@@ -160,15 +160,15 @@ def _repo_with_claims_and_two_real_files(tmp_path: Path) -> Path:
     scan = _write_json(
         repo / "datasets" / "scans" / "contact.scan.json",
         {
-            "version": 2,
-            "scan_scope": "technical_patterns_only",
+            "version": d0_cli.REPORT_VERSION,
+            "scan_scope": d0_cli.SCAN_SCOPE,
             "dataset_id": "contact",
             "dataset_version": "contact-v1",
             "artifact_sha256": _sha256(artifact),
-            "tool": "careerops-d0-scan",
-            "tool_version": "2.1.0",
-            "rule_set_version": "d0-technical-scan-rules-v3",
-            "rule_set_sha256": "a" * 64,
+            "tool": d0_cli.TOOL_NAME,
+            "tool_version": d0_cli.TOOL_VERSION,
+            "rule_set_version": d0_cli.RULE_SET_VERSION,
+            "rule_set_sha256": d0_cli.RULE_SET_SHA256,
             "scanned_at": "2026-07-18T00:00:00Z",
             "unsuppressed_findings_count": 0,
             "unsuppressed_findings": [],
@@ -248,6 +248,22 @@ def _repo_with_claims_and_two_real_files(tmp_path: Path) -> Path:
     return repo
 
 
+def _contact_manifest_path(repo: Path) -> Path:
+    return repo / "datasets" / "manifests" / "contact.manifest.json"
+
+
+def _contact_scan_path(repo: Path) -> Path:
+    return repo / "datasets" / "scans" / "contact.scan.json"
+
+
+def _rewrite_contact_scan_and_rebind_manifest(repo: Path, scan: dict[str, Any]) -> None:
+    scan_path = _write_json(_contact_scan_path(repo), scan)
+    manifest_path = _contact_manifest_path(repo)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["pii_scan"]["sha256"] = _sha256(scan_path)
+    _write_json(manifest_path, manifest)
+
+
 def _repo_with_one_planned_dataset(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     _write_json(
@@ -319,6 +335,7 @@ def test_status_rejects_corrupt_plan_without_traceback_or_input_echo(tmp_path: P
     payload = _json_stdout(result)
     assert payload["release_qualification_authorized"] is False
     assert any("pilot plan is invalid JSON" in error for error in payload["errors"])
+    assert payload["operator_guidance"]["blocker_codes"].count("status_input_error") == 1
     rendered = result.stdout + result.stderr
     assert SENSITIVE_SENTINEL not in rendered
     assert "Traceback" not in rendered
@@ -342,6 +359,380 @@ def test_status_derives_counts_from_artifacts_instead_of_declared_booleans(
     assert payload["datasets"][0]["id"] == "contact"
     assert payload["datasets"][0]["pilot_actual_declared"] == 999
     assert payload["datasets"][0]["pilot_actual_derived"] == 1
+
+
+def test_status_guidance_reports_fixed_current_blockers_without_authorization(
+    tmp_path: Path,
+) -> None:
+    repo = _repo_with_one_planned_dataset(tmp_path)
+    plan_path = repo / "datasets" / "manifests" / "d0-pilot-plan.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan["roles"] = {"data_curator": "curator"}
+    plan["quality"] = {"pii_scan_passed": False}
+    _write_json(plan_path, plan)
+
+    result = _run_cli(repo, "status", "--json")
+
+    assert result.returncode == 0
+    payload = _json_stdout(result)
+    assert payload["operator_guidance"] == {
+        "authoritative_gate": "d0_validate_full",
+        "blocker_codes": [
+            "plan_not_completed",
+            "independent_reviewer_unassigned",
+            "adjudicator_unassigned",
+            "pii_scan_not_declared_passed",
+            "manifest_missing",
+            "pilot_rows_shortfall",
+            "scan_report_missing",
+        ],
+        "next_action_codes": [
+            "assign_distinct_pilot_roles",
+            "intake_real_pilot_rows",
+            "attach_verified_evidence_manifests",
+            "record_bound_scan_reports",
+            "complete_frozen_pilot_plan",
+            "run_full_validate_json",
+        ],
+        "next_gate": "d0_full_pilot_evidence",
+        "remaining": {
+            "manifests": 1,
+            "pilot_rows": 1,
+            "scan_reports": 1,
+        },
+        "status_is_authoritative_gate": False,
+        "version": 1,
+    }
+    rendered_guidance = json.dumps(payload["operator_guidance"], sort_keys=True)
+    assert "authorized" not in rendered_guidance
+    assert "release" not in rendered_guidance
+    assert "crawl" not in rendered_guidance
+
+
+def test_status_guidance_is_deterministic_and_never_echoes_hostile_plan_text(
+    tmp_path: Path,
+) -> None:
+    repo = _repo_with_one_planned_dataset(tmp_path)
+    plan_path = repo / "datasets" / "manifests" / "d0-pilot-plan.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan["roles"] = {
+        "data_curator": SENSITIVE_SENTINEL,
+        "independent_reviewer": SENSITIVE_SENTINEL,
+        "adjudicator": SENSITIVE_SENTINEL,
+    }
+    plan["blocking_reasons"] = [SENSITIVE_SENTINEL]
+    _write_json(plan_path, plan)
+
+    first = _run_cli(repo, "status", "--json")
+    second = _run_cli(repo, "status", "--json")
+
+    assert first.returncode == 0
+    assert second.returncode == 0
+    assert first.stdout == second.stdout
+    payload = _json_stdout(first)
+    assert "pilot_roles_not_distinct" in payload["operator_guidance"]["blocker_codes"]
+    assert payload["operator_guidance"]["blocker_codes"] == sorted(
+        payload["operator_guidance"]["blocker_codes"],
+        key=(
+            "plan_not_completed",
+            "data_curator_unassigned",
+            "independent_reviewer_unassigned",
+            "adjudicator_unassigned",
+            "pilot_roles_not_distinct",
+            "pii_scan_not_declared_passed",
+            "manifest_missing",
+            "manifest_identity_unverified",
+            "artifact_digest_unverified",
+            "pilot_rows_shortfall",
+            "scan_report_missing",
+            "scan_binding_unverified",
+            "scan_zero_findings_unverified",
+            "status_input_error",
+        ).index,
+    )
+    assert SENSITIVE_SENTINEL not in first.stdout + first.stderr
+
+
+def test_status_guidance_uses_verified_rows_for_the_shortfall(
+    tmp_path: Path,
+) -> None:
+    repo = _repo_with_claims_and_two_real_files(tmp_path)
+    manifest_path = _contact_manifest_path(repo)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifact"]["sha256"] = "0" * 64
+    _write_json(manifest_path, manifest)
+    plan_path = repo / "datasets" / "manifests" / "d0-pilot-plan.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan["datasets"][0]["pilot_required"] = 1
+    plan["datasets"][0]["pilot_actual"] = 1
+    _write_json(plan_path, plan)
+
+    result = _run_cli(repo, "status", "--json")
+
+    payload = _json_stdout(result)
+    guidance = payload["operator_guidance"]
+    assert payload["counts"]["pilot_rows_derived_actual"] == 1
+    assert payload["counts"]["pilot_rows_derived_from_verified_artifacts"] == 0
+    assert guidance["remaining"]["pilot_rows"] == 1
+    assert "artifact_digest_unverified" in guidance["blocker_codes"]
+    assert "pilot_rows_shortfall" in guidance["blocker_codes"]
+
+
+def test_status_reports_zero_unsuppressed_when_scan_binding_is_verified(
+    tmp_path: Path,
+) -> None:
+    repo = _repo_with_claims_and_two_real_files(tmp_path)
+
+    result = _run_cli(repo, "status", "--json")
+
+    assert result.returncode == 0
+    payload = _json_stdout(result)
+    scan = payload["datasets"][0]["scan"]
+    assert payload["datasets"][0]["manifest"]["identity_verified"] is True
+    assert scan["present"] is True
+    assert scan["binding_verified"] is True
+    assert scan["zero_unsuppressed_findings"] is True
+    assert payload["roles"]["top_level_role_values_are_distinct"] is True
+    assert payload["counts"]["scan_reports_zero_unsuppressed"] == 1
+    assert payload["quality"]["technical_scan_zero_findings_derived_from_report"] is True
+
+
+def test_status_requires_verified_artifact_digest_for_row_satisfaction(
+    tmp_path: Path,
+) -> None:
+    repo = _repo_with_claims_and_two_real_files(tmp_path)
+    manifest_path = _contact_manifest_path(repo)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifact"]["sha256"] = "0" * 64
+    _write_json(manifest_path, manifest)
+    plan_path = repo / "datasets" / "manifests" / "d0-pilot-plan.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan["datasets"][0]["pilot_required"] = 1
+    plan["datasets"][0]["pilot_actual"] = 1
+    _write_json(plan_path, plan)
+
+    result = _run_cli(repo, "status", "--json")
+
+    assert result.returncode == 0
+    payload = _json_stdout(result)
+    dataset = payload["datasets"][0]
+    assert dataset["pilot_actual_derived"] == 1
+    assert dataset["artifact"] == {"present": True, "digest_verified": False}
+    assert dataset["error"] == "artifact hash mismatch"
+    assert payload["counts"]["pilot_rows_derived_from_verified_artifacts"] == 0
+    assert payload["counts"]["datasets_satisfied_by_derived_rows"] == 0
+    assert dataset["scan"]["binding_verified"] is False
+    assert dataset["scan"]["zero_unsuppressed_findings"] is False
+    assert payload["release_qualification_authorized"] is False
+
+
+def test_status_reports_only_string_distinctness_for_top_level_pilot_roles(
+    tmp_path: Path,
+) -> None:
+    repo = _repo_with_claims_and_two_real_files(tmp_path)
+    plan_path = repo / "datasets" / "manifests" / "d0-pilot-plan.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan["roles"]["data_curator"] = SENSITIVE_SENTINEL
+    plan["roles"]["independent_reviewer"] = SENSITIVE_SENTINEL
+    _write_json(plan_path, plan)
+
+    result = _run_cli(repo, "status", "--json")
+
+    assert result.returncode == 0
+    payload = _json_stdout(result)
+    assert payload["roles"] == {
+        "data_curator_assigned": True,
+        "independent_reviewer_assigned": True,
+        "adjudicator_assigned": True,
+        "top_level_role_values_are_distinct": False,
+    }
+    assert payload["release_qualification_authorized"] is False
+    assert SENSITIVE_SENTINEL not in result.stdout + result.stderr
+
+
+def test_status_does_not_satisfy_rows_when_manifest_dataset_id_mismatches_plan(
+    tmp_path: Path,
+) -> None:
+    repo = _repo_with_claims_and_two_real_files(tmp_path)
+    manifest_path = _contact_manifest_path(repo)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["dataset_id"] = "email"
+    _write_json(manifest_path, manifest)
+    plan_path = repo / "datasets" / "manifests" / "d0-pilot-plan.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan["datasets"][0]["pilot_required"] = 1
+    plan["datasets"][0]["pilot_actual"] = 1
+    _write_json(plan_path, plan)
+
+    result = _run_cli(repo, "status", "--json")
+
+    assert result.returncode == 0
+    payload = _json_stdout(result)
+    dataset = payload["datasets"][0]
+    assert dataset["manifest"]["identity_verified"] is False
+    assert dataset["artifact"]["digest_verified"] is True
+    assert dataset["scan"]["binding_verified"] is False
+    assert dataset["error"] == "manifest dataset ID does not match pilot plan"
+    assert payload["counts"]["pilot_rows_derived_from_verified_artifacts"] == 0
+    assert payload["counts"]["datasets_satisfied_by_derived_rows"] == 0
+
+
+def test_status_does_not_satisfy_rows_when_manifest_dataset_version_is_missing(
+    tmp_path: Path,
+) -> None:
+    repo = _repo_with_claims_and_two_real_files(tmp_path)
+    manifest_path = _contact_manifest_path(repo)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["dataset_version"] = ""
+    _write_json(manifest_path, manifest)
+    plan_path = repo / "datasets" / "manifests" / "d0-pilot-plan.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan["datasets"][0]["pilot_required"] = 1
+    plan["datasets"][0]["pilot_actual"] = 1
+    _write_json(plan_path, plan)
+
+    result = _run_cli(repo, "status", "--json")
+
+    assert result.returncode == 0
+    payload = _json_stdout(result)
+    dataset = payload["datasets"][0]
+    assert dataset["manifest"]["identity_verified"] is False
+    assert dataset["artifact"]["digest_verified"] is True
+    assert dataset["scan"]["binding_verified"] is False
+    assert dataset["error"] == "manifest dataset version missing"
+    assert payload["counts"]["pilot_rows_derived_from_verified_artifacts"] == 0
+    assert payload["counts"]["datasets_satisfied_by_derived_rows"] == 0
+
+
+def test_status_does_not_report_zero_findings_for_a_bound_scan_with_findings(
+    tmp_path: Path,
+) -> None:
+    repo = _repo_with_claims_and_two_real_files(tmp_path)
+    scan = json.loads(_contact_scan_path(repo).read_text(encoding="utf-8"))
+    scan["unsuppressed_findings_count"] = 1
+    scan["unsuppressed_findings"] = [{"rule_id": "test_finding"}]
+    _rewrite_contact_scan_and_rebind_manifest(repo, scan)
+
+    result = _run_cli(repo, "status", "--json")
+
+    payload = _json_stdout(result)
+    scan_status = payload["datasets"][0]["scan"]
+    assert scan_status["binding_verified"] is True
+    assert scan_status["zero_unsuppressed_findings"] is False
+    assert payload["counts"]["scan_reports_zero_unsuppressed"] == 0
+    assert payload["quality"]["technical_scan_zero_findings_derived_from_report"] is False
+
+
+def test_status_does_not_report_zero_unsuppressed_when_scan_digest_binding_fails(
+    tmp_path: Path,
+) -> None:
+    repo = _repo_with_claims_and_two_real_files(tmp_path)
+    scan_path = _contact_scan_path(repo)
+    scan = json.loads(scan_path.read_text(encoding="utf-8"))
+    scan["scanned_at"] = "2026-07-18T00:00:01Z"
+    _write_json(scan_path, scan)
+
+    result = _run_cli(repo, "status", "--json")
+
+    payload = _json_stdout(result)
+    scan_status = payload["datasets"][0]["scan"]
+    assert scan_status["present"] is True
+    assert scan_status["binding_verified"] is False
+    assert scan_status["zero_unsuppressed_findings"] is False
+    assert payload["counts"]["scan_reports_zero_unsuppressed"] == 0
+    assert payload["quality"]["technical_scan_zero_findings_derived_from_report"] is False
+
+
+def test_status_does_not_report_zero_unsuppressed_when_scan_dataset_id_binding_fails(
+    tmp_path: Path,
+) -> None:
+    repo = _repo_with_claims_and_two_real_files(tmp_path)
+    scan = json.loads(_contact_scan_path(repo).read_text(encoding="utf-8"))
+    scan["dataset_id"] = "email"
+    _rewrite_contact_scan_and_rebind_manifest(repo, scan)
+
+    result = _run_cli(repo, "status", "--json")
+
+    payload = _json_stdout(result)
+    scan_status = payload["datasets"][0]["scan"]
+    assert scan_status["binding_verified"] is False
+    assert scan_status["zero_unsuppressed_findings"] is False
+    assert payload["counts"]["scan_reports_zero_unsuppressed"] == 0
+
+
+def test_status_does_not_report_zero_unsuppressed_when_scan_dataset_version_binding_fails(
+    tmp_path: Path,
+) -> None:
+    repo = _repo_with_claims_and_two_real_files(tmp_path)
+    scan = json.loads(_contact_scan_path(repo).read_text(encoding="utf-8"))
+    scan["dataset_version"] = "contact-v0"
+    _rewrite_contact_scan_and_rebind_manifest(repo, scan)
+
+    result = _run_cli(repo, "status", "--json")
+
+    payload = _json_stdout(result)
+    scan_status = payload["datasets"][0]["scan"]
+    assert scan_status["binding_verified"] is False
+    assert scan_status["zero_unsuppressed_findings"] is False
+    assert payload["counts"]["scan_reports_zero_unsuppressed"] == 0
+
+
+def test_status_does_not_report_zero_unsuppressed_when_scan_artifact_binding_fails(
+    tmp_path: Path,
+) -> None:
+    repo = _repo_with_claims_and_two_real_files(tmp_path)
+    scan = json.loads(_contact_scan_path(repo).read_text(encoding="utf-8"))
+    scan["artifact_sha256"] = "0" * 64
+    _rewrite_contact_scan_and_rebind_manifest(repo, scan)
+
+    result = _run_cli(repo, "status", "--json")
+
+    payload = _json_stdout(result)
+    scan_status = payload["datasets"][0]["scan"]
+    assert scan_status["binding_verified"] is False
+    assert scan_status["zero_unsuppressed_findings"] is False
+    assert payload["counts"]["scan_reports_zero_unsuppressed"] == 0
+
+
+def test_status_does_not_report_zero_unsuppressed_when_artifact_changes_after_scan(
+    tmp_path: Path,
+) -> None:
+    repo = _repo_with_claims_and_two_real_files(tmp_path)
+    artifact = repo / "datasets" / "artifacts" / "contact.jsonl"
+    artifact.write_text(
+        artifact.read_text(encoding="utf-8")
+        + json.dumps(
+            _dataset_row("contact-3", split="development", synthetic=False),
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = _run_cli(repo, "status", "--json")
+
+    payload = _json_stdout(result)
+    scan_status = payload["datasets"][0]["scan"]
+    assert scan_status["binding_verified"] is False
+    assert scan_status["zero_unsuppressed_findings"] is False
+    assert payload["counts"]["scan_reports_zero_unsuppressed"] == 0
+
+
+def test_status_does_not_report_zero_unsuppressed_when_scan_metadata_binding_fails(
+    tmp_path: Path,
+) -> None:
+    repo = _repo_with_claims_and_two_real_files(tmp_path)
+    scan = json.loads(_contact_scan_path(repo).read_text(encoding="utf-8"))
+    scan["rule_set_sha256"] = "0" * 64
+    _rewrite_contact_scan_and_rebind_manifest(repo, scan)
+
+    result = _run_cli(repo, "status", "--json")
+
+    payload = _json_stdout(result)
+    scan_status = payload["datasets"][0]["scan"]
+    assert scan_status["binding_verified"] is False
+    assert scan_status["zero_unsuppressed_findings"] is False
+    assert payload["counts"]["scan_reports_zero_unsuppressed"] == 0
 
 
 def test_status_reports_missing_evidence_when_plan_claims_release_ready(
@@ -393,7 +784,11 @@ def test_status_rejects_artifact_over_row_limit_without_counting_rows(
     artifact.write_text("{}\n" * (MAX_ARTIFACT_ROWS + 1), encoding="utf-8")
     _write_json(
         repo / "datasets/manifests/contact.manifest.json",
-        {"artifact": {"path": "datasets/artifacts/contact.jsonl"}},
+        {
+            "dataset_id": "contact",
+            "dataset_version": "contact-v1",
+            "artifact": {"path": "datasets/artifacts/contact.jsonl"},
+        },
     )
     _write_json(
         repo / "datasets/manifests/d0-pilot-plan.json",

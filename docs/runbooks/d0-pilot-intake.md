@@ -85,6 +85,37 @@ Expected current state: `plan_status_declared` is `planned`,
 scan reports are present, `release_qualification_authorized` is `false`, and
 reviewer/adjudicator roles are unassigned.
 
+For each dataset, `datasets[].scan.binding_verified` is a lightweight
+digest/envelope/dataset/artifact binding signal for Status output. It is `true`
+only when `status` can read the manifest-referenced scan report, verify the
+report file digest, and match the report envelope to the expected dataset ID,
+dataset version, artifact SHA-256, scanner tool, rule-set metadata, report
+version, and scan scope. It does not replay the technical scan, re-evaluate
+suppressions, prove zero findings by itself, or qualify a release. Use
+`validate --json` or `make verify-m1-full` for the full D0 engineering evidence
+gate.
+
+`datasets[].artifact.digest_verified` similarly means that the currently read
+artifact bytes match the SHA-256 declared by its manifest.
+`datasets[].manifest.identity_verified` requires that the manifest names the
+same dataset as its pilot-plan entry and supplies a non-empty dataset version.
+The raw `pilot_actual_derived` count remains parsing telemetry; only
+`counts.pilot_rows_derived_from_verified_artifacts` and
+`counts.datasets_satisfied_by_derived_rows` require both bindings. The
+top-level `roles.top_level_role_values_are_distinct` signal compares non-empty
+role declaration strings only. It does not authenticate people or establish
+real-world independence.
+
+`operator_guidance` is a bounded fixed-code checklist derived from the same
+Status telemetry. It never copies pilot-plan `blocking_reasons`, role values,
+paths, sample data, or scan findings. Its `status_is_authoritative_gate` value
+is always `false`; `authoritative_gate: d0_validate_full` means the operator
+must still run `validate --json` or `make verify-m1-full`. In
+`operator_guidance.remaining`, `pilot_rows` counts only rows from
+identity-verified manifests with digest-verified artifacts; `manifests` and
+`scan_reports` count missing files, while the fixed blocker codes distinguish
+identity, digest, binding, and finding problems.
+
 ### 2. Scaffold
 
 Use `scaffold` only to create explicit incomplete skeleton files. Skeletons are
@@ -137,6 +168,20 @@ make verify-m1-full
 metric, schema, and guide contracts. `validate` without `--contracts-only` and
 `make verify-m1-full` run the full D0 engineering evidence gate and must fail
 until all real pilot evidence is complete.
+
+### 4. M1 implementation handoff
+
+Do not begin M1 automatic-crawl implementation from `status` output or a
+contracts-only pass. The handoff requires a frozen, independently reviewed D0
+pilot and a zero-exit result from `uv run careerops-d0 --root . validate --json`
+or `make verify-m1-full`. Before opening M1 work, the responsible humans must
+also complete the separate source-lawfulness, consent, de-identification, role
+independence, and holdout-custody checks described in this runbook.
+
+That handoff permits M1's safe-HTTP and source-adapter implementation work; it
+does not enable recurring crawling, Release Qualification, or Auto-send. Those
+remain subject to M1's own crawl-safety exit gate and the separate M7 release
+evidence.
 
 ## Evidence chain
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import importlib.util
 import json
 import os
@@ -31,6 +32,7 @@ PLAN_PATH = Path("datasets/manifests/d0-pilot-plan.json")
 SPLITS = ("development", "validation", "holdout")
 INCOMPLETE_MARKER = "INCOMPLETE SKELETON - not evidence; fill with independently reviewed real data"
 DATASET_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
 FROZEN_DATASET_IDS = frozenset(
     {
         "calendar",
@@ -48,6 +50,30 @@ KNOWN_PLAN_STATUSES = frozenset({"completed", "planned"})
 MAX_JSON_BYTES = 8 * 1024 * 1024
 MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
 MAX_ARTIFACT_ROWS = 10_000
+GUIDANCE_BLOCKER_ORDER = (
+    "plan_not_completed",
+    "data_curator_unassigned",
+    "independent_reviewer_unassigned",
+    "adjudicator_unassigned",
+    "pilot_roles_not_distinct",
+    "pii_scan_not_declared_passed",
+    "manifest_missing",
+    "manifest_identity_unverified",
+    "artifact_digest_unverified",
+    "pilot_rows_shortfall",
+    "scan_report_missing",
+    "scan_binding_unverified",
+    "scan_zero_findings_unverified",
+    "status_input_error",
+)
+GUIDANCE_ACTION_ORDER = (
+    "assign_distinct_pilot_roles",
+    "intake_real_pilot_rows",
+    "attach_verified_evidence_manifests",
+    "record_bound_scan_reports",
+    "complete_frozen_pilot_plan",
+    "run_full_validate_json",
+)
 
 
 class D0ArgumentParser(argparse.ArgumentParser):
@@ -143,6 +169,7 @@ def _status(args: argparse.Namespace) -> CommandResult:
     required_total = 0
     declared_actual_total = 0
     derived_actual_total = 0
+    verified_artifact_actual_total = 0
     manifest_references = 0
     manifest_files_present = 0
     scan_reports_present = 0
@@ -161,7 +188,19 @@ def _status(args: argparse.Namespace) -> CommandResult:
         manifest_path: Path | None = None
         manifest_error: str | None = None
         derived_counts = _empty_counts()
-        scan_status: JsonObject = {"present": False, "zero_unsuppressed_findings": False}
+        artifact_status: JsonObject = {
+            "present": False,
+            "digest_verified": False,
+        }
+        manifest_status: JsonObject = {
+            "present": False,
+            "identity_verified": False,
+        }
+        scan_status: JsonObject = {
+            "present": False,
+            "binding_verified": False,
+            "zero_unsuppressed_findings": False,
+        }
 
         if isinstance(manifest_value, str) and manifest_value.strip():
             manifest_references += 1
@@ -170,27 +209,71 @@ def _status(args: argparse.Namespace) -> CommandResult:
                 manifest_error = "manifest path escapes repository"
             elif manifest_path.is_file():
                 manifest_files_present += 1
+                manifest_status["present"] = True
                 manifest_errors: list[str] = []
                 manifest = _read_json_object(
                     manifest_path,
                     manifest_errors,
                     f"{dataset_id} manifest",
                 )
+                dataset_version = manifest.get("dataset_version")
+                if _manifest_identity_verified(
+                    expected_dataset_id=dataset_id,
+                    manifest_dataset_id=manifest.get("dataset_id"),
+                    dataset_version=dataset_version,
+                ):
+                    manifest_status["identity_verified"] = True
+                elif not manifest_errors:
+                    manifest_error = _manifest_identity_error(
+                        expected_dataset_id=dataset_id,
+                        manifest_dataset_id=manifest.get("dataset_id"),
+                        dataset_version=dataset_version,
+                    )
                 artifact = manifest.get("artifact")
+                artifact_sha256: Any = None
+                actual_artifact_sha256: str | None = None
                 if isinstance(artifact, dict):
+                    artifact = cast(JsonObject, artifact)
+                    artifact_sha256 = artifact.get("sha256")
                     artifact_path = _safe_repo_path(
                         root,
-                        cast(dict[str, Any], artifact).get("path"),
+                        artifact.get("path"),
                     )
                     if artifact_path is None:
-                        manifest_error = "artifact path missing or unsafe"
+                        if manifest_error is None:
+                            manifest_error = "artifact path missing or unsafe"
                     elif artifact_path.is_file():
-                        rows = _read_artifact_rows(artifact_path, manifest_errors, dataset_id)
+                        artifact_status["present"] = True
+                        rows, actual_artifact_sha256 = _read_artifact_rows_with_digest(
+                            artifact_path,
+                            manifest_errors,
+                            dataset_id,
+                        )
                         derived_counts = _count_rows(rows)
+                        if _artifact_digest_verified(
+                            artifact_sha256,
+                            actual_artifact_sha256,
+                        ):
+                            artifact_status["digest_verified"] = True
+                        elif actual_artifact_sha256 is not None and manifest_error is None:
+                            manifest_error = "artifact hash mismatch"
                     else:
-                        manifest_error = "artifact file missing"
+                        if manifest_error is None:
+                            manifest_error = "artifact file missing"
                 scan = manifest.get("pii_scan")
-                scan_status = _scan_status(root, scan, manifest_errors)
+                scan_status = _scan_status(
+                    root,
+                    scan,
+                    manifest_errors,
+                    dataset_id=dataset_id,
+                    dataset_version=dataset_version,
+                    manifest_identity_verified=cast(
+                        bool,
+                        manifest_status["identity_verified"],
+                    ),
+                    artifact_sha256=artifact_sha256,
+                    actual_artifact_sha256=actual_artifact_sha256,
+                )
                 if scan_status["present"]:
                     scan_reports_present += 1
                 if scan_status["zero_unsuppressed_findings"]:
@@ -202,7 +285,14 @@ def _status(args: argparse.Namespace) -> CommandResult:
 
         real_count = cast(int, derived_counts["real_count"])
         derived_actual_total += real_count
-        if required is not None and real_count >= required:
+        if artifact_status["digest_verified"] and manifest_status["identity_verified"]:
+            verified_artifact_actual_total += real_count
+        if (
+            required is not None
+            and artifact_status["digest_verified"]
+            and manifest_status["identity_verified"]
+            and real_count >= required
+        ):
             datasets_satisfied += 1
         dataset_status.append(
             {
@@ -211,6 +301,8 @@ def _status(args: argparse.Namespace) -> CommandResult:
                 "pilot_actual_declared": declared_actual,
                 "pilot_actual_derived": real_count,
                 "manifest_present": manifest_path is not None and manifest_path.is_file(),
+                "manifest": manifest_status,
+                "artifact": artifact_status,
                 "scan": scan_status,
                 "error": manifest_error,
             }
@@ -224,34 +316,49 @@ def _status(args: argparse.Namespace) -> CommandResult:
     derived_zero_finding_reports = bool(datasets) and scan_reports_zero_unsuppressed == len(
         datasets
     )
+    plan_status = _safe_plan_status(plan.get("status"))
+    role_status: JsonObject = {
+        "data_curator_assigned": _assigned_role(roles, "data_curator"),
+        "independent_reviewer_assigned": _assigned_role(roles, "independent_reviewer"),
+        "adjudicator_assigned": _assigned_role(roles, "adjudicator"),
+        "top_level_role_values_are_distinct": _top_level_role_values_are_distinct(roles),
+    }
+    quality_status: JsonObject = {
+        "pii_scan_passed_declared": (
+            declared_scan_pass if isinstance(declared_scan_pass, bool) else None
+        ),
+        "technical_scan_zero_findings_derived_from_report": derived_zero_finding_reports,
+    }
+    counts: JsonObject = {
+        "dataset_count": len(datasets),
+        "manifest_references": manifest_references,
+        "manifest_files_present": manifest_files_present,
+        "scan_reports_present": scan_reports_present,
+        "scan_reports_zero_unsuppressed": scan_reports_zero_unsuppressed,
+        "pilot_rows_required": required_total,
+        "pilot_rows_declared_actual": declared_actual_total,
+        "pilot_rows_derived_actual": derived_actual_total,
+        "pilot_rows_derived_from_verified_artifacts": verified_artifact_actual_total,
+        "datasets_satisfied_by_derived_rows": datasets_satisfied,
+    }
     payload: JsonObject = {
         "scope": "d0_intake",
         "plan": str(PLAN_PATH),
-        "plan_status_declared": _safe_plan_status(plan.get("status")),
+        "plan_status_declared": plan_status,
         "release_qualification_authorized": False,
-        "roles": {
-            "data_curator_assigned": _assigned_role(roles, "data_curator"),
-            "independent_reviewer_assigned": _assigned_role(roles, "independent_reviewer"),
-            "adjudicator_assigned": _assigned_role(roles, "adjudicator"),
-        },
-        "quality": {
-            "pii_scan_passed_declared": (
-                declared_scan_pass if isinstance(declared_scan_pass, bool) else None
-            ),
-            "technical_scan_zero_findings_derived_from_report": derived_zero_finding_reports,
-        },
-        "counts": {
-            "dataset_count": len(datasets),
-            "manifest_references": manifest_references,
-            "manifest_files_present": manifest_files_present,
-            "scan_reports_present": scan_reports_present,
-            "scan_reports_zero_unsuppressed": scan_reports_zero_unsuppressed,
-            "pilot_rows_required": required_total,
-            "pilot_rows_declared_actual": declared_actual_total,
-            "pilot_rows_derived_actual": derived_actual_total,
-            "datasets_satisfied_by_derived_rows": datasets_satisfied,
-        },
+        "roles": role_status,
+        "quality": quality_status,
+        "counts": counts,
         "datasets": dataset_status,
+        "operator_guidance": _operator_guidance(
+            plan_status=plan_status,
+            roles=role_status,
+            pii_scan_passed=quality_status["pii_scan_passed_declared"],
+            datasets=dataset_status,
+            pilot_rows_required=required_total,
+            pilot_rows_verified=verified_artifact_actual_total,
+            errors=errors,
+        ),
         "errors": errors,
     }
     return CommandResult(1 if errors else 0, payload)
@@ -505,14 +612,23 @@ def _repo_root(value: Path) -> Path:
 
 
 def _read_json_object(path: Path, errors: list[str], label: str) -> JsonObject:
+    parsed, _ = _read_json_object_with_digest(path, errors, label)
+    return parsed
+
+
+def _read_json_object_with_digest(
+    path: Path,
+    errors: list[str],
+    label: str,
+) -> tuple[JsonObject, str | None]:
     payload = _read_bounded_bytes(path, MAX_JSON_BYTES, errors, label)
     if payload is None:
-        return {}
+        return {}, None
     try:
         text = payload.decode("utf-8")
     except UnicodeDecodeError:
         errors.append(f"{label} must be UTF-8")
-        return {}
+        return {}, None
     try:
         parsed = json.loads(
             text,
@@ -521,25 +637,30 @@ def _read_json_object(path: Path, errors: list[str], label: str) -> JsonObject:
         )
     except (json.JSONDecodeError, ValueError, RecursionError) as exc:
         errors.append(f"{label} is invalid JSON: {exc}")
-        return {}
+        return {}, None
     if not isinstance(parsed, dict):
         errors.append(f"{label} must be a JSON object")
-        return {}
-    return cast(JsonObject, parsed)
+        return {}, None
+    return cast(JsonObject, parsed), hashlib.sha256(payload).hexdigest()
 
 
-def _read_artifact_rows(path: Path, errors: list[str], dataset_id: str) -> list[JsonObject]:
+def _read_artifact_rows_with_digest(
+    path: Path,
+    errors: list[str],
+    dataset_id: str,
+) -> tuple[list[JsonObject], str | None]:
     payload = _read_bounded_bytes(path, MAX_ARTIFACT_BYTES, errors, f"{dataset_id}: artifact")
     if payload is None:
-        return []
+        return [], None
+    digest = hashlib.sha256(payload).hexdigest()
     try:
         text = payload.decode("utf-8")
     except UnicodeDecodeError:
         errors.append(f"{dataset_id}: artifact must be UTF-8")
-        return []
+        return [], None
     stripped = text.strip()
     if not stripped:
-        return []
+        return [], digest
     raw_rows: list[Any] = []
     try:
         parsed = json.loads(
@@ -553,7 +674,7 @@ def _read_artifact_rows(path: Path, errors: list[str], dataset_id: str) -> list[
                 continue
             if len(raw_rows) >= MAX_ARTIFACT_ROWS:
                 errors.append(f"{dataset_id}: artifact exceeds row limit")
-                return []
+                return [], None
             try:
                 raw_rows.append(
                     json.loads(
@@ -564,19 +685,21 @@ def _read_artifact_rows(path: Path, errors: list[str], dataset_id: str) -> list[
                 )
             except (json.JSONDecodeError, ValueError, RecursionError) as exc:
                 errors.append(f"{dataset_id}: invalid JSONL artifact line {line_number}: {exc}")
-                return []
+                return [], None
     else:
         raw_rows = cast(list[Any], parsed) if isinstance(parsed, list) else [parsed]
     if len(raw_rows) > MAX_ARTIFACT_ROWS:
         errors.append(f"{dataset_id}: artifact exceeds row limit")
-        return []
+        return [], None
     rows: list[JsonObject] = []
     for index, row in enumerate(raw_rows):
         if isinstance(row, dict):
             rows.append(cast(JsonObject, row))
         else:
             errors.append(f"{dataset_id}: artifact row {index + 1} must be an object")
-    return rows
+    if len(rows) != len(raw_rows):
+        return rows, None
+    return rows, digest
 
 
 def _plan_datasets(plan: JsonObject, errors: list[str]) -> list[JsonObject]:
@@ -596,19 +719,103 @@ def _plan_datasets(plan: JsonObject, errors: list[str]) -> list[JsonObject]:
     return datasets
 
 
-def _scan_status(root: Path, scan: Any, errors: list[str]) -> JsonObject:
-    status: JsonObject = {"present": False, "zero_unsuppressed_findings": False}
+def _scan_status(
+    root: Path,
+    scan: Any,
+    errors: list[str],
+    *,
+    dataset_id: str,
+    dataset_version: Any,
+    manifest_identity_verified: bool,
+    artifact_sha256: Any,
+    actual_artifact_sha256: Any,
+) -> JsonObject:
+    status: JsonObject = {
+        "present": False,
+        "binding_verified": False,
+        "zero_unsuppressed_findings": False,
+    }
     if not isinstance(scan, dict):
         return status
-    path = _safe_repo_path(root, cast(dict[str, Any], scan).get("path"))
+    scan = cast(JsonObject, scan)
+    expected_scan_sha256 = scan.get("sha256")
+    path = _safe_repo_path(root, scan.get("path"))
     if path is None or not path.is_file():
         return status
     status["present"] = True
-    report = _read_json_object(path, errors, "scan report")
+    report, actual_scan_sha256 = _read_json_object_with_digest(path, errors, "scan report")
+    if (
+        not manifest_identity_verified
+        or not _is_sha256(expected_scan_sha256)
+        or actual_scan_sha256 != expected_scan_sha256
+        or not _is_sha256(artifact_sha256)
+        or not _is_sha256(actual_artifact_sha256)
+        or actual_artifact_sha256 != artifact_sha256
+        or not isinstance(dataset_version, str)
+        or not dataset_version.strip()
+    ):
+        return status
+
+    expected_report_values = {
+        "version": REPORT_VERSION,
+        "scan_scope": SCAN_SCOPE,
+        "dataset_id": dataset_id,
+        "dataset_version": dataset_version,
+        "artifact_sha256": artifact_sha256,
+        "tool": TOOL_NAME,
+        "tool_version": TOOL_VERSION,
+        "rule_set_version": RULE_SET_VERSION,
+        "rule_set_sha256": RULE_SET_SHA256,
+    }
+    if any(report.get(key) != value for key, value in expected_report_values.items()):
+        return status
+
+    status["binding_verified"] = True
     findings = report.get("unsuppressed_findings")
     count = report.get("unsuppressed_findings_count")
-    status["zero_unsuppressed_findings"] = findings == [] and count == 0
+    findings_count = len(cast(list[object], findings)) if isinstance(findings, list) else None
+    status["zero_unsuppressed_findings"] = (
+        isinstance(findings, list)
+        and isinstance(count, int)
+        and not isinstance(count, bool)
+        and count == findings_count
+        and count == 0
+    )
     return status
+
+
+def _is_sha256(value: Any) -> bool:
+    return isinstance(value, str) and SHA256_RE.fullmatch(value) is not None
+
+
+def _artifact_digest_verified(expected: Any, actual: Any) -> bool:
+    return _is_sha256(expected) and isinstance(actual, str) and actual == expected
+
+
+def _manifest_identity_verified(
+    *,
+    expected_dataset_id: str,
+    manifest_dataset_id: Any,
+    dataset_version: Any,
+) -> bool:
+    return (
+        manifest_dataset_id == expected_dataset_id
+        and isinstance(dataset_version, str)
+        and bool(dataset_version.strip())
+    )
+
+
+def _manifest_identity_error(
+    *,
+    expected_dataset_id: str,
+    manifest_dataset_id: Any,
+    dataset_version: Any,
+) -> str:
+    if manifest_dataset_id != expected_dataset_id:
+        return "manifest dataset ID does not match pilot plan"
+    if not isinstance(dataset_version, str) or not dataset_version.strip():
+        return "manifest dataset version missing"
+    return "manifest identity is invalid"
 
 
 def _count_rows(rows: list[JsonObject]) -> JsonObject:
@@ -649,6 +856,130 @@ def _assigned_role(roles: Any, key: str) -> bool:
         return False
     value = cast(dict[str, Any], roles).get(key)
     return isinstance(value, str) and bool(value.strip())
+
+
+def _top_level_role_values_are_distinct(roles: Any) -> bool:
+    if not isinstance(roles, dict):
+        return False
+    role_values: list[str] = []
+    for key in ("data_curator", "independent_reviewer", "adjudicator"):
+        value = cast(dict[str, Any], roles).get(key)
+        if not isinstance(value, str) or not value.strip():
+            return False
+        role_values.append(value)
+    return len(set(role_values)) == len(role_values)
+
+
+def _operator_guidance(
+    *,
+    plan_status: str,
+    roles: JsonObject,
+    pii_scan_passed: Any,
+    datasets: list[JsonObject],
+    pilot_rows_required: int,
+    pilot_rows_verified: int,
+    errors: list[str],
+) -> JsonObject:
+    """Return bounded, non-authoritative operator next steps from status telemetry."""
+
+    blockers: set[str] = set()
+    actions: set[str] = {"run_full_validate_json"}
+    if plan_status != "completed":
+        blockers.add("plan_not_completed")
+        actions.add("complete_frozen_pilot_plan")
+
+    missing_roles = False
+    for role, blocker in (
+        ("data_curator_assigned", "data_curator_unassigned"),
+        ("independent_reviewer_assigned", "independent_reviewer_unassigned"),
+        ("adjudicator_assigned", "adjudicator_unassigned"),
+    ):
+        if roles.get(role) is not True:
+            blockers.add(blocker)
+            missing_roles = True
+    if not missing_roles and roles.get("top_level_role_values_are_distinct") is not True:
+        blockers.add("pilot_roles_not_distinct")
+    if missing_roles or "pilot_roles_not_distinct" in blockers:
+        actions.add("assign_distinct_pilot_roles")
+
+    if pii_scan_passed is not True:
+        blockers.add("pii_scan_not_declared_passed")
+
+    manifest_present = _count_dataset_status_flags(datasets, "manifest", "present")
+    manifest_identity_verified = _count_dataset_status_flags(
+        datasets,
+        "manifest",
+        "identity_verified",
+    )
+    artifact_digest_verified = _count_dataset_status_flags(
+        datasets,
+        "artifact",
+        "digest_verified",
+    )
+    scan_present = _count_dataset_status_flags(datasets, "scan", "present")
+    scan_binding_verified = _count_dataset_status_flags(datasets, "scan", "binding_verified")
+    scan_zero_findings = _count_dataset_status_flags(
+        datasets,
+        "scan",
+        "zero_unsuppressed_findings",
+    )
+    if manifest_present < len(datasets):
+        blockers.add("manifest_missing")
+    if manifest_identity_verified < manifest_present:
+        blockers.add("manifest_identity_unverified")
+    if artifact_digest_verified < manifest_identity_verified:
+        blockers.add("artifact_digest_unverified")
+    if pilot_rows_verified < pilot_rows_required:
+        blockers.add("pilot_rows_shortfall")
+        actions.add("intake_real_pilot_rows")
+    if manifest_present < len(datasets) or manifest_identity_verified < manifest_present:
+        actions.add("attach_verified_evidence_manifests")
+    if artifact_digest_verified < manifest_identity_verified:
+        actions.add("attach_verified_evidence_manifests")
+
+    if scan_present < len(datasets):
+        blockers.add("scan_report_missing")
+    if scan_binding_verified < scan_present:
+        blockers.add("scan_binding_unverified")
+    if scan_zero_findings < scan_binding_verified:
+        blockers.add("scan_zero_findings_unverified")
+    if (
+        pii_scan_passed is not True
+        or scan_present < len(datasets)
+        or scan_binding_verified < scan_present
+        or scan_zero_findings < scan_binding_verified
+    ):
+        actions.add("record_bound_scan_reports")
+
+    if errors:
+        blockers.add("status_input_error")
+
+    return {
+        "version": 1,
+        "status_is_authoritative_gate": False,
+        "authoritative_gate": "d0_validate_full",
+        "next_gate": "d0_full_pilot_evidence",
+        "blocker_codes": [blocker for blocker in GUIDANCE_BLOCKER_ORDER if blocker in blockers],
+        "next_action_codes": [action for action in GUIDANCE_ACTION_ORDER if action in actions],
+        "remaining": {
+            "pilot_rows": max(pilot_rows_required - pilot_rows_verified, 0),
+            "manifests": max(len(datasets) - manifest_present, 0),
+            "scan_reports": max(len(datasets) - scan_present, 0),
+        },
+    }
+
+
+def _count_dataset_status_flags(
+    datasets: list[JsonObject],
+    section: str,
+    field: str,
+) -> int:
+    return sum(
+        1
+        for dataset in datasets
+        if isinstance(dataset.get(section), dict)
+        and cast(JsonObject, dataset[section]).get(field) is True
+    )
 
 
 def _safe_repo_path(root: Path, value: Any) -> Path | None:

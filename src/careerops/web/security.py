@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+from ipaddress import ip_address
 from urllib.parse import urlsplit
 
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
@@ -12,6 +14,51 @@ CSP = (
     "object-src 'none'; script-src 'none'; style-src 'self'; img-src 'self'; "
     "connect-src 'self'"
 )
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def _origin_rejection_profile(origin: str, allowed_origins: frozenset[str]) -> str:
+    """Return a bounded diagnostic category without retaining attacker-controlled input."""
+    if origin == "null":
+        return "opaque"
+    try:
+        parsed = urlsplit(origin)
+        parsed_port = parsed.port
+        allowed = tuple(urlsplit(item) for item in allowed_origins)
+        allowed_keys = tuple(
+            (item.scheme.lower(), item.hostname.lower(), item.port)
+            for item in allowed
+            if item.hostname is not None
+        )
+    except ValueError:
+        return "malformed"
+    if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
+        return "non_http"
+    if (
+        parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        return "unexpected_components"
+    authority = (parsed.hostname.lower(), parsed_port)
+    allowed_authorities = tuple(item[1:] for item in allowed_keys)
+    origin_key = (parsed.scheme.lower(), *authority)
+    if origin_key in allowed_keys:
+        return "canonicalization_mismatch"
+    if authority in allowed_authorities:
+        return "scheme_mismatch"
+    hostname = parsed.hostname.lower()
+    if hostname == "localhost":
+        return "unconfigured_loopback"
+    try:
+        if ip_address(hostname).is_loopback:
+            return "unconfigured_loopback"
+    except ValueError:
+        pass
+    return "non_loopback"
 
 
 class RequestOriginRejected(ValueError):
@@ -67,12 +114,24 @@ class OriginHostValidator:
     def validate_host(self, request: Request) -> None:
         host = request.headers.get("host", "").lower()
         if host not in self._settings.allowed_hosts:
+            _LOGGER.warning("console request origin rejected reason=host_not_allowed")
             raise RequestOriginRejected("request Host is not allowed")
 
     def validate_mutation(self, request: Request) -> None:
         self.validate_host(request)
         origin = request.headers.get("origin", "").rstrip("/")
         if origin not in self._settings.allowed_origins:
+            reason = "origin_missing" if not origin else "origin_not_allowed"
+            profile = (
+                "missing"
+                if not origin
+                else _origin_rejection_profile(origin, self._settings.allowed_origins)
+            )
+            _LOGGER.warning(
+                "console request origin rejected reason=%s profile=%s",
+                reason,
+                profile,
+            )
             raise RequestOriginRejected("request Origin is missing or not allowed")
 
 
@@ -81,7 +140,10 @@ class ConsoleSecurityHeadersMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         response.headers["Content-Security-Policy"] = CSP
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["Referrer-Policy"] = "no-referrer"
+        # Fetch serializes the Origin of a non-CORS form POST as `null` under
+        # `no-referrer`. `same-origin` preserves the exact same-origin value
+        # required by the CSRF gate while still suppressing cross-origin Referer.
+        response.headers["Referrer-Policy"] = "same-origin"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Permissions-Policy"] = (
             "camera=(), microphone=(), geolocation=(), payment=(), usb=()"

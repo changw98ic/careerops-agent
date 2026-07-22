@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime, timedelta
+from types import MappingProxyType
 from uuid import uuid4
 
 import pytest
@@ -11,11 +12,34 @@ from alembic.config import Config
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import DBAPIError
 
+from careerops.application.application_adapters import (
+    BrowserIsolationMode,
+    FormFieldSpec,
+    SandboxApplicationPayload,
+    SandboxBrowserSession,
+    SyntheticApplicationFixture,
+)
+from careerops.application.release_qualification import (
+    AutopilotReleaseStage,
+    SyntheticReleaseQualification,
+)
+from careerops.application.submission_dispatch import (
+    DispatchAuthority,
+    QualifiedSyntheticDispatchRequest,
+    SyntheticSubmissionDispatchPlanner,
+)
 from careerops.config import DatabaseCapabilityRole, Settings
 from careerops.infrastructure.database.engine import create_database_engine
 from careerops.infrastructure.database.schema import APPEND_ONLY_TABLES, metadata
+from careerops.infrastructure.database.submission_dispatch import (
+    PostgresSyntheticDispatchReservationStore,
+)
+from careerops.policy.autopilot import AutopilotOutcome
 
 pytestmark = pytest.mark.integration
+
+_DISPOSABLE_DATABASE_PREFIX = "careerops_test_"
+_DESTRUCTIVE_DATABASE_ACKNOWLEDGEMENT = "CAREEROPS_ALLOW_DESTRUCTIVE_TEST_DATABASE"
 
 
 @pytest.fixture(scope="module")
@@ -23,6 +47,17 @@ def database_url() -> str:
     value = os.environ.get("CAREEROPS_TEST_DATABASE_URL")
     if value is None:
         pytest.skip("CAREEROPS_TEST_DATABASE_URL is required for PostgreSQL migration tests")
+    database_name = sa.engine.make_url(value).database or ""
+    if not database_name.startswith(_DISPOSABLE_DATABASE_PREFIX):
+        pytest.skip(
+            "PostgreSQL migration tests require a disposable database named "
+            f"{_DISPOSABLE_DATABASE_PREFIX}*"
+        )
+    if os.environ.get(_DESTRUCTIVE_DATABASE_ACKNOWLEDGEMENT) != "1":
+        pytest.skip(
+            f"{_DESTRUCTIVE_DATABASE_ACKNOWLEDGEMENT}=1 is required because migration tests "
+            "downgrade the target database to base"
+        )
     return value
 
 
@@ -45,6 +80,7 @@ def assert_role_permission_denied(
 ) -> None:
     assert role in {
         "careerops_api",
+        "careerops_mailbox",
         "careerops_outbox",
         "careerops_retention",
         "careerops_side_effect",
@@ -84,9 +120,18 @@ def test_initial_migration_round_trip_and_database_guards(database_url: str) -> 
                 """
             )
         )
-        # Three reference guards, blob/object/outbox state guards, and one deferred
-        # active-blob registration guard.
-        assert trigger_count == len(APPEND_ONLY_TABLES) + 7
+        # Three reference guards, blob/object/outbox state guards, one deferred
+        # active-blob registration guard, autopilot grant/authorization/revocation/
+        # cap-reservation guards, the grant-revocation state lock, the separate
+        # synthetic execution-boundary guard,
+        # kill-switch per-scope serialization, crawler approval/dispatch guards, and
+        # the release-qualification evidence-freeze and decision lifecycle guards,
+        # the canonical crawler-ingestion evidence binding guard, and goal-run
+        # identity/version immutability, plus goal-run Gmail composition identity
+        # immutability, the legacy-compatible candidate-owner insert guard, and
+        # the final pre-application profile-approval guard and the database-level
+        # pre-application GoalRun create guard.
+        assert trigger_count == len(APPEND_ONLY_TABLES) + 24
         assert not connection.scalar(
             sa.text(
                 "SELECT has_table_privilege('careerops_api', 'careerops.audit_events', 'INSERT')"
@@ -118,11 +163,157 @@ def test_initial_migration_round_trip_and_database_guards(database_url: str) -> 
                 "'careerops_api', 'careerops.require_active_content_blob()', 'EXECUTE')"
             )
         )
+        assert connection.scalar(
+            sa.text(
+                "SELECT has_function_privilege("
+                "'careerops_outbox', "
+                "'careerops.complete_crawler_execution_outbox_event("
+                "uuid,text,uuid,text,text,uuid)', 'EXECUTE')"
+            )
+        )
+        assert not connection.scalar(
+            sa.text(
+                "SELECT has_function_privilege("
+                "'careerops_api', "
+                "'careerops.complete_crawler_execution_outbox_event("
+                "uuid,text,uuid,text,text,uuid)', 'EXECUTE')"
+            )
+        )
+        assert connection.scalar(
+            sa.text(
+                "SELECT has_function_privilege("
+                "'careerops_workflow', "
+                "'careerops.goal_run_prepare_gmail(uuid,uuid,jsonb,jsonb,jsonb,text)', "
+                "'EXECUTE')"
+            )
+        )
+        assert not connection.scalar(
+            sa.text(
+                "SELECT has_table_privilege("
+                "'careerops_workflow', 'careerops.goal_run_gmail_compositions', 'INSERT')"
+            )
+        )
+        assert not connection.scalar(
+            sa.text(
+                "SELECT has_function_privilege("
+                "'careerops_workflow', "
+                "'careerops.gmail_send_reserve_and_enqueue("
+                "uuid,uuid,uuid,uuid,uuid,uuid,uuid,text,text,uuid,text,text,uuid,uuid,"
+                "text,text,text,text,text,text,text)', 'EXECUTE')"
+            )
+        )
+        assert connection.scalar(
+            sa.text(
+                "SELECT has_table_privilege("
+                "'careerops_outbox', 'careerops.crawler_execution_results', 'SELECT')"
+            )
+        )
+        assert not connection.scalar(
+            sa.text(
+                "SELECT has_table_privilege("
+                "'careerops_outbox', 'careerops.crawler_execution_results', 'INSERT')"
+            )
+        )
+        assert not connection.scalar(
+            sa.text(
+                "SELECT has_table_privilege("
+                "'careerops_outbox', 'careerops.crawler_execution_results', 'UPDATE')"
+            )
+        )
         assert not connection.scalar(
             sa.text(
                 "SELECT has_column_privilege("
                 "'careerops_readonly', 'careerops.oauth_credential_references', "
                 "'secret_handle', 'SELECT')"
+            )
+        )
+        assert connection.scalar(
+            sa.text(
+                "SELECT has_column_privilege("
+                "'careerops_api', 'careerops.autopilot_cap_reservations', "
+                "'release_evidence_hash', 'INSERT')"
+            )
+        )
+        assert connection.scalar(
+            sa.text(
+                "SELECT has_column_privilege("
+                "'careerops_api', 'careerops.autopilot_cap_reservations', "
+                "'release_evidence_expires_at', 'INSERT')"
+            )
+        )
+        assert connection.scalar(
+            sa.text("SELECT has_schema_privilege('careerops_mailbox', 'careerops', 'USAGE')")
+        )
+        assert not connection.scalar(
+            sa.text(
+                "SELECT has_table_privilege("
+                "'careerops_mailbox', 'careerops.gmail_accounts', 'SELECT')"
+            )
+        )
+        assert not connection.scalar(
+            sa.text(
+                "SELECT has_table_privilege("
+                "'careerops_mailbox', 'careerops.gmail_sync_runs', 'SELECT')"
+            )
+        )
+        assert connection.scalar(
+            sa.text(
+                "SELECT has_column_privilege("
+                "'careerops_mailbox', 'careerops.gmail_accounts', 'id', 'SELECT')"
+            )
+        )
+        assert connection.scalar(
+            sa.text(
+                "SELECT has_column_privilege("
+                "'careerops_mailbox', 'careerops.gmail_accounts', 'provider', 'SELECT')"
+            )
+        )
+        assert connection.scalar(
+            sa.text(
+                "SELECT has_column_privilege("
+                "'careerops_mailbox', 'careerops.gmail_accounts', 'status', 'SELECT')"
+            )
+        )
+        assert connection.scalar(
+            sa.text(
+                "SELECT has_column_privilege("
+                "'careerops_mailbox', 'careerops.gmail_sync_runs', "
+                "'gmail_account_id', 'SELECT')"
+            )
+        )
+        assert connection.scalar(
+            sa.text(
+                "SELECT has_column_privilege("
+                "'careerops_mailbox', 'careerops.gmail_sync_runs', 'status', 'SELECT')"
+            )
+        )
+        assert not connection.scalar(
+            sa.text(
+                "SELECT has_column_privilege("
+                "'careerops_mailbox', 'careerops.gmail_accounts', "
+                "'oauth_credential_reference_id', 'SELECT')"
+            )
+        )
+        assert not connection.scalar(
+            sa.text(
+                "SELECT has_column_privilege("
+                "'careerops_mailbox', 'careerops.gmail_accounts', "
+                "'account_subject', 'SELECT')"
+            )
+        )
+        assert not connection.scalar(
+            sa.text(
+                "SELECT has_column_privilege("
+                "'careerops_mailbox', 'careerops.gmail_sync_runs', "
+                "'lease_token', 'SELECT')"
+            )
+        )
+        assert connection.scalar(
+            sa.text(
+                "SELECT has_function_privilege("
+                "'careerops_mailbox', "
+                "'careerops.gmail_readonly_claim_sync_runs(text, integer, integer)', "
+                "'EXECUTE')"
             )
         )
 
@@ -385,6 +576,31 @@ def test_initial_migration_round_trip_and_database_guards(database_url: str) -> 
         role="careerops_outbox",
         statement="SELECT * FROM careerops.action_payload_versions",
     )
+    with engine.begin() as connection:
+        connection.execute(sa.text("SET LOCAL ROLE careerops_mailbox"))
+        connection.execute(
+            sa.text("SELECT id, provider, status FROM careerops.gmail_accounts LIMIT 1")
+        )
+        connection.execute(
+            sa.text("SELECT gmail_account_id, status FROM careerops.gmail_sync_runs LIMIT 1")
+        )
+    assert_role_permission_denied(
+        engine,
+        role="careerops_mailbox",
+        statement="SELECT * FROM careerops.gmail_accounts LIMIT 1",
+    )
+    assert_role_permission_denied(
+        engine,
+        role="careerops_mailbox",
+        statement=(
+            "SELECT id, oauth_credential_reference_id FROM careerops.gmail_accounts LIMIT 1"
+        ),
+    )
+    assert_role_permission_denied(
+        engine,
+        role="careerops_mailbox",
+        statement="SELECT gmail_account_id, lease_token FROM careerops.gmail_sync_runs LIMIT 1",
+    )
 
     intent_a = uuid4()
     intent_b = uuid4()
@@ -466,6 +682,572 @@ def test_initial_migration_round_trip_and_database_guards(database_url: str) -> 
             {"payload_id": payload_b, "intent_id": intent_a},
         )
     assert sqlstate(cross_intent_error.value) == "23503"
+
+    console_user_id = uuid4()
+    campaign_id = uuid4()
+    grant_version_id = uuid4()
+    non_owner_user_id = uuid4()
+    other_campaign_id = uuid4()
+    other_grant_version_id = uuid4()
+    autopilot_intent_id = uuid4()
+    autopilot_payload_id = uuid4()
+    deny_policy_decision_id = uuid4()
+    generic_allow_policy_decision_id = uuid4()
+    expired_autopilot_policy_decision_id = uuid4()
+    mismatched_ruleset_policy_decision_id = uuid4()
+    valid_autopilot_policy_decision_id = uuid4()
+    source_draft_payload_hash = "b" * 64
+    synthetic_payload = SandboxApplicationPayload(
+        action_intent_id=autopilot_intent_id,
+        target_host="sandbox.greenhouse.test",
+        channel="synthetic:greenhouse-sandbox",
+        fields=MappingProxyType(
+            {
+                "first_name": "Ada",
+                "last_name": "Lovelace",
+                "resume_sha256": "a" * 64,
+            }
+        ),
+        source_draft_payload_hash=source_draft_payload_hash,
+        approved_material_hashes=("a" * 64,),
+    )
+    payload_hash = synthetic_payload.payload_hash
+    grant_created_at = datetime.now(UTC) - timedelta(minutes=1)
+    grant_expires_at = datetime.now(UTC) + timedelta(days=1)
+    authorized_at = datetime.now(UTC)
+    authorization_expires_at = authorized_at + timedelta(hours=1)
+    policy_expires_at = authorized_at + timedelta(hours=2)
+    expired_policy_expires_at = authorized_at - timedelta(seconds=1)
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO careerops.console_users (
+                    id, username, password_hash, password_changed_at
+                ) VALUES (
+                    :id, 'migrationtester', '$argon2id$migration-test',
+                    :password_changed_at
+                )
+                """
+            ),
+            {
+                "id": console_user_id,
+                "password_changed_at": grant_created_at,
+            },
+        )
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO careerops.autopilot_campaigns (
+                    id, owner_user_id, name, objective, criteria, exclusions, created_by
+                ) VALUES (
+                    :id, :owner_user_id, 'Migration guard test',
+                    'Verify database authorization guard',
+                    '{}'::jsonb, '[]'::jsonb, 'migration-test'
+                ), (
+                    :other_id, :other_owner_user_id, 'Migration guard test 2',
+                    'Verify database revocation guard',
+                    '{}'::jsonb, '[]'::jsonb, 'migration-test'
+                )
+                """
+            ),
+            {
+                "id": campaign_id,
+                "owner_user_id": console_user_id,
+                "other_id": other_campaign_id,
+                "other_owner_user_id": console_user_id,
+            },
+        )
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO careerops.autopilot_grant_versions (
+                    id, campaign_id, version, subject_actor, allowed_action_kinds,
+                    allowed_channels, allowed_target_hosts, material_hashes,
+                    max_total_submissions, max_daily_submissions, max_per_company,
+                    policy_ruleset_version, release_version, expires_at, created_at
+                ) VALUES (
+                    :id, :campaign_id, 1, :subject_actor,
+                    '["submit_application"]'::jsonb,
+                    '["synthetic:greenhouse-sandbox"]'::jsonb,
+                    '["sandbox.greenhouse.test"]'::jsonb,
+                    '["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]'::jsonb,
+                    5, 2, 1, 'policy-v1', 'release-v1',
+                    :expires_at, :created_at
+                ), (
+                    :other_id, :other_campaign_id, 1, :other_subject_actor,
+                    '["submit_application"]'::jsonb,
+                    '["synthetic:greenhouse-sandbox"]'::jsonb,
+                    '["other-sandbox.test"]'::jsonb,
+                    '["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]'::jsonb,
+                    5, 2, 1, 'policy-v1', 'release-v1',
+                    :expires_at, :created_at
+                )
+                """
+            ),
+            {
+                "id": grant_version_id,
+                "campaign_id": campaign_id,
+                "other_id": other_grant_version_id,
+                "other_campaign_id": other_campaign_id,
+                "subject_actor": str(console_user_id),
+                "other_subject_actor": str(console_user_id),
+                "expires_at": grant_expires_at,
+                "created_at": grant_created_at,
+            },
+        )
+
+    with (
+        pytest.raises(DBAPIError) as grant_subject_actor_mismatch_error,
+        engine.begin() as connection,
+    ):
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO careerops.autopilot_grant_versions (
+                    id, campaign_id, version, subject_actor, allowed_action_kinds,
+                    allowed_channels, allowed_target_hosts, material_hashes,
+                    max_total_submissions, max_daily_submissions, max_per_company,
+                    policy_ruleset_version, release_version, expires_at
+                ) VALUES (
+                    :id, :campaign_id, 2, :subject_actor,
+                    '["submit_application"]'::jsonb,
+                    '["synthetic:greenhouse-sandbox"]'::jsonb,
+                    '["sandbox.greenhouse.test"]'::jsonb,
+                    '["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]'::jsonb,
+                    5, 2, 1, 'policy-v1', 'release-v1', :expires_at
+                )
+                """
+            ),
+            {
+                "id": uuid4(),
+                "campaign_id": campaign_id,
+                "subject_actor": str(non_owner_user_id),
+                "expires_at": grant_expires_at,
+            },
+        )
+    assert sqlstate(grant_subject_actor_mismatch_error.value) == "23514"
+
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO careerops.action_intents (
+                    id, action_kind, resource_type, resource_id,
+                    idempotency_key, created_by
+                ) VALUES (
+                    :id, 'submit_application', 'job_posting', :resource_id,
+                    :idempotency_key, 'migration-test'
+                )
+                """
+            ),
+            {
+                "id": autopilot_intent_id,
+                "resource_id": resource_id,
+                "idempotency_key": f"autopilot-guard/{uuid4()}",
+            },
+        )
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO careerops.action_payload_versions (
+                    id, action_intent_id, version, target, payload, attachment_refs, payload_hash
+                ) VALUES (
+                    :id, :intent_id, 1,
+                    '{"target_host":"sandbox.greenhouse.test","channel":"synthetic:greenhouse-sandbox"}'::jsonb,
+                    '{"candidate":"migration-test","source_draft_payload_hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","fields":{"first_name":"Ada","last_name":"Lovelace","resume_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}'::jsonb,
+                    '[{"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]'::jsonb,
+                    :payload_hash
+                )
+                """
+            ),
+            {
+                "id": autopilot_payload_id,
+                "intent_id": autopilot_intent_id,
+                "payload_hash": payload_hash,
+            },
+        )
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO careerops.policy_decisions (
+                    id, action_intent_id, payload_version_id, ruleset_version,
+                    decision, reason_codes, payload_hash, expires_at
+                ) VALUES (
+                    :id, :intent_id, :payload_id, 'policy-v1',
+                    'deny', '["blocked"]'::jsonb, :payload_hash, :expires_at
+                ), (
+                    :generic_allow_id, :intent_id, :payload_id, 'policy-v1',
+                    'allow', '["generic_allow"]'::jsonb, :payload_hash, :expires_at
+                ), (
+                    :expired_autopilot_id, :intent_id, :payload_id, 'policy-v1',
+                    'allow_autopilot_submission', '["expired"]'::jsonb,
+                    :payload_hash, :expired_expires_at
+                ), (
+                    :mismatched_ruleset_id, :intent_id, :payload_id, 'policy-v2',
+                    'allow_autopilot_submission', '["wrong_ruleset"]'::jsonb,
+                    :payload_hash, :expires_at
+                ), (
+                    :valid_autopilot_id, :intent_id, :payload_id, 'policy-v1',
+                    'allow_autopilot_submission', '["qualified"]'::jsonb,
+                    :payload_hash, :expires_at
+                )
+                """
+            ),
+            {
+                "id": deny_policy_decision_id,
+                "generic_allow_id": generic_allow_policy_decision_id,
+                "expired_autopilot_id": expired_autopilot_policy_decision_id,
+                "mismatched_ruleset_id": mismatched_ruleset_policy_decision_id,
+                "valid_autopilot_id": valid_autopilot_policy_decision_id,
+                "intent_id": autopilot_intent_id,
+                "payload_id": autopilot_payload_id,
+                "payload_hash": payload_hash,
+                "expires_at": policy_expires_at,
+                "expired_expires_at": expired_policy_expires_at,
+            },
+        )
+
+    with (
+        pytest.raises(DBAPIError) as denied_autopilot_authorization_error,
+        engine.begin() as connection,
+    ):
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO careerops.autopilot_intent_authorizations (
+                    id, campaign_id, grant_version_id, action_intent_id,
+                    payload_version_id, payload_hash, policy_decision_id,
+                    authorization_outcome, reason_codes, authorized_at, expires_at
+                ) VALUES (
+                    :id, :campaign_id, :grant_version_id, :intent_id,
+                    :payload_id, :payload_hash, :policy_decision_id,
+                    'allow_autopilot_submission', '[]'::jsonb,
+                    :authorized_at, :expires_at
+                )
+                """
+            ),
+            {
+                "id": uuid4(),
+                "campaign_id": campaign_id,
+                "grant_version_id": grant_version_id,
+                "intent_id": autopilot_intent_id,
+                "payload_id": autopilot_payload_id,
+                "payload_hash": payload_hash,
+                "policy_decision_id": deny_policy_decision_id,
+                "authorized_at": authorized_at,
+                "expires_at": authorization_expires_at,
+            },
+        )
+    assert sqlstate(denied_autopilot_authorization_error.value) == "23514"
+
+    for policy_decision_id in (
+        generic_allow_policy_decision_id,
+        expired_autopilot_policy_decision_id,
+        mismatched_ruleset_policy_decision_id,
+    ):
+        with (
+            pytest.raises(DBAPIError) as invalid_policy_evidence_error,
+            engine.begin() as connection,
+        ):
+            connection.execute(
+                sa.text(
+                    """
+                    INSERT INTO careerops.autopilot_intent_authorizations (
+                        id, campaign_id, grant_version_id, action_intent_id,
+                        payload_version_id, payload_hash, policy_decision_id,
+                        authorization_outcome, reason_codes, authorized_at, expires_at
+                    ) VALUES (
+                        :id, :campaign_id, :grant_version_id, :intent_id,
+                        :payload_id, :payload_hash, :policy_decision_id,
+                        'allow_autopilot_submission', '[]'::jsonb,
+                        :authorized_at, :expires_at
+                    )
+                    """
+                ),
+                {
+                    "id": uuid4(),
+                    "campaign_id": campaign_id,
+                    "grant_version_id": grant_version_id,
+                    "intent_id": autopilot_intent_id,
+                    "payload_id": autopilot_payload_id,
+                    "payload_hash": payload_hash,
+                    "policy_decision_id": policy_decision_id,
+                    "authorized_at": authorized_at,
+                    "expires_at": authorization_expires_at,
+                },
+            )
+        assert sqlstate(invalid_policy_evidence_error.value) == "23514"
+
+    valid_autopilot_authorization_id = uuid4()
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO careerops.autopilot_intent_authorizations (
+                    id, campaign_id, grant_version_id, action_intent_id,
+                    payload_version_id, payload_hash, policy_decision_id,
+                    authorization_outcome, reason_codes, authorized_at, expires_at
+                ) VALUES (
+                    :id, :campaign_id, :grant_version_id, :intent_id,
+                    :payload_id, :payload_hash, :policy_decision_id,
+                    'allow_autopilot_submission', '["qualified"]'::jsonb,
+                    :authorized_at, :expires_at
+                )
+                """
+            ),
+            {
+                "id": valid_autopilot_authorization_id,
+                "campaign_id": campaign_id,
+                "grant_version_id": grant_version_id,
+                "intent_id": autopilot_intent_id,
+                "payload_id": autopilot_payload_id,
+                "payload_hash": payload_hash,
+                "policy_decision_id": valid_autopilot_policy_decision_id,
+                "authorized_at": authorized_at,
+                "expires_at": authorization_expires_at,
+            },
+        )
+        synthetic_request = QualifiedSyntheticDispatchRequest(
+            authority=DispatchAuthority(
+                campaign_id=campaign_id,
+                grant_version_id=grant_version_id,
+                authorization_id=valid_autopilot_authorization_id,
+                action_intent_id=autopilot_intent_id,
+                payload_version_id=autopilot_payload_id,
+                policy_decision_id=valid_autopilot_policy_decision_id,
+                action_kind="submit_application",
+                channel="synthetic:greenhouse-sandbox",
+                release_version="release-v1",
+                payload_hash=payload_hash,
+                target_host="sandbox.greenhouse.test",
+                company_key="example-inc",
+                policy_outcome=AutopilotOutcome.ALLOW_AUTOPILOT_SUBMISSION,
+                authorized_at=authorized_at,
+                expires_at=authorization_expires_at,
+            ),
+            fixture=SyntheticApplicationFixture(
+                fixture_id="fixture-1",
+                adapter_id="greenhouse-sandbox",
+                allowed_host="sandbox.greenhouse.test",
+                site_policy_text="Automated submissions are allowed for this synthetic sandbox.",
+                allowed_fields=(
+                    FormFieldSpec("first_name"),
+                    FormFieldSpec("last_name"),
+                    FormFieldSpec("resume_sha256"),
+                ),
+            ),
+            session=SandboxBrowserSession(
+                session_id=uuid4(),
+                action_intent_id=autopilot_intent_id,
+                isolation_mode=BrowserIsolationMode.PER_INTENT_CONTEXT,
+                host="sandbox.greenhouse.test",
+            ),
+            payload=synthetic_payload,
+            release_qualification=SyntheticReleaseQualification(
+                adapter_id="greenhouse-sandbox",
+                fixture_id="fixture-1",
+                release_version="release-v1",
+                stage=AutopilotReleaseStage.SYNTHETIC_SANDBOX,
+                evidence_hash="b" * 64,
+                expires_at=authorization_expires_at,
+            ),
+            now=authorized_at + timedelta(seconds=1),
+        )
+        decision = SyntheticSubmissionDispatchPlanner().plan(synthetic_request)
+        assert decision.can_reserve
+        store = PostgresSyntheticDispatchReservationStore(connection)
+        reservation_id = store.reserve_and_enqueue(decision, synthetic_request)
+        assert store.reserve_and_enqueue(decision, synthetic_request) == reservation_id
+        reservation_row = connection.execute(
+            sa.text(
+                """
+                SELECT reservation_date, reserved_at
+                FROM careerops.autopilot_cap_reservations
+                WHERE id = :id
+                """
+            ),
+            {"id": reservation_id},
+        ).one()
+        assert reservation_row.reservation_date == reservation_row.reserved_at.date()
+        assert (
+            connection.scalar(
+                sa.text(
+                    "SELECT count(*) FROM careerops.outbox_events "
+                    "WHERE action_intent_id = :intent_id"
+                ),
+                {"intent_id": autopilot_intent_id},
+            )
+            == 1
+        )
+        assert (
+            connection.scalar(
+                sa.text(
+                    "SELECT count(*) FROM careerops.audit_events "
+                    "WHERE event_type = 'synthetic_dispatch_reserved' "
+                    "AND resource_id = :intent_id"
+                ),
+                {"intent_id": autopilot_intent_id},
+            )
+            == 1
+        )
+        audit_event_data = connection.scalar(
+            sa.text(
+                "SELECT event_data FROM careerops.audit_events "
+                "WHERE event_type = 'synthetic_dispatch_reserved' "
+                "AND resource_id = :intent_id"
+            ),
+            {"intent_id": autopilot_intent_id},
+        )
+        assert isinstance(audit_event_data, dict)
+        assert audit_event_data["source_draft_payload_hash"] == source_draft_payload_hash
+        assert audit_event_data["approved_material_hashes"] == ["a" * 64]
+
+    with (
+        pytest.raises(DBAPIError) as real_target_reservation_error,
+        engine.begin() as connection,
+    ):
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO careerops.autopilot_cap_reservations (
+                    id, campaign_id, grant_version_id, authorization_id,
+                    action_intent_id, payload_version_id, payload_hash,
+                    target_host, channel, release_version, company_key, adapter_id, fixture_id,
+                    reservation_key, reconciliation_key
+                ) VALUES (
+                    :id, :campaign_id, :grant_version_id, :authorization_id,
+                    :intent_id, :payload_id, :payload_hash,
+                    'greenhouse.io', 'synthetic:greenhouse-sandbox', 'release-v1',
+                    'example-inc', 'greenhouse-sandbox', 'fixture-1',
+                    :reservation_key, :reconciliation_key
+                )
+                """
+            ),
+            {
+                "id": uuid4(),
+                "campaign_id": campaign_id,
+                "grant_version_id": grant_version_id,
+                "authorization_id": valid_autopilot_authorization_id,
+                "intent_id": autopilot_intent_id,
+                "payload_id": autopilot_payload_id,
+                "payload_hash": payload_hash,
+                "reservation_key": f"reservation/{uuid4().hex}",
+                "reconciliation_key": f"reconcile/{uuid4().hex}",
+            },
+        )
+    assert sqlstate(real_target_reservation_error.value) == "23514"
+
+    assert_role_permission_denied(
+        engine,
+        role="careerops_api",
+        statement=(
+            "INSERT INTO careerops.autopilot_cap_reservations (id, reserved_at) VALUES (:id, now())"
+        ),
+        parameters={"id": uuid4()},
+    )
+
+    manual_only_authorization_id = uuid4()
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO careerops.autopilot_intent_authorizations (
+                    id, campaign_id, grant_version_id, action_intent_id,
+                    payload_version_id, payload_hash, policy_decision_id,
+                    authorization_outcome, reason_codes, authorized_at, expires_at
+                ) VALUES (
+                    :id, :campaign_id, :grant_version_id, :intent_id,
+                    :payload_id, :payload_hash, :policy_decision_id,
+                    'manual_only', '["blocked"]'::jsonb,
+                    :authorized_at, :expires_at
+                )
+                """
+            ),
+            {
+                "id": manual_only_authorization_id,
+                "campaign_id": campaign_id,
+                "grant_version_id": grant_version_id,
+                "intent_id": autopilot_intent_id,
+                "payload_id": autopilot_payload_id,
+                "payload_hash": payload_hash,
+                "policy_decision_id": deny_policy_decision_id,
+                "authorized_at": authorized_at,
+                "expires_at": authorization_expires_at,
+            },
+        )
+
+    with (
+        pytest.raises(DBAPIError) as manual_only_pending_review_error,
+        engine.begin() as connection,
+    ):
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO careerops.autopilot_review_items (
+                    id, authorization_id, review_kind, resolution_mode,
+                    reason_codes, snapshot, created_by
+                ) VALUES (
+                    :id, :authorization_id, 'pending', 'manual_only',
+                    '["blocked"]'::jsonb, '{}'::jsonb, 'migration-test'
+                )
+                """
+            ),
+            {
+                "id": uuid4(),
+                "authorization_id": manual_only_authorization_id,
+            },
+        )
+    assert sqlstate(manual_only_pending_review_error.value) == "23514"
+
+    with (
+        pytest.raises(DBAPIError) as non_owner_revocation_error,
+        engine.begin() as connection,
+    ):
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO careerops.autopilot_grant_revocations (
+                    id, grant_version_id, revoked_by_user_id,
+                    superseded_by_grant_version_id, reason
+                ) VALUES (
+                    :id, :grant_version_id, :revoked_by_user_id,
+                    NULL, 'non-owner revocation'
+                )
+                """
+            ),
+            {
+                "id": uuid4(),
+                "grant_version_id": grant_version_id,
+                "revoked_by_user_id": non_owner_user_id,
+            },
+        )
+    assert sqlstate(non_owner_revocation_error.value) == "23514"
+
+    with (
+        pytest.raises(DBAPIError) as cross_campaign_supersede_error,
+        engine.begin() as connection,
+    ):
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO careerops.autopilot_grant_revocations (
+                    id, grant_version_id, revoked_by_user_id,
+                    superseded_by_grant_version_id, reason
+                ) VALUES (
+                    :id, :grant_version_id, :revoked_by_user_id,
+                    :superseded_by_grant_version_id, 'cross-campaign supersede'
+                )
+                """
+            ),
+            {
+                "id": uuid4(),
+                "grant_version_id": grant_version_id,
+                "revoked_by_user_id": console_user_id,
+                "superseded_by_grant_version_id": other_grant_version_id,
+            },
+        )
+    assert sqlstate(cross_campaign_supersede_error.value) == "23514"
 
     command.downgrade(config, "base")
     with engine.connect() as connection:

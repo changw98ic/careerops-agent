@@ -3,11 +3,17 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
+import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
+
 from careerops.application.outbox import (
     ClaimedOutboxEvent,
     InternalDeliveryError,
+    OutboxEventType,
     OutboxPublisher,
+    PendingOutboxEvent,
 )
+from careerops.infrastructure.database.outbox import PostgresOutboxRepository
 
 
 def event(*, event_type: str = "workflow_signal", attempt_count: int = 1) -> ClaimedOutboxEvent:
@@ -39,10 +45,13 @@ class RecordingStore:
         now: datetime,
         lease_for: timedelta,
         limit: int,
+        event_key_prefix: str | None = None,
     ) -> tuple[ClaimedOutboxEvent, ...]:
         del owner, now, lease_for, limit
         self.claim_count += 1
-        return self.events
+        if event_key_prefix is None:
+            return self.events
+        return tuple(event for event in self.events if event.event_key.startswith(event_key_prefix))
 
     def mark_published(
         self,
@@ -87,6 +96,21 @@ class FailingSink:
         raise InternalDeliveryError("INTERNAL_SINK_FAILURE", retryable=self.retryable)
 
 
+class RecordingDatabaseConnection:
+    def __init__(self) -> None:
+        self.statement: sa.ClauseElement | None = None
+
+    def in_transaction(self) -> bool:
+        return True
+
+    def execute(self, statement: sa.ClauseElement) -> None:
+        self.statement = statement
+
+    def scalar(self, statement: sa.ClauseElement) -> UUID:
+        self.statement = statement
+        return uuid4()
+
+
 def test_default_publisher_does_not_claim_or_consume_attempts() -> None:
     item = event()
     store = RecordingStore((item,))
@@ -112,6 +136,34 @@ def test_successful_internal_delivery_is_marked_published() -> None:
     assert sink.delivered == [item.event_id]
     assert store.published == [(item.event_id, item.lease_token)]
     assert store.released == []
+
+
+def test_event_key_prefix_filters_claimed_events_before_delivery() -> None:
+    crawler = event()
+    crawler = ClaimedOutboxEvent(
+        event_id=crawler.event_id,
+        event_key="crawler-execution:abc",
+        action_intent_id=crawler.action_intent_id,
+        payload_version_id=crawler.payload_version_id,
+        event_type=crawler.event_type,
+        available_at=crawler.available_at,
+        attempt_count=crawler.attempt_count,
+        lease_token=crawler.lease_token,
+        lease_until=crawler.lease_until,
+    )
+    other = event()
+    store = RecordingStore((other, crawler))
+    sink = SuccessfulSink()
+
+    result = OutboxPublisher(
+        store,
+        sink,
+        event_key_prefix="crawler-execution:",
+    ).publish_batch(owner="publisher-1", now=datetime.now(UTC))
+
+    assert result.claimed == 1
+    assert sink.delivered == [crawler.event_id]
+    assert store.published == [(crawler.event_id, crawler.lease_token)]
 
 
 def test_unknown_event_type_fails_without_reaching_sink() -> None:
@@ -146,3 +198,23 @@ def test_retry_limit_and_nonretryable_errors_become_terminal() -> None:
     assert exhausted_store.released[-1][2] is True
     assert terminal.failed == 1
     assert terminal_store.released[-1][2] is True
+
+
+def test_enqueue_uses_database_default_for_pending_status_under_api_role() -> None:
+    connection = RecordingDatabaseConnection()
+    repository = PostgresOutboxRepository(connection)  # type: ignore[arg-type]
+    pending = PendingOutboxEvent(
+        event_id=uuid4(),
+        event_key=f"crawler-execution:{uuid4().hex}",
+        action_intent_id=uuid4(),
+        payload_version_id=uuid4(),
+        event_type=OutboxEventType.WORKFLOW_SIGNAL,
+        available_at=datetime.now(UTC),
+    )
+
+    repository.enqueue_once(pending)
+
+    assert connection.statement is not None
+    sql = str(connection.statement.compile(dialect=postgresql.dialect()))
+    assert "INSERT INTO careerops.outbox_events" in sql
+    assert "status" not in sql

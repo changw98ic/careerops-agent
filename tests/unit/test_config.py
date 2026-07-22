@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from pydantic import ValidationError
 
@@ -9,8 +11,13 @@ from careerops.config import (
 )
 
 
-def test_safe_defaults_are_loopback_and_capability_off() -> None:
-    settings = Settings.model_validate({})
+def test_safe_defaults_are_loopback_and_capability_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in tuple(os.environ):
+        if name.startswith("CAREEROPS_"):
+            monkeypatch.delenv(name)
+    settings = Settings.model_validate({"_env_file": None})
 
     assert settings.environment is RuntimeEnvironment.DEVELOPMENT
     assert settings.deployment_mode is DeploymentMode.LOOPBACK
@@ -30,6 +37,15 @@ def test_safe_defaults_are_loopback_and_capability_off() -> None:
     assert settings.google_oauth_enabled is False
     assert settings.external_writes_enabled is False
     assert settings.auto_send_enabled is False
+    assert settings.auto_submit_enabled is False
+    assert settings.gmail_send_enabled is False
+    assert settings.gmail_send_release_attested is False
+    assert settings.gmail_send_in_production_attested is False
+    assert settings.gmail_send_runtime_enabled is False
+    assert settings.greenhouse_submit_enabled is False
+    assert settings.greenhouse_submit_release_attested is False
+    assert settings.greenhouse_submit_in_production_attested is False
+    assert settings.greenhouse_submit_runtime_enabled is False
 
 
 @pytest.mark.parametrize(
@@ -40,9 +56,10 @@ def test_safe_defaults_are_loopback_and_capability_off() -> None:
         ({"redis_url": "http://redis:6379"}, "Redis URL"),
         ({"temporal_address": "https://temporal:7233"}, "host:port"),
         ({"model_provider": "external"}, "privacy qualification"),
-        ({"google_oauth_enabled": True}, "M4 integration gate"),
-        ({"external_writes_enabled": True}, "M5A side-effect gate"),
-        ({"auto_send_enabled": True}, "M7 Release Qualification"),
+        ({"gmail_send_enabled": True}, "Gmail send requires"),
+        ({"gmail_send_release_attested": True}, "Gmail send requires"),
+        ({"greenhouse_submit_enabled": True}, "Greenhouse submit requires"),
+        ({"greenhouse_submit_release_attested": True}, "Greenhouse submit requires"),
         ({"storage_max_object_bytes": 0}, "greater than or equal to 1"),
         ({"storage_root": "."}, "dedicated directory"),
     ],
@@ -89,3 +106,189 @@ def test_compose_mode_allows_container_bind_without_weakening_default() -> None:
 def test_database_role_rejects_unreleased_or_unbounded_values(role: str) -> None:
     with pytest.raises(ValidationError):
         Settings.model_validate({"database_role": role})
+
+
+def test_google_oauth_readonly_gate_allows_dev_without_owning_write_gates() -> None:
+    settings = Settings.model_validate({"google_oauth_enabled": True})
+
+    assert settings.google_oauth_enabled is True
+    assert settings.external_writes_enabled is False
+    assert settings.auto_send_enabled is False
+
+    write_settings = Settings.model_validate(
+        {
+            "google_oauth_enabled": True,
+            "external_writes_enabled": True,
+        }
+    )
+    assert write_settings.google_oauth_enabled is True
+    assert write_settings.external_writes_enabled is True
+    assert write_settings.gmail_send_enabled is False
+
+
+def test_external_write_flags_do_not_force_gmail_send_release_gate() -> None:
+    settings = Settings.model_validate(
+        {
+            "external_writes_enabled": True,
+            "auto_send_enabled": True,
+        }
+    )
+
+    assert settings.external_writes_enabled is True
+    assert settings.auto_send_enabled is True
+    assert settings.gmail_send_enabled is False
+    assert settings.gmail_send_release_attested is False
+
+
+def test_email_auto_send_does_not_activate_greenhouse_submit() -> None:
+    settings = Settings.model_validate(
+        {
+            "external_writes_enabled": True,
+            "auto_send_enabled": True,
+        }
+    )
+
+    assert settings.auto_send_enabled is True
+    assert settings.auto_submit_enabled is False
+    assert settings.greenhouse_submit_runtime_enabled is False
+
+
+def test_gmail_send_requires_full_release_gate_and_absolute_broker_socket() -> None:
+    settings = Settings.model_validate(
+        {
+            "external_writes_enabled": True,
+            "auto_send_enabled": True,
+            "google_oauth_enabled": True,
+            "gmail_send_enabled": True,
+            "gmail_send_release_attested": True,
+        }
+    )
+
+    assert settings.gmail_send_enabled is True
+    assert settings.gmail_send_runtime_enabled is True
+    assert settings.gmail_send_broker_socket is not None
+    assert settings.gmail_send_broker_socket.is_absolute()
+    assert settings.mailbox_broker_socket is not None
+    assert settings.mailbox_broker_socket.is_absolute()
+    assert settings.gmail_send_attachment_broker_socket is not None
+    assert settings.gmail_send_attachment_broker_socket.is_absolute()
+
+    with pytest.raises(ValidationError, match="broker socket must be absolute"):
+        Settings.model_validate(
+            {
+                "external_writes_enabled": True,
+                "auto_send_enabled": True,
+                "google_oauth_enabled": True,
+                "gmail_send_enabled": True,
+                "gmail_send_release_attested": True,
+                "gmail_send_broker_socket": "relative.sock",
+            }
+        )
+    with pytest.raises(ValidationError, match="attachment broker socket must be absolute"):
+        Settings.model_validate(
+            {
+                "external_writes_enabled": True,
+                "auto_send_enabled": True,
+                "google_oauth_enabled": True,
+                "gmail_send_enabled": True,
+                "gmail_send_release_attested": True,
+                "gmail_send_attachment_broker_socket": "relative.sock",
+            }
+        )
+    with pytest.raises(ValidationError, match="readonly broker socket must be absolute"):
+        Settings.model_validate(
+            {
+                "external_writes_enabled": True,
+                "auto_send_enabled": True,
+                "google_oauth_enabled": True,
+                "gmail_send_enabled": True,
+                "gmail_send_release_attested": True,
+                "mailbox_broker_socket": "relative.sock",
+            }
+        )
+
+
+def test_production_gmail_send_requires_in_production_attestation() -> None:
+    with pytest.raises(ValidationError, match="production Gmail send"):
+        Settings.model_validate(
+            {
+                "environment": "production",
+                "console_cookie_secure": True,
+                "console_allowed_hosts": ("careerops.example",),
+                "console_allowed_origins": ("https://careerops.example",),
+                "external_writes_enabled": True,
+                "auto_send_enabled": True,
+                "google_oauth_enabled": True,
+                "google_oauth_in_production_attested": True,
+                "gmail_send_enabled": True,
+                "gmail_send_release_attested": True,
+            }
+        )
+
+
+def test_production_google_oauth_requires_in_production_attestation() -> None:
+    with pytest.raises(ValidationError, match="in-production attestation"):
+        Settings.model_validate(
+            {
+                "environment": "production",
+                "console_cookie_secure": True,
+                "console_allowed_hosts": ("careerops.example",),
+                "console_allowed_origins": ("https://careerops.example",),
+                "google_oauth_enabled": True,
+            }
+        )
+
+
+def test_greenhouse_submit_requires_full_release_gate_and_absolute_broker_socket() -> None:
+    settings = Settings.model_validate(
+        {
+            "external_writes_enabled": True,
+            "auto_submit_enabled": True,
+            "greenhouse_submit_enabled": True,
+            "greenhouse_submit_release_attested": True,
+        }
+    )
+
+    assert settings.greenhouse_submit_runtime_enabled is True
+    assert settings.greenhouse_submit_credential_broker_socket is not None
+    assert settings.greenhouse_submit_credential_broker_socket.is_absolute()
+    assert settings.greenhouse_submit_attachment_broker_socket is not None
+    assert settings.greenhouse_submit_attachment_broker_socket.is_absolute()
+
+    with pytest.raises(ValidationError, match="credential broker socket must be absolute"):
+        Settings.model_validate(
+            {
+                "external_writes_enabled": True,
+                "auto_submit_enabled": True,
+                "greenhouse_submit_enabled": True,
+                "greenhouse_submit_release_attested": True,
+                "greenhouse_submit_credential_broker_socket": "relative.sock",
+            }
+        )
+
+    with pytest.raises(ValidationError, match="attachment broker socket must be absolute"):
+        Settings.model_validate(
+            {
+                "external_writes_enabled": True,
+                "auto_submit_enabled": True,
+                "greenhouse_submit_enabled": True,
+                "greenhouse_submit_release_attested": True,
+                "greenhouse_submit_attachment_broker_socket": "relative.sock",
+            }
+        )
+
+
+def test_production_greenhouse_submit_requires_in_production_attestation() -> None:
+    with pytest.raises(ValidationError, match="production Greenhouse submit"):
+        Settings.model_validate(
+            {
+                "environment": "production",
+                "console_cookie_secure": True,
+                "console_allowed_hosts": ("careerops.example",),
+                "console_allowed_origins": ("https://careerops.example",),
+                "external_writes_enabled": True,
+                "auto_submit_enabled": True,
+                "greenhouse_submit_enabled": True,
+                "greenhouse_submit_release_attested": True,
+            }
+        )

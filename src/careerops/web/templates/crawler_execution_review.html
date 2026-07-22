@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Crawler 执行审核 · CareerOps{% endblock %}
+{% block content %}
+  <h1>Crawler 执行审核</h1>
+  <p>已登录为 {{ username }}。</p>
+  <p>此页面只审核已经由服务端持久化的 crawler request，不接收 URL、脚本、代理、Header 或任意路径输入。</p>
+  <section aria-labelledby="crawler-capability-heading">
+    <h2 id="crawler-capability-heading">{{ capability.title_zh }}</h2>
+    <p>{{ capability.description_zh }}</p>
+    <p>状态：{{ capability.state }}；原因：{{ capability.reason_code }}</p>
+  </section>
+  {% if requests %}
+    <table>
+      <caption>待审核 crawler request</caption>
+      <thead>
+        <tr>
+          <th scope="col">Request</th>
+          <th scope="col">Manifest</th>
+          <th scope="col">Sources</th>
+          <th scope="col">原因</th>
+          <th scope="col">创建时间</th>
+          <th scope="col">过期时间</th>
+          <th scope="col">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in requests %}
+          <tr>
+            <td>{{ item.request_id }}</td>
+            <td>{{ item.manifest_path }}</td>
+            <td>{{ item.source_ids|join(", ") }}</td>
+            <td>{{ item.reason }}</td>
+            <td>{{ item.created_at.isoformat() }}</td>
+            <td>{{ item.expires_at.isoformat() }}</td>
+            <td>
+              {% if capability.can_review %}
+                <form method="post" action="/crawlers/review/{{ item.request_id }}/approve">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <button type="submit">批准入队</button>
+                </form>
+                <form method="post" action="/crawlers/review/{{ item.request_id }}/reject">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <label>拒绝原因
+                    <input name="reason" maxlength="1000" required>
+                  </label>
+                  <button type="submit">拒绝</button>
+                </form>
+              {% else %}
+                不可操作
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p>当前没有待审核 crawler request。</p>
+  {% endif %}
+{% endblock %}

@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Autopilot 授权 · CareerOps{% endblock %}
+{% block content %}
+  <h1>Autopilot 授权</h1>
+  <p>已登录为 {{ username }}。</p>
+  <p>此页面只展示 Campaign Grant 状态；授权不会绕过站点规则、认证挑战、敏感声明或人工审核门槛。</p>
+  <section aria-labelledby="grant-capability-heading">
+    <h2 id="grant-capability-heading">{{ capability.title_zh }}</h2>
+    <p>{{ capability.description_zh }}</p>
+    <p>状态：{{ capability.state }}；原因：{{ capability.reason_code }}</p>
+  </section>
+  {% if grants %}
+    <section aria-labelledby="active-grants-heading">
+      <h2 id="active-grants-heading">当前活跃授权</h2>
+      {% for grant in grants %}
+      <dl>
+        <dt>授权编号</dt><dd>{{ grant.grant_id }}</dd>
+        <dt>Campaign</dt><dd>{{ grant.title_zh }}</dd>
+        <dt>状态</dt><dd>{{ grant.status }}</dd>
+        <dt>允许渠道</dt><dd>{{ ", ".join(grant.channels) if grant.channels else "未配置" }}</dd>
+        <dt>允许动作</dt><dd>{{ ", ".join(grant.action_kinds) if grant.action_kinds else "未配置" }}</dd>
+        <dt>剩余额度</dt><dd>{{ grant.remaining_submissions }}</dd>
+        <dt>过期时间</dt><dd>{{ grant.expires_at.isoformat() }}</dd>
+      </dl>
+      {% endfor %}
+    </section>
+  {% else %}
+    <p>当前没有活跃 Autopilot 授权。</p>
+  {% endif %}
+{% endblock %}

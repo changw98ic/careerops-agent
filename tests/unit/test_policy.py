@@ -19,6 +19,15 @@ def test_internal_draft_is_allowed_without_provider_effect() -> None:
     assert decision.reason_code == "INTERNAL_ONLY"
 
 
+def test_manual_application_handoff_is_internal_and_not_a_provider_write() -> None:
+    decision = PolicyEngine().decide(
+        ActionProposal(action_kind="create_manual_application_handoff", authenticated=True)
+    )
+
+    assert decision.outcome is PolicyOutcome.ALLOW
+    assert decision.reason_code == "INTERNAL_ONLY"
+
+
 def test_external_writes_are_denied_even_when_untrusted_content_claims_safety() -> None:
     decision = PolicyEngine().decide(
         ActionProposal(

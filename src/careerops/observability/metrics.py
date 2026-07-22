@@ -27,6 +27,43 @@ class OperationalOutcome(StrEnum):
     RETRY = "retry"
 
 
+class ReleaseCapability(StrEnum):
+    """Closed capability vocabulary for rollout/release-gate metrics."""
+
+    SYNTHETIC_SANDBOX = "synthetic_sandbox"
+    JOB_SOURCE_INGESTION = "job_source_ingestion"
+    GMAIL_READONLY_SYNC = "gmail_readonly_sync"
+    GMAIL_SEND = "gmail_send"
+    GREENHOUSE_SUBMIT = "greenhouse_submit"
+    BROWSER_SUBMIT = "browser_submit"
+
+
+class ReleaseMode(StrEnum):
+    SYNTHETIC_SANDBOX = "synthetic_sandbox"
+    SHADOW = "shadow"
+    REVIEW_REQUIRED = "review_required"
+    LIMITED_AUTOPILOT = "limited_autopilot"
+    EXPANDED_AUTOPILOT = "expanded_autopilot"
+
+
+class ReleaseGateOutcome(StrEnum):
+    ALLOW_INTERNAL = "allow_internal"
+    REVIEW_REQUIRED = "review_required"
+    BLOCKED = "blocked"
+    QUALIFIED = "qualified"
+
+
+class RolloutObservationResult(StrEnum):
+    MATCHED = "matched"
+    MISMATCHED = "mismatched"
+    HUMAN_APPROVED = "human_approved"
+    HUMAN_REJECTED = "human_rejected"
+    FAIL_CLOSED = "fail_closed"
+    FAIL_OPEN = "fail_open"
+    DUPLICATE_SUPPRESSED = "duplicate_suppressed"
+    TIMEOUT_RECONCILED = "timeout_reconciled"
+
+
 class Metrics:
     """Application-scoped metrics with a fixed, non-sensitive label vocabulary."""
 
@@ -79,6 +116,41 @@ class Metrics:
             for outcome in OperationalOutcome:
                 self._operations.labels(component=component.value, outcome=outcome.value)
 
+        self._release_gate_decisions = Counter(
+            "careerops_release_gate_decisions_total",
+            "Release gate outcomes grouped only by bounded capability, mode, and outcome.",
+            ("capability", "mode", "outcome"),
+            registry=self.registry,
+        )
+        self._rollout_observations = Counter(
+            "careerops_rollout_observations_total",
+            "Shadow/review rollout observations grouped only by bounded "
+            "capability, mode, and result.",
+            ("capability", "mode", "result"),
+            registry=self.registry,
+        )
+        self._release_qualified = Gauge(
+            "careerops_release_qualified",
+            "Whether an exact capability/mode release qualification is currently active.",
+            ("capability", "mode"),
+            registry=self.registry,
+        )
+        for capability in ReleaseCapability:
+            for mode in ReleaseMode:
+                self._release_qualified.labels(capability=capability.value, mode=mode.value).set(0)
+                for outcome in ReleaseGateOutcome:
+                    self._release_gate_decisions.labels(
+                        capability=capability.value,
+                        mode=mode.value,
+                        outcome=outcome.value,
+                    )
+                for result in RolloutObservationResult:
+                    self._rollout_observations.labels(
+                        capability=capability.value,
+                        mode=mode.value,
+                        result=result.value,
+                    )
+
     def observe_http(
         self,
         *,
@@ -103,6 +175,46 @@ class Metrics:
         outcome: OperationalOutcome,
     ) -> None:
         self._operations.labels(component=component.value, outcome=outcome.value).inc()
+
+    def record_release_gate_decision(
+        self,
+        *,
+        capability: ReleaseCapability,
+        mode: ReleaseMode,
+        outcome: ReleaseGateOutcome,
+    ) -> None:
+        self._release_gate_decisions.labels(
+            capability=capability.value,
+            mode=mode.value,
+            outcome=outcome.value,
+        ).inc()
+
+    def record_rollout_observation(
+        self,
+        *,
+        capability: ReleaseCapability,
+        mode: ReleaseMode,
+        result: RolloutObservationResult,
+        count: int = 1,
+    ) -> None:
+        if count < 1:
+            raise ValueError("rollout observation count must be positive")
+        self._rollout_observations.labels(
+            capability=capability.value,
+            mode=mode.value,
+            result=result.value,
+        ).inc(count)
+
+    def set_release_qualified(
+        self,
+        *,
+        capability: ReleaseCapability,
+        mode: ReleaseMode,
+        qualified: bool,
+    ) -> None:
+        self._release_qualified.labels(capability=capability.value, mode=mode.value).set(
+            int(qualified)
+        )
 
     def render(self) -> bytes:
         return generate_latest(self.registry)

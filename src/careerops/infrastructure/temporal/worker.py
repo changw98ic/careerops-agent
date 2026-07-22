@@ -8,7 +8,11 @@ from dataclasses import dataclass
 from temporalio.client import Client
 from temporalio.worker import Worker
 
-from careerops.infrastructure.temporal.activities import SmokeActivities
+from careerops.infrastructure.temporal.activities import (
+    GoalRunSourceRegistryActivities,
+    SmokeActivities,
+)
+from careerops.workflows.goal_run import GoalRunWorkflow
 from careerops.workflows.smoke import RecoverableSmokeWorkflow
 
 
@@ -44,15 +48,33 @@ def build_worker(
     settings: TemporalWorkerSettings,
     *,
     activities: SmokeActivities | None = None,
+    goal_activities: GoalRunSourceRegistryActivities | None = None,
     max_cached_workflows: int = 1000,
 ) -> Worker:
-    activity_bundle = activities or SmokeActivities()
+    smoke_activities = activities or SmokeActivities()
+    workflow_activities = goal_activities or GoalRunSourceRegistryActivities()
     return Worker(
         client,
         task_queue=settings.task_queue,
         identity=settings.identity,
-        workflows=[RecoverableSmokeWorkflow],
-        activities=[activity_bundle.record_started, activity_bundle.record_completed],
+        workflows=[RecoverableSmokeWorkflow, GoalRunWorkflow],
+        activities=[
+            smoke_activities.record_started,
+            smoke_activities.record_completed,
+            workflow_activities.ensure_run,
+            workflow_activities.load_run,
+            workflow_activities.checkpoint,
+            workflow_activities.claim_source,
+            workflow_activities.run_discovery,
+            workflow_activities.complete_source,
+            workflow_activities.fail_source,
+            workflow_activities.ingest_public_ats,
+            workflow_activities.match_jobs,
+            workflow_activities.prepare_drafts,
+            workflow_activities.request_review,
+            workflow_activities.dispatch_goal,
+            workflow_activities.reconcile_goal,
+        ],
         max_cached_workflows=max_cached_workflows,
     )
 
@@ -61,13 +83,19 @@ async def run_worker(
     settings: TemporalWorkerSettings,
     *,
     activities: SmokeActivities | None = None,
+    goal_activities: GoalRunSourceRegistryActivities | None = None,
 ) -> None:
     client = await Client.connect(
         settings.target,
         namespace=settings.namespace,
         identity=settings.identity,
     )
-    await build_worker(client, settings, activities=activities).run()
+    await build_worker(
+        client,
+        settings,
+        activities=activities,
+        goal_activities=goal_activities,
+    ).run()
 
 
 def main() -> None:

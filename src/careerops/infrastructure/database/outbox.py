@@ -6,6 +6,7 @@ from typing import cast
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import Connection, Engine, RowMapping
 
 from careerops.application.outbox import (
@@ -43,10 +44,59 @@ class PostgresOutboxRepository:
                 action_intent_id=event.action_intent_id,
                 payload_version_id=event.payload_version_id,
                 event_type=event.event_type.value,
-                status="pending",
                 available_at=event.available_at,
             )
         )
+
+    def enqueue_once(self, event: PendingOutboxEvent) -> UUID:
+        """Create an internal event once, or return the matching prior event.
+
+        This is deliberately narrower than ``enqueue``: a caller must provide a stable event
+        key and can only replay the same intent/payload/event-type tuple. It is used by the
+        synthetic dispatch reservation so a crashed caller cannot consume another cap slot or
+        produce a second internal workflow signal on retry.
+        """
+
+        if not _EVENT_KEY.fullmatch(event.event_key):
+            raise ValueError("event_key must be a bounded machine identifier")
+        self._require_aware(event.available_at, "available_at")
+        event_id = self._connection.scalar(
+            postgresql.insert(outbox_events)
+            .values(
+                id=event.event_id,
+                event_key=event.event_key,
+                action_intent_id=event.action_intent_id,
+                payload_version_id=event.payload_version_id,
+                event_type=event.event_type.value,
+                available_at=event.available_at,
+            )
+            .on_conflict_do_nothing(index_elements=[outbox_events.c.event_key])
+            .returning(outbox_events.c.id)
+        )
+        if isinstance(event_id, UUID):
+            return event_id
+
+        existing = (
+            self._connection.execute(
+                sa.select(
+                    outbox_events.c.id,
+                    outbox_events.c.action_intent_id,
+                    outbox_events.c.payload_version_id,
+                    outbox_events.c.event_type,
+                ).where(outbox_events.c.event_key == event.event_key)
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if existing is None:
+            raise RuntimeError("outbox idempotency conflict did not yield an existing event")
+        if (
+            existing["action_intent_id"] != event.action_intent_id
+            or existing["payload_version_id"] != event.payload_version_id
+            or existing["event_type"] != event.event_type.value
+        ):
+            raise ValueError("outbox event key is already bound to a different event identity")
+        return cast("UUID", existing["id"])
 
     def claim(
         self,
@@ -55,25 +105,33 @@ class PostgresOutboxRepository:
         now: datetime,
         lease_for: timedelta,
         limit: int,
+        event_key_prefix: str | None = None,
     ) -> tuple[ClaimedOutboxEvent, ...]:
         self._validate_claim(owner=owner, now=now, lease_for=lease_for, limit=limit)
+        if event_key_prefix is not None and not _EVENT_KEY.fullmatch(event_key_prefix):
+            raise ValueError("event_key_prefix must be a bounded machine identifier")
         lease_until = now + lease_for
         lease_token = uuid4()
+        predicates = [
+            outbox_events.c.event_type.in_(_M0_EVENT_TYPES),
+            sa.or_(
+                sa.and_(
+                    outbox_events.c.status == "pending",
+                    outbox_events.c.available_at <= now,
+                ),
+                sa.and_(
+                    outbox_events.c.status == "leased",
+                    outbox_events.c.lease_until <= now,
+                ),
+            ),
+        ]
+        if event_key_prefix is not None:
+            predicates.append(
+                outbox_events.c.event_key.startswith(event_key_prefix, autoescape=True)
+            )
         candidates = (
             sa.select(outbox_events.c.id)
-            .where(
-                outbox_events.c.event_type.in_(_M0_EVENT_TYPES),
-                sa.or_(
-                    sa.and_(
-                        outbox_events.c.status == "pending",
-                        outbox_events.c.available_at <= now,
-                    ),
-                    sa.and_(
-                        outbox_events.c.status == "leased",
-                        outbox_events.c.lease_until <= now,
-                    ),
-                ),
-            )
+            .where(*predicates)
             .order_by(outbox_events.c.available_at, outbox_events.c.id)
             .limit(limit)
             .with_for_update(skip_locked=True)
@@ -235,6 +293,7 @@ class PostgresOutboxStore:
         now: datetime,
         lease_for: timedelta,
         limit: int,
+        event_key_prefix: str | None = None,
     ) -> tuple[ClaimedOutboxEvent, ...]:
         with self._engine.begin() as connection:
             return PostgresOutboxRepository(connection).claim(
@@ -242,6 +301,7 @@ class PostgresOutboxStore:
                 now=now,
                 lease_for=lease_for,
                 limit=limit,
+                event_key_prefix=event_key_prefix,
             )
 
     def mark_published(

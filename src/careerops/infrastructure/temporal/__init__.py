@@ -1,6 +1,7 @@
 """Temporal worker and activity adapters."""
 
 from careerops.infrastructure.temporal.activities import (
+    GoalRunSourceRegistryActivities,
     NoOpSmokeActivitySink,
     SmokeActivities,
     SmokeActivitySink,
@@ -16,6 +17,7 @@ from careerops.infrastructure.temporal.worker import (
 )
 
 __all__ = [
+    "GoalRunSourceRegistryActivities",
     "NoOpSmokeActivitySink",
     "SmokeActivities",
     "SmokeActivitySink",

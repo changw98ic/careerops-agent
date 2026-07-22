@@ -23,11 +23,18 @@ EXCLUDED_PARTS = {
 }
 MAX_FILE_BYTES = 1_000_000
 PATTERNS = {
-    "private_key": re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+    "private_key": re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE " + rb"KEY-----"),
     "aws_access_key": re.compile(rb"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"),
     "github_token": re.compile(rb"\bgh(?:p|o|u|s|r)_[A-Za-z0-9]{36,255}\b"),
     "github_fine_grained_token": re.compile(rb"\bgithub_pat_[A-Za-z0-9_]{22,255}\b"),
     "google_api_key": re.compile(rb"\bAIza[0-9A-Za-z_-]{35}\b"),
+    "google_oauth_client_secret": re.compile(rb"\bGOCSPX-[0-9A-Za-z_-]{28}\b"),
+    "google_refresh_token": re.compile(rb"\b1//[0-9A-Za-z_-]{40,}\b"),
+    "google_access_token": re.compile(rb"\bya29\.[0-9A-Za-z_-]{50,}\b"),
+    "google_service_account_private_key": re.compile(
+        rb'(?s)"type"\s*:\s*"service_account".{0,4096}'
+        rb'"private_key"\s*:\s*"-----BEGIN PRIVATE ' + rb"KEY-----"
+    ),
     "slack_token": re.compile(rb"\bxox(?:a|b|p|r|s)-[0-9A-Za-z-]{20,}\b"),
 }
 

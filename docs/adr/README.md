@@ -14,5 +14,9 @@ ADRs are immutable decision snapshots. Superseding a decision requires a new ADR
 | [0008](0008-compensation-normalization.md) | Compensation normalization and FX | Accepted |
 | [0009](0009-job-assignment-projection.md) | Current job assignment projection | Accepted |
 | [0010](0010-content-blob-lifecycle.md) | Physical blob and logical content lifecycle | Accepted |
+| [0011](0011-bounded-autopilot-authority.md) | Bounded autopilot application-submission authority | Accepted |
+| [0012](0012-bounded-gmail-readonly-sync.md) | Dedicated BYO Gmail read-only polling and reviewed signal proposals | Accepted |
+| [0013](0013-reviewed-gmail-send.md) | Reviewed Gmail send, receipts and Sent reconciliation | Accepted |
+| [0014](0014-reviewed-greenhouse-job-board-submit.md) | Reviewed Greenhouse Job Board API submission | Accepted |
 
 The authoritative delivery order and exit gates remain in [the MVP plan](../../.omx/plans/careerops-agent-mvp-plan.md). Risk decisions are narrowed by [the risk closure record](../../.omx/plans/careerops-agent-risk-closure.md).

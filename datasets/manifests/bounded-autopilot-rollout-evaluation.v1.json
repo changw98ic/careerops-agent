@@ -1,0 +1,109 @@
+{
+  "cases": [
+    {
+      "actual_decision": "require_review",
+      "category": "would_allow",
+      "expected_decision": "require_review",
+      "hard_stop_present": false,
+      "human_override_required": false,
+      "name": "reviewed-safe-synthetic-packet",
+      "repeat": 5,
+      "stage": "review_required"
+    },
+    {
+      "actual_decision": "block",
+      "category": "hard_stop",
+      "expected_decision": "block",
+      "hard_stop_present": true,
+      "human_override_required": false,
+      "name": "legal-attestation-hard-stop",
+      "repeat": 5,
+      "stage": "shadow"
+    },
+    {
+      "actual_decision": "require_review",
+      "category": "ambiguous_policy",
+      "expected_decision": "require_review",
+      "hard_stop_present": false,
+      "human_override_required": false,
+      "name": "unknown-destination-policy",
+      "repeat": 5,
+      "stage": "shadow"
+    },
+    {
+      "actual_decision": "require_review",
+      "category": "duplicate_like",
+      "expected_decision": "require_review",
+      "hard_stop_present": false,
+      "human_override_required": false,
+      "name": "duplicate-receipt-reconciliation",
+      "repeat": 5,
+      "stage": "review_required"
+    },
+    {
+      "actual_decision": "require_review",
+      "category": "stale_evidence",
+      "expected_decision": "require_review",
+      "hard_stop_present": false,
+      "human_override_required": true,
+      "name": "stale-release-evidence",
+      "repeat": 5,
+      "stage": "shadow"
+    },
+    {
+      "actual_decision": "block",
+      "category": "kill_switch",
+      "expected_decision": "block",
+      "hard_stop_present": false,
+      "human_override_required": false,
+      "name": "active-provider-kill-switch",
+      "repeat": 5,
+      "stage": "shadow"
+    },
+    {
+      "actual_decision": "block",
+      "category": "revoked_grant",
+      "expected_decision": "block",
+      "hard_stop_present": false,
+      "human_override_required": false,
+      "name": "revoked-campaign-grant",
+      "repeat": 5,
+      "stage": "shadow"
+    },
+    {
+      "actual_decision": "block",
+      "category": "expired_grant",
+      "expected_decision": "block",
+      "hard_stop_present": false,
+      "human_override_required": false,
+      "name": "expired-campaign-grant",
+      "repeat": 5,
+      "stage": "review_required"
+    },
+    {
+      "actual_decision": "require_review",
+      "category": "payload_drift",
+      "expected_decision": "require_review",
+      "hard_stop_present": false,
+      "human_override_required": true,
+      "name": "payload-version-drift",
+      "repeat": 5,
+      "stage": "review_required"
+    },
+    {
+      "actual_decision": "block",
+      "category": "cap_boundary",
+      "expected_decision": "block",
+      "hard_stop_present": false,
+      "human_override_required": false,
+      "name": "final-cap-slot-exhausted",
+      "repeat": 5,
+      "stage": "review_required"
+    }
+  ],
+  "external_provider_calls": 0,
+  "kind": "synthetic_rollout_evaluation",
+  "minimum_observations": 50,
+  "scope": "synthetic_only_no_real_provider_evidence",
+  "version": 1
+}

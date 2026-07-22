@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "source_id": "public-ats-native-smoke",
+      "adapter": "recruitment.public_ats_feed",
+      "input_artifact": "datasets/private/agent-company-seeds/ats_run4_sitemap_probe_2026-07-18/run4_run5_extracted_known_ats_triage.jsonl",
+      "output_dir": "datasets/raw/recruitment/native-public-ats-smoke-v1",
+      "limits": {
+        "concurrency": 1,
+        "retry_rounds": 1,
+        "timeout_seconds": 15.0,
+        "max_feed_bytes": 5000000
+      },
+      "schedule": {
+        "cadence_seconds": 21600,
+        "retry_rounds": 1,
+        "budget": {
+          "timeout_seconds": 15.0,
+          "max_feed_bytes": 5000000
+        },
+        "rate_limits": {
+          "concurrency": 1
+        },
+        "robots_terms_policy": "respect",
+        "canonical_ingestion_policy": "canonical_job_ingestion",
+        "provenance_policy": "preserve",
+        "dedupe_policy": "hybrid"
+      }
+    }
+  ]
+}

@@ -22,6 +22,21 @@ dependencies = [
 [project.scripts]
 careerops = "careerops:main"
 careerops-bootstrap = "careerops.cli.auth:main"
+careerops-d0 = "careerops.cli.d0:main"
+careerops-crawl-sources = "careerops.cli.crawl_sources:main"
+careerops-candidate-profiles = "careerops.cli.candidate_profiles:main"
+careerops-crawler-execution = "careerops.cli.crawler_execution:main"
+careerops-crawler-outbox = "careerops.cli.crawler_outbox:main"
+careerops-database-url = "careerops.cli.database_url:main"
+careerops-goal-runs = "careerops.cli.goal_runs:main"
+careerops-gmail-broker = "careerops.cli.gmail_broker:main"
+careerops-gmail-onboarding = "careerops.cli.gmail_onboarding:main"
+careerops-gmail-readonly = "careerops.cli.gmail_readonly:main"
+careerops-gmail-send = "careerops.cli.gmail_send:main"
+careerops-greenhouse-submit = "careerops.cli.greenhouse_submit:main"
+careerops-release-evidence = "careerops.cli.release_evidence:main"
+careerops-source-registry = "careerops.cli.source_registry:main"
+careerops-submission-outbox = "careerops.cli.submission_outbox:main"
 careerops-worker = "careerops.infrastructure.temporal.worker:main"
 careerops-worker-health = "careerops.infrastructure.temporal.health:main"
 
@@ -42,6 +57,9 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/careerops"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"scripts/verify_m1.py" = "careerops/_trusted/verify_m1.py"
 
 [tool.pytest.ini_options]
 addopts = "-ra --strict-config --strict-markers"

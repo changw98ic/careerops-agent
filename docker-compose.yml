@@ -5,6 +5,10 @@ x-careerops-environment: &careerops-environment
   CAREEROPS_DEPLOYMENT_MODE: compose_loopback
   CAREEROPS_BIND_HOST: 0.0.0.0
   CAREEROPS_BIND_PORT: "8000"
+  CAREEROPS_CONSOLE_ALLOWED_HOSTS: >-
+    ["127.0.0.1:${CAREEROPS_API_PORT:-8000}","localhost:${CAREEROPS_API_PORT:-8000}"]
+  CAREEROPS_CONSOLE_ALLOWED_ORIGINS: >-
+    ["http://127.0.0.1:${CAREEROPS_API_PORT:-8000}","http://localhost:${CAREEROPS_API_PORT:-8000}"]
   CAREEROPS_DATABASE_URL: >-
     postgresql+psycopg://${CAREEROPS_DB_RUNTIME_USER:?CAREEROPS_DB_RUNTIME_USER is required}:${CAREEROPS_DB_RUNTIME_PASSWORD:?CAREEROPS_DB_RUNTIME_PASSWORD is required}@postgres:5432/${CAREEROPS_DB_NAME:?CAREEROPS_DB_NAME is required}
   CAREEROPS_DATABASE_ROLE: api
@@ -16,8 +20,16 @@ x-careerops-environment: &careerops-environment
   CAREEROPS_STORAGE_ROOT: /app/data/objects
   CAREEROPS_MODEL_PROVIDER: disabled
   CAREEROPS_GOOGLE_OAUTH_ENABLED: "false"
+  CAREEROPS_GOOGLE_OAUTH_IN_PRODUCTION_ATTESTED: "false"
   CAREEROPS_EXTERNAL_WRITES_ENABLED: "false"
   CAREEROPS_AUTO_SEND_ENABLED: "false"
+  CAREEROPS_AUTO_SUBMIT_ENABLED: "false"
+  CAREEROPS_GMAIL_SEND_ENABLED: "false"
+  CAREEROPS_GMAIL_SEND_RELEASE_ATTESTED: "false"
+  CAREEROPS_GMAIL_SEND_IN_PRODUCTION_ATTESTED: "false"
+  CAREEROPS_GREENHOUSE_SUBMIT_ENABLED: "false"
+  CAREEROPS_GREENHOUSE_SUBMIT_RELEASE_ATTESTED: "false"
+  CAREEROPS_GREENHOUSE_SUBMIT_IN_PRODUCTION_ATTESTED: "false"
 
 x-app-service: &app-service
   build:
@@ -44,12 +56,24 @@ services:
       POSTGRES_DB: ${CAREEROPS_DB_NAME:?CAREEROPS_DB_NAME is required}
       CAREEROPS_DB_RUNTIME_USER: ${CAREEROPS_DB_RUNTIME_USER:?CAREEROPS_DB_RUNTIME_USER is required}
       CAREEROPS_DB_RUNTIME_PASSWORD: ${CAREEROPS_DB_RUNTIME_PASSWORD:?CAREEROPS_DB_RUNTIME_PASSWORD is required}
+      CAREEROPS_DB_WORKFLOW_USER: ${CAREEROPS_DB_WORKFLOW_USER:?CAREEROPS_DB_WORKFLOW_USER is required}
+      CAREEROPS_DB_WORKFLOW_PASSWORD: ${CAREEROPS_DB_WORKFLOW_PASSWORD:?CAREEROPS_DB_WORKFLOW_PASSWORD is required}
+      CAREEROPS_DB_OUTBOX_USER: ${CAREEROPS_DB_OUTBOX_USER:?CAREEROPS_DB_OUTBOX_USER is required}
+      CAREEROPS_DB_OUTBOX_PASSWORD: ${CAREEROPS_DB_OUTBOX_PASSWORD:?CAREEROPS_DB_OUTBOX_PASSWORD is required}
+      CAREEROPS_DB_MAILBOX_USER: ${CAREEROPS_DB_MAILBOX_USER:?CAREEROPS_DB_MAILBOX_USER is required}
+      CAREEROPS_DB_MAILBOX_PASSWORD: ${CAREEROPS_DB_MAILBOX_PASSWORD:?CAREEROPS_DB_MAILBOX_PASSWORD is required}
+      CAREEROPS_DB_MAIL_SENDER_USER: ${CAREEROPS_DB_MAIL_SENDER_USER:?CAREEROPS_DB_MAIL_SENDER_USER is required}
+      CAREEROPS_DB_MAIL_SENDER_PASSWORD: ${CAREEROPS_DB_MAIL_SENDER_PASSWORD:?CAREEROPS_DB_MAIL_SENDER_PASSWORD is required}
+      CAREEROPS_DB_GREENHOUSE_SENDER_USER: ${CAREEROPS_DB_GREENHOUSE_SENDER_USER:?CAREEROPS_DB_GREENHOUSE_SENDER_USER is required}
+      CAREEROPS_DB_GREENHOUSE_SENDER_PASSWORD: ${CAREEROPS_DB_GREENHOUSE_SENDER_PASSWORD:?CAREEROPS_DB_GREENHOUSE_SENDER_PASSWORD is required}
       CAREEROPS_TEMPORAL_DB_USER: ${CAREEROPS_TEMPORAL_DB_USER:?CAREEROPS_TEMPORAL_DB_USER is required}
       CAREEROPS_TEMPORAL_DB_PASSWORD: ${CAREEROPS_TEMPORAL_DB_PASSWORD:?CAREEROPS_TEMPORAL_DB_PASSWORD is required}
       CAREEROPS_TEMPORAL_DB_NAME: ${CAREEROPS_TEMPORAL_DB_NAME:?CAREEROPS_TEMPORAL_DB_NAME is required}
       CAREEROPS_TEMPORAL_VISIBILITY_DB_NAME: ${CAREEROPS_TEMPORAL_VISIBILITY_DB_NAME:?CAREEROPS_TEMPORAL_VISIBILITY_DB_NAME is required}
     volumes:
       - postgres-data:/var/lib/postgresql/data
+    ports:
+      - 127.0.0.1:${CAREEROPS_POSTGRES_PORT:-5432}:5432
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
@@ -70,6 +94,8 @@ services:
       - exec redis-server --appendonly yes --requirepass "$$CAREEROPS_REDIS_PASSWORD"
     volumes:
       - redis-data:/data
+    ports:
+      - 127.0.0.1:${CAREEROPS_REDIS_PORT:-6379}:6379
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -a \"$$CAREEROPS_REDIS_PASSWORD\" ping | grep -q PONG"]
       interval: 5s
@@ -97,6 +123,8 @@ services:
       DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
     volumes:
       - ./deploy/temporal/dynamicconfig:/etc/temporal/config/dynamicconfig:ro
+    ports:
+      - 127.0.0.1:${CAREEROPS_TEMPORAL_PORT:-7233}:7233
     healthcheck:
       test:
         ["CMD-SHELL", "temporal operator cluster health --address temporal:7233"]
@@ -140,6 +168,19 @@ services:
   api:
     <<: *app-service
     command: ["careerops"]
+    environment:
+      <<: *careerops-environment
+      CAREEROPS_GOOGLE_OAUTH_ENABLED: "${CAREEROPS_GOOGLE_OAUTH_ENABLED:-false}"
+      CAREEROPS_GOOGLE_OAUTH_IN_PRODUCTION_ATTESTED: "${CAREEROPS_GOOGLE_OAUTH_IN_PRODUCTION_ATTESTED:-false}"
+      CAREEROPS_EXTERNAL_WRITES_ENABLED: "${CAREEROPS_EXTERNAL_WRITES_ENABLED:-false}"
+      CAREEROPS_AUTO_SEND_ENABLED: "${CAREEROPS_AUTO_SEND_ENABLED:-false}"
+      CAREEROPS_AUTO_SUBMIT_ENABLED: "${CAREEROPS_AUTO_SUBMIT_ENABLED:-false}"
+      CAREEROPS_GMAIL_SEND_ENABLED: "${CAREEROPS_GMAIL_SEND_ENABLED:-false}"
+      CAREEROPS_GMAIL_SEND_RELEASE_ATTESTED: "${CAREEROPS_GMAIL_SEND_RELEASE_ATTESTED:-false}"
+      CAREEROPS_GMAIL_SEND_IN_PRODUCTION_ATTESTED: "${CAREEROPS_GMAIL_SEND_IN_PRODUCTION_ATTESTED:-false}"
+      CAREEROPS_GREENHOUSE_SUBMIT_ENABLED: "${CAREEROPS_GREENHOUSE_SUBMIT_ENABLED:-false}"
+      CAREEROPS_GREENHOUSE_SUBMIT_RELEASE_ATTESTED: "${CAREEROPS_GREENHOUSE_SUBMIT_RELEASE_ATTESTED:-false}"
+      CAREEROPS_GREENHOUSE_SUBMIT_IN_PRODUCTION_ATTESTED: "${CAREEROPS_GREENHOUSE_SUBMIT_IN_PRODUCTION_ATTESTED:-false}"
     depends_on:
       migration:
         condition: service_completed_successfully
@@ -151,6 +192,7 @@ services:
       - 127.0.0.1:${CAREEROPS_API_PORT:-8000}:8000
     volumes:
       - object-data:/app/data
+      - crawler-datasets:/app/datasets
     healthcheck:
       test:
         - CMD
@@ -169,6 +211,10 @@ services:
     command: ["careerops-worker"]
     environment:
       <<: *careerops-environment
+      CAREEROPS_DATABASE_URL: >-
+        postgresql+psycopg://${CAREEROPS_DB_WORKFLOW_USER:?CAREEROPS_DB_WORKFLOW_USER is required}:${CAREEROPS_DB_WORKFLOW_PASSWORD:?CAREEROPS_DB_WORKFLOW_PASSWORD is required}@postgres:5432/${CAREEROPS_DB_NAME:?CAREEROPS_DB_NAME is required}
+      CAREEROPS_DATABASE_ROLE: workflow
+      CAREEROPS_CRAWLER_WORKSPACE_ROOT: /app
       CAREEROPS_TEMPORAL_WORKER_IDENTITY: careerops-m0-worker
       CAREEROPS_TEMPORAL_WORKER_HEALTH_TIMEOUT_SECONDS: "3"
     depends_on:
@@ -182,6 +228,163 @@ services:
       timeout: 5s
       retries: 12
       start_period: 20s
+    volumes:
+      - crawler-datasets:/app/datasets
+
+  crawler-outbox:
+    <<: *app-service
+    command:
+      - careerops-crawler-outbox
+      - --root
+      - /app
+      - --owner
+      - compose-crawler-outbox
+      - --poll-seconds
+      - "${CAREEROPS_CRAWLER_OUTBOX_POLL_SECONDS:-5}"
+      - --max-attempts
+      - "${CAREEROPS_CRAWLER_OUTBOX_MAX_ATTEMPTS:-3}"
+      - --limit
+      - "${CAREEROPS_CRAWLER_OUTBOX_LIMIT:-10}"
+      - --lease-seconds
+      - "${CAREEROPS_CRAWLER_OUTBOX_LEASE_SECONDS:-30}"
+    environment:
+      <<: *careerops-environment
+      CAREEROPS_DATABASE_URL: >-
+        postgresql+psycopg://${CAREEROPS_DB_OUTBOX_USER:?CAREEROPS_DB_OUTBOX_USER is required}:${CAREEROPS_DB_OUTBOX_PASSWORD:?CAREEROPS_DB_OUTBOX_PASSWORD is required}@postgres:5432/${CAREEROPS_DB_NAME:?CAREEROPS_DB_NAME is required}
+      CAREEROPS_DATABASE_ROLE: outbox
+      CAREEROPS_CRAWLER_WORKSPACE_ROOT: /app
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+    volumes:
+      - crawler-datasets:/app/datasets
+
+  submission-outbox:
+    <<: *app-service
+    profiles:
+      - synthetic-submission-outbox
+    command:
+      - careerops-submission-outbox
+      - --owner
+      - compose-synthetic-submission-outbox
+      - --poll-seconds
+      - "${CAREEROPS_SUBMISSION_OUTBOX_POLL_SECONDS:-5}"
+      - --max-attempts
+      - "${CAREEROPS_SUBMISSION_OUTBOX_MAX_ATTEMPTS:-3}"
+      - --limit
+      - "${CAREEROPS_SUBMISSION_OUTBOX_LIMIT:-10}"
+      - --lease-seconds
+      - "${CAREEROPS_SUBMISSION_OUTBOX_LEASE_SECONDS:-30}"
+    environment:
+      <<: *careerops-environment
+      CAREEROPS_DATABASE_URL: >-
+        postgresql+psycopg://${CAREEROPS_DB_OUTBOX_USER:?CAREEROPS_DB_OUTBOX_USER is required}:${CAREEROPS_DB_OUTBOX_PASSWORD:?CAREEROPS_DB_OUTBOX_PASSWORD is required}@postgres:5432/${CAREEROPS_DB_NAME:?CAREEROPS_DB_NAME is required}
+      CAREEROPS_DATABASE_ROLE: outbox
+      CAREEROPS_EXTERNAL_WRITES_ENABLED: "false"
+      CAREEROPS_AUTO_SEND_ENABLED: "false"
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+
+  gmail-readonly:
+    <<: *app-service
+    profiles:
+      - gmail-readonly
+    command:
+      - careerops-gmail-readonly
+      - --owner
+      - compose-gmail-readonly
+      - worker
+      - --poll-seconds
+      - "${CAREEROPS_GMAIL_READONLY_POLL_SECONDS:-5}"
+      - --limit
+      - "${CAREEROPS_GMAIL_READONLY_LIMIT:-10}"
+      - --max-results
+      - "${CAREEROPS_GMAIL_READONLY_MAX_RESULTS:-100}"
+    environment:
+      <<: *careerops-environment
+      CAREEROPS_DATABASE_URL: >-
+        postgresql+psycopg://${CAREEROPS_DB_MAILBOX_USER:?CAREEROPS_DB_MAILBOX_USER is required}:${CAREEROPS_DB_MAILBOX_PASSWORD:?CAREEROPS_DB_MAILBOX_PASSWORD is required}@postgres:5432/${CAREEROPS_DB_NAME:?CAREEROPS_DB_NAME is required}
+      CAREEROPS_DATABASE_ROLE: mailbox
+      CAREEROPS_GOOGLE_OAUTH_ENABLED: "false"
+      CAREEROPS_EXTERNAL_WRITES_ENABLED: "false"
+      CAREEROPS_AUTO_SEND_ENABLED: "false"
+      CAREEROPS_MAILBOX_BROKER_SOCKET: ${CAREEROPS_MAILBOX_BROKER_SOCKET:-/run/careerops-gmail/broker.sock}
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+    volumes:
+      - gmail-broker-socket:/run/careerops-gmail
+
+  gmail-send:
+    <<: *app-service
+    restart: unless-stopped
+    profiles:
+      - gmail-send
+    command:
+      - careerops-gmail-send
+      - --owner
+      - compose-gmail-send
+      - worker
+      - --poll-seconds
+      - "${CAREEROPS_GMAIL_SEND_POLL_SECONDS:-5}"
+      - --limit
+      - "${CAREEROPS_GMAIL_SEND_LIMIT:-10}"
+    environment:
+      <<: *careerops-environment
+      CAREEROPS_DATABASE_URL: >-
+        postgresql+psycopg://${CAREEROPS_DB_MAIL_SENDER_USER:?CAREEROPS_DB_MAIL_SENDER_USER is required}:${CAREEROPS_DB_MAIL_SENDER_PASSWORD:?CAREEROPS_DB_MAIL_SENDER_PASSWORD is required}@postgres:5432/${CAREEROPS_DB_NAME:?CAREEROPS_DB_NAME is required}
+      CAREEROPS_DATABASE_ROLE: mail_sender
+      CAREEROPS_GOOGLE_OAUTH_ENABLED: "${CAREEROPS_GOOGLE_OAUTH_ENABLED:-false}"
+      CAREEROPS_GOOGLE_OAUTH_IN_PRODUCTION_ATTESTED: "${CAREEROPS_GOOGLE_OAUTH_IN_PRODUCTION_ATTESTED:-false}"
+      CAREEROPS_EXTERNAL_WRITES_ENABLED: "${CAREEROPS_EXTERNAL_WRITES_ENABLED:-false}"
+      CAREEROPS_AUTO_SEND_ENABLED: "${CAREEROPS_AUTO_SEND_ENABLED:-false}"
+      CAREEROPS_GMAIL_SEND_ENABLED: "${CAREEROPS_GMAIL_SEND_ENABLED:-false}"
+      CAREEROPS_GMAIL_SEND_RELEASE_ATTESTED: "${CAREEROPS_GMAIL_SEND_RELEASE_ATTESTED:-false}"
+      CAREEROPS_GMAIL_SEND_IN_PRODUCTION_ATTESTED: "${CAREEROPS_GMAIL_SEND_IN_PRODUCTION_ATTESTED:-false}"
+      CAREEROPS_MAILBOX_BROKER_SOCKET: ${CAREEROPS_MAILBOX_BROKER_SOCKET:-/run/careerops-gmail/broker.sock}
+      CAREEROPS_GMAIL_SEND_BROKER_SOCKET: ${CAREEROPS_GMAIL_SEND_BROKER_SOCKET:-/run/careerops-gmail-send/broker.sock}
+      CAREEROPS_GMAIL_SEND_ATTACHMENT_BROKER_SOCKET: ${CAREEROPS_GMAIL_SEND_ATTACHMENT_BROKER_SOCKET:-/run/careerops-gmail-send/attachments.sock}
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+    volumes:
+      - gmail-broker-socket:/run/careerops-gmail
+      - gmail-send-broker-socket:/run/careerops-gmail-send
+
+  greenhouse-submit:
+    <<: *app-service
+    restart: unless-stopped
+    profiles:
+      - greenhouse-submit
+    command:
+      - python
+      - -m
+      - careerops.cli.greenhouse_submit
+      - --owner
+      - compose-greenhouse-submit
+      - worker
+      - --poll-seconds
+      - "${CAREEROPS_GREENHOUSE_SUBMIT_POLL_SECONDS:-5}"
+      - --limit
+      - "${CAREEROPS_GREENHOUSE_SUBMIT_LIMIT:-10}"
+    environment:
+      <<: *careerops-environment
+      CAREEROPS_DATABASE_URL: >-
+        postgresql+psycopg://${CAREEROPS_DB_GREENHOUSE_SENDER_USER:?CAREEROPS_DB_GREENHOUSE_SENDER_USER is required}:${CAREEROPS_DB_GREENHOUSE_SENDER_PASSWORD:?CAREEROPS_DB_GREENHOUSE_SENDER_PASSWORD is required}@postgres:5432/${CAREEROPS_DB_NAME:?CAREEROPS_DB_NAME is required}
+      CAREEROPS_DATABASE_ROLE: greenhouse_sender
+      CAREEROPS_EXTERNAL_WRITES_ENABLED: "${CAREEROPS_EXTERNAL_WRITES_ENABLED:-false}"
+      CAREEROPS_AUTO_SUBMIT_ENABLED: "${CAREEROPS_AUTO_SUBMIT_ENABLED:-false}"
+      CAREEROPS_GREENHOUSE_SUBMIT_ENABLED: "${CAREEROPS_GREENHOUSE_SUBMIT_ENABLED:-false}"
+      CAREEROPS_GREENHOUSE_SUBMIT_RELEASE_ATTESTED: "${CAREEROPS_GREENHOUSE_SUBMIT_RELEASE_ATTESTED:-false}"
+      CAREEROPS_GREENHOUSE_SUBMIT_IN_PRODUCTION_ATTESTED: "${CAREEROPS_GREENHOUSE_SUBMIT_IN_PRODUCTION_ATTESTED:-false}"
+      CAREEROPS_GREENHOUSE_SUBMIT_CREDENTIAL_BROKER_SOCKET: ${CAREEROPS_GREENHOUSE_SUBMIT_CREDENTIAL_BROKER_SOCKET:-/run/careerops-greenhouse/broker.sock}
+      CAREEROPS_GREENHOUSE_SUBMIT_ATTACHMENT_BROKER_SOCKET: ${CAREEROPS_GREENHOUSE_SUBMIT_ATTACHMENT_BROKER_SOCKET:-/run/careerops-greenhouse/attachments.sock}
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+    volumes:
+      - greenhouse-broker-socket:/run/careerops-greenhouse
 
 networks:
   backend:
@@ -190,3 +393,7 @@ volumes:
   postgres-data:
   redis-data:
   object-data:
+  crawler-datasets:
+  gmail-broker-socket:
+  gmail-send-broker-socket:
+  greenhouse-broker-socket:

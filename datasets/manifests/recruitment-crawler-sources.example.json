@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "source_id": "company-sitemaps",
+      "adapter": "recruitment.sitemap_discovery",
+      "input_artifact": "datasets/private/recruitment/triage.jsonl",
+      "output_dir": "datasets/raw/recruitment/sitemaps",
+      "limits": {
+        "concurrency": 2,
+        "retry_rounds": 2,
+        "timeout_seconds": 20.0,
+        "max_sitemap_bytes": 5000000
+      },
+      "schedule": {
+        "cadence_seconds": 86400,
+        "retry_rounds": 2,
+        "budget": {
+          "timeout_seconds": 20.0,
+          "max_sitemap_bytes": 5000000
+        },
+        "rate_limits": {
+          "concurrency": 2
+        },
+        "robots_terms_policy": "respect",
+        "canonical_ingestion_policy": "dedupe_only",
+        "provenance_policy": "preserve",
+        "dedupe_policy": "hybrid"
+      }
+    },
+    {
+      "source_id": "company-commoncrawl",
+      "adapter": "recruitment.commoncrawl_discovery",
+      "input_artifact": "datasets/private/recruitment/triage.jsonl",
+      "output_dir": "datasets/raw/recruitment/commoncrawl",
+      "limits": {
+        "concurrency": 2,
+        "retry_rounds": 2,
+        "timeout_seconds": 20.0,
+        "max_indexes": 2,
+        "max_results_per_query": 100,
+        "max_discovered_urls": 10000
+      },
+      "schedule": {
+        "cadence_seconds": 86400,
+        "retry_rounds": 2,
+        "budget": {
+          "timeout_seconds": 20.0,
+          "max_indexes": 2,
+          "max_results_per_query": 100,
+          "max_discovered_urls": 10000
+        },
+        "rate_limits": {
+          "concurrency": 2
+        },
+        "robots_terms_policy": "respect",
+        "canonical_ingestion_policy": "dedupe_only",
+        "provenance_policy": "preserve",
+        "dedupe_policy": "hybrid"
+      }
+    },
+    {
+      "source_id": "public-ats-feeds",
+      "adapter": "recruitment.public_ats_feed",
+      "input_artifact": "datasets/private/recruitment/triage.jsonl",
+      "output_dir": "datasets/raw/recruitment/public-ats",
+      "limits": {
+        "concurrency": 4,
+        "retry_rounds": 2,
+        "timeout_seconds": 20.0,
+        "max_feed_bytes": 10000000
+      },
+      "schedule": {
+        "cadence_seconds": 21600,
+        "retry_rounds": 2,
+        "budget": {
+          "timeout_seconds": 20.0,
+          "max_feed_bytes": 10000000
+        },
+        "rate_limits": {
+          "concurrency": 4
+        },
+        "robots_terms_policy": "respect",
+        "canonical_ingestion_policy": "canonical_job_ingestion",
+        "provenance_policy": "preserve",
+        "dedupe_policy": "hybrid"
+      }
+    },
+    {
+      "source_id": "public-career-pages",
+      "adapter": "recruitment.page_collection",
+      "input_artifact": "datasets/private/recruitment/triage.jsonl",
+      "output_dir": "datasets/raw/recruitment/pages",
+      "additional_seed_sources": ["company-sitemaps", "company-commoncrawl"],
+      "limits": {
+        "concurrency": 4,
+        "max_concurrency_per_host": 2,
+        "retry_rounds": 2,
+        "timeout_seconds": 20.0,
+        "depth": 1,
+        "max_response_bytes": 1000000,
+        "max_stored_bytes": 1073741824
+      },
+      "schedule": {
+        "cadence_seconds": 86400,
+        "retry_rounds": 2,
+        "budget": {
+          "timeout_seconds": 20.0,
+          "max_response_bytes": 1000000,
+          "max_stored_bytes": 1073741824,
+          "depth": 1
+        },
+        "rate_limits": {
+          "concurrency": 4,
+          "max_concurrency_per_host": 2
+        },
+        "robots_terms_policy": "respect",
+        "canonical_ingestion_policy": "dedupe_only",
+        "provenance_policy": "preserve",
+        "dedupe_policy": "hybrid"
+      }
+    }
+  ]
+}

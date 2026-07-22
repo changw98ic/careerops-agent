@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}GoalRun 审核 · CareerOps{% endblock %}
+{% block content %}
+  <h1>GoalRun 审核</h1>
+  <p>已登录为 {{ username }}。</p>
+  <p>此页面只审核服务端已经持久化的 GoalRun 精确快照。预申请审核的“批准”只完成本地准备；只有明确标记为外部动作的独立审核才可能进入受控 outbox/worker。本页不接收凭据、脚本或任意外部提交参数。</p>
+  {% if unavailable_message %}
+    <section aria-labelledby="goal-run-unavailable-heading">
+      <h2 id="goal-run-unavailable-heading">GoalRun 审核未启用</h2>
+      <p>{{ unavailable_message }}</p>
+    </section>
+  {% endif %}
+  {% if goal_runs %}
+    <table>
+      <caption>GoalRun 列表</caption>
+      <thead>
+        <tr>
+          <th scope="col">GoalRun</th>
+          <th scope="col">状态</th>
+          <th scope="col">阶段</th>
+          <th scope="col">Source</th>
+          <th scope="col">消息</th>
+          <th scope="col">待审核快照</th>
+          <th scope="col">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in goal_runs %}
+          {% set run = item.goal_run %}
+          {% set review = item.pending_review %}
+          <tr>
+            <td>{{ run.goal_run_id }}</td>
+            <td>{{ run.status }}</td>
+            <td>{{ run.phase }}</td>
+            <td>{{ run.source_id or "未指定" }}</td>
+            <td>{{ run.status_message or "—" }}</td>
+            <td>
+              {% if review %}
+                <dl>
+                  <dt>Review ID</dt><dd>{{ review.review_id }}</dd>
+                  <dt>类型</dt><dd>{{ review.kind }}</dd>
+                  <dt>快照 SHA-256</dt><dd>{{ review.snapshot_sha256 }}</dd>
+                </dl>
+                <pre>{{ item.payload_json }}</pre>
+              {% else %}
+                无待审核快照
+              {% endif %}
+            </td>
+            <td>
+              {% if review %}
+                <form method="post" action="/goal-runs/{{ run.goal_run_id }}/reviews/{{ review.review_id }}/approve">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <input type="hidden" name="snapshot_sha256" value="{{ review.snapshot_sha256 }}">
+                  <button type="submit">批准</button>
+                </form>
+                <form method="post" action="/goal-runs/{{ run.goal_run_id }}/reviews/{{ review.review_id }}/reject">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <input type="hidden" name="snapshot_sha256" value="{{ review.snapshot_sha256 }}">
+                  <button type="submit">拒绝</button>
+                </form>
+              {% else %}
+                不可操作
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p>当前没有 GoalRun 审核事项。</p>
+  {% endif %}
+{% endblock %}

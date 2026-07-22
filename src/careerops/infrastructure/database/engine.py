@@ -8,8 +8,12 @@ from careerops.config import DatabaseCapabilityRole, Settings
 
 _ROLE_INITIALIZATION_SQL = {
     DatabaseCapabilityRole.API: "SET ROLE careerops_api",
+    DatabaseCapabilityRole.WORKFLOW: "SET ROLE careerops_workflow",
+    DatabaseCapabilityRole.MAILBOX: "SET ROLE careerops_mailbox",
     DatabaseCapabilityRole.RETENTION: "SET ROLE careerops_retention",
     DatabaseCapabilityRole.OUTBOX: "SET ROLE careerops_outbox",
+    DatabaseCapabilityRole.MAIL_SENDER: "SET ROLE careerops_mail_sender",
+    DatabaseCapabilityRole.GREENHOUSE_SENDER: "SET ROLE careerops_greenhouse_sender",
     DatabaseCapabilityRole.READONLY: "SET ROLE careerops_readonly",
 }
 _FIXED_SEARCH_PATH_SQL = "SET search_path TO pg_catalog, careerops"

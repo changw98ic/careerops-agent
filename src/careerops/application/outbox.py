@@ -34,6 +34,7 @@ class ClaimedOutboxEvent:
     attempt_count: int
     lease_token: UUID
     lease_until: datetime
+    lease_owner: str = ""
 
 
 class OutboxStore(Protocol):
@@ -46,6 +47,7 @@ class OutboxStore(Protocol):
         now: datetime,
         lease_for: timedelta,
         limit: int,
+        event_key_prefix: str | None = None,
     ) -> tuple[ClaimedOutboxEvent, ...]: ...
 
     def mark_published(
@@ -101,16 +103,20 @@ class OutboxPublisher:
         *,
         retry_delay: timedelta = timedelta(minutes=5),
         max_attempts: int = 10,
+        event_key_prefix: str | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         if retry_delay <= timedelta(0):
             raise ValueError("retry_delay must be positive")
         if max_attempts < 1:
             raise ValueError("max_attempts must be positive")
+        if event_key_prefix == "":
+            raise ValueError("event_key_prefix must be non-empty when provided")
         self._store = store
         self._sink = sink
         self._retry_delay = retry_delay
         self._max_attempts = max_attempts
+        self._event_key_prefix = event_key_prefix
         self._clock = clock or _utc_now
 
     def publish_batch(
@@ -124,7 +130,13 @@ class OutboxPublisher:
         sink = self._sink
         if sink is None:
             return PublishBatchResult(claimed=0, published=0, deferred=0, failed=0)
-        events = self._store.claim(owner=owner, now=now, lease_for=lease_for, limit=limit)
+        events = self._store.claim(
+            owner=owner,
+            now=now,
+            lease_for=lease_for,
+            limit=limit,
+            event_key_prefix=self._event_key_prefix,
+        )
         published = 0
         deferred = 0
         failed = 0

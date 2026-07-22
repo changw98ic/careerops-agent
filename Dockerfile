@@ -13,13 +13,20 @@ WORKDIR /app
 RUN groupadd --system --gid 10001 careerops \
     && useradd --system --uid 10001 --gid careerops --home-dir /app careerops \
     && mkdir -p /app/data/objects \
+        /app/datasets/manifests \
+        /app/datasets/private/crawler-execution-claims \
+        /app/datasets/private/crawler-execution-output-locks \
+        /app/datasets/private/crawler-execution-reviews \
+        /app/datasets/private/crawler-execution-snapshots \
     && chown -R careerops:careerops /app
 
 COPY --from=uv /uv /uvx /usr/local/bin/
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 COPY migrations ./migrations
+COPY datasets/manifests ./datasets/manifests
 COPY alembic.ini ./alembic.ini
+COPY scripts ./scripts
 
 RUN uv sync --frozen --no-dev --no-cache \
     && chown -R careerops:careerops /app

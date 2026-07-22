@@ -17,8 +17,16 @@ dist/
 datasets/private/
 datasets/raw/
 datasets/holdout/
+datasets/derived/
+
+# Local Goal orchestration state is runtime metadata, not source.
+.omx/
 
 # Runtime state and decrypted/temporary secrets.
 data/
 secrets/
 *.log
+
+# Google OAuth downloads must be imported into Keychain, never committed.
+client_secret_*.json
+*.apps.googleusercontent.com.json

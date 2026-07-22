@@ -43,7 +43,7 @@ manifest. They are not identity authentication, legal attestation, a trusted
 timestamp, holdout access control, or a cryptographic seal.
 
 `make verify-m1-contracts` validates static ADR/metric/schema/guide contracts
-only. `python3 -S scripts/verify_m1.py --json` is the full evidence Gate and must
+only. `uv run python -S scripts/verify_m1.py --json` is the full evidence Gate and must
 remain failing while the repository has `0/286` real pilot rows. A future
 engineering pass still cannot substitute for M7's separate trusted human,
 legal, privacy, holdout-custody, security, and product release evidence.

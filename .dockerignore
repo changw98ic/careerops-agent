@@ -11,6 +11,8 @@ __pycache__
 .env
 .env.*
 data
-datasets
+datasets/*
+!datasets/manifests
+!datasets/manifests/**
 docs
 tests

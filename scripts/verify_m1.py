@@ -690,9 +690,9 @@ def verify_contracts(root: Path = ROOT) -> tuple[list[str], dict[str, Any]]:
         contracts = {}
 
     accepted_adrs = 0
-    for name, relative in contracts.items():
+    for contract_index, (_name, relative) in enumerate(contracts.items()):
         if not isinstance(relative, str):
-            errors.append(f"contract path is not a string: {name}")
+            errors.append(f"contract entry {contract_index} path must be a string")
             continue
         path = require_file(relative, errors, root)
         if path is None:
@@ -702,7 +702,7 @@ def verify_contracts(root: Path = ROOT) -> tuple[list[str], dict[str, Any]]:
             continue
         if relative.startswith("docs/adr/"):
             if "Status: Accepted" not in text:
-                errors.append(f"ADR is not Accepted: {relative}")
+                errors.append(f"contract entry {contract_index} ADR is not Accepted")
             else:
                 accepted_adrs += 1
 
@@ -755,9 +755,9 @@ def verify_contracts(root: Path = ROOT) -> tuple[list[str], dict[str, Any]]:
     if not isinstance(required_metric_ids, list) or not required_metric_ids:
         errors.append("required_metric_ids must be a non-empty array")
         required_metric_ids = []
-    for metric_id in required_metric_ids:
+    for metric_index, metric_id in enumerate(required_metric_ids):
         if not isinstance(metric_id, str) or metric_id not in metric_text:
-            errors.append(f"metric contract missing ID: {metric_id!r}")
+            errors.append(f"metric contract is missing required ID at index {metric_index}")
 
     raw_expected_datasets = gate.get("dataset_contracts")
     expected_datasets: list[Any]
@@ -770,9 +770,9 @@ def verify_contracts(root: Path = ROOT) -> tuple[list[str], dict[str, Any]]:
         expected_datasets = []
 
     schema_summary: dict[str, str] = {}
-    for dataset_id in expected_datasets:
+    for dataset_index, dataset_id in enumerate(expected_datasets):
         if not isinstance(dataset_id, str):
-            errors.append(f"invalid dataset ID: {dataset_id!r}")
+            errors.append(f"dataset contract entry {dataset_index} must be a string")
             continue
         schema_relative = f"datasets/schemas/{dataset_id}.schema.json"
         guide_relative = f"datasets/labeling-guides/{dataset_id}.md"
@@ -906,7 +906,7 @@ def artifact_rows(
         if not isinstance(group_id, str) or not group_id.strip():
             errors.append(f"{row_label} missing group_id")
         if split not in SPLITS:
-            errors.append(f"{row_label} invalid split: {split!r}")
+            errors.append(f"{row_label} has an invalid split")
         elif isinstance(group_id, str) and group_id.strip():
             previous_split = group_splits.setdefault(group_id, split)
             if previous_split != split:
@@ -1837,14 +1837,14 @@ def verify_full_pilot(root: Path = ROOT) -> tuple[list[str], dict[str, Any]]:
     declared_actual_total = 0
     derived_actual_total = 0
     required_total = 0
-    for dataset in datasets:
+    for dataset_index, dataset in enumerate(datasets):
         if not isinstance(dataset, dict):
-            errors.append(f"invalid pilot dataset entry: {dataset!r}")
+            errors.append(f"pilot dataset entry {dataset_index} must be an object")
             continue
         dataset_id = dataset.get("id", "<unknown>")
         frozen_dataset = FROZEN_D0_DATASETS.get(str(dataset_id))
         if frozen_dataset is None:
-            errors.append(f"pilot dataset is not frozen: {dataset_id}")
+            errors.append(f"pilot dataset entry {dataset_index} is not a frozen dataset")
             continue
         for field, frozen_value in frozen_dataset.items():
             if dataset.get(field) != frozen_value:

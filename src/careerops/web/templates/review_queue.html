@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}审核队列 · CareerOps{% endblock %}
+{% block content %}
+  <h1>审核队列</h1>
+  <p>已登录为 {{ username }}。</p>
+  <p>此页面只展示需要人工处理的事项，不会批准、提交或触发任何外部写入。</p>
+  <section aria-labelledby="review-capability-heading">
+    <h2 id="review-capability-heading">{{ capability.title_zh }}</h2>
+    <p>{{ capability.description_zh }}</p>
+    <p>状态：{{ capability.state }}；原因：{{ capability.reason_code }}</p>
+  </section>
+  <nav aria-label="审核队列分类">
+    <ul>
+      {% for tab_value, tab_label in tabs %}
+        <li>
+          <a href="/review?tab={{ tab_value }}"{% if tab_value == current_tab %} aria-current="page"{% endif %}>{{ tab_label }}（{{ counts_by_tab.get(tab_value, 0) }}）</a>
+        </li>
+      {% endfor %}
+    </ul>
+  </nav>
+  <h2>{{ current_tab_label }}</h2>
+  {% if items %}
+    <table>
+      <caption>{{ current_tab_label }}事项</caption>
+      <thead>
+        <tr>
+          <th scope="col">事项</th>
+          <th scope="col">目标</th>
+          <th scope="col">原因</th>
+          <th scope="col">处理方式</th>
+          <th scope="col">创建时间</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in items %}
+          <tr>
+            <td>{{ item.title_zh }}</td>
+            <td>{{ item.target_host or item.summary_zh }}</td>
+            <td>{{ item.reason_code }}</td>
+            <td>
+              {% if item.resolution_mode == "manual_only" %}仅人工处理
+              {% elif item.resolution_mode == "remediation_required" %}需要修复
+              {% else %}需要审核{% endif %}
+            </td>
+            <td>{{ item.created_at.isoformat() }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p>当前没有{{ current_tab_label }}事项。</p>
+  {% endif %}
+{% endblock %}

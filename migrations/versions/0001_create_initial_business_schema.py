@@ -95,6 +95,7 @@ ROLE_GRANTS = {
         "attempt_count, published_at, last_error_code) ON careerops.outbox_events "
         "TO careerops_outbox",
     ),
+    "careerops_mailbox": (),
     "careerops_side_effect": (),
     "careerops_readonly": (
         "GRANT USAGE ON SCHEMA careerops TO careerops_readonly",

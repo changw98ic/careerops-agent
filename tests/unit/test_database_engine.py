@@ -48,8 +48,15 @@ class RecordingDbapiConnection:
     ("role", "expected_role_sql"),
     [
         (DatabaseCapabilityRole.API, "SET ROLE careerops_api"),
+        (DatabaseCapabilityRole.WORKFLOW, "SET ROLE careerops_workflow"),
+        (DatabaseCapabilityRole.MAILBOX, "SET ROLE careerops_mailbox"),
         (DatabaseCapabilityRole.RETENTION, "SET ROLE careerops_retention"),
         (DatabaseCapabilityRole.OUTBOX, "SET ROLE careerops_outbox"),
+        (DatabaseCapabilityRole.MAIL_SENDER, "SET ROLE careerops_mail_sender"),
+        (
+            DatabaseCapabilityRole.GREENHOUSE_SENDER,
+            "SET ROLE careerops_greenhouse_sender",
+        ),
         (DatabaseCapabilityRole.READONLY, "SET ROLE careerops_readonly"),
     ],
 )

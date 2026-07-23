@@ -17,6 +17,7 @@ dist/
 datasets/private/
 datasets/raw/
 datasets/holdout/
+datasets/derived/
 
 # Runtime state and decrypted/temporary secrets.
 data/

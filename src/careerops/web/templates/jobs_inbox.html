@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Jobs Inbox · CareerOps{% endblock %}
+{% block content %}
+  <h1>职位收件箱</h1>
+  <nav><a href="/companies">公司</a></nav>
+  {% if jobs %}
+  <table>
+    <thead><tr><th>职位</th><th>状态</th><th>操作</th></tr></thead>
+    <tbody>
+      {% for j in jobs %}
+      <tr>
+        <td>{{ j.canonical_title }}</td>
+        <td>{{ j.aggregate_state }}</td>
+        <td><a href="/jobs/{{ j.id }}">详情</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p>暂无职位数据。</p>
+  {% endif %}
+{% endblock %}

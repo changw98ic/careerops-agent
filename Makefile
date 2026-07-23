@@ -56,10 +56,10 @@ verify-compose:
 verify-m0: verify security verify-db verify-compose
 
 verify-m1-contracts:
-	python3 -S scripts/verify_m1.py --contracts-only
+	uv run python -S scripts/verify_m1.py --contracts-only
 
 verify-m1-full:
-	python3 -S scripts/verify_m1.py
+	uv run python -S scripts/verify_m1.py
 
 # Compatibility alias: the historical target has always meant contract validation only.
 verify-m1: verify-m1-contracts

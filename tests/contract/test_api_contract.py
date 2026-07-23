@@ -156,6 +156,25 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
     assert set(response.json()["paths"]) == {
         "/api/v1/health/live",
         "/api/v1/health/ready",
+        "/api/v1/companies",
+        "/api/v1/companies/{company_id}/contacts",
+        "/api/v1/contacts",
+        "/api/v1/jobs",
+        "/api/v1/jobs/{job_id}",
+        "/api/v1/jobs/{job_id}/remote-eligibility",
+        "/api/v1/jobs/{job_id}/compensation",
+        "/api/v1/candidates",
+        "/api/v1/candidates/{candidate_id}/evidence",
+        "/api/v1/evidence/import",
+        "/api/v1/matches",
+        "/api/v1/matches/run",
+        "/api/v1/applications",
+        "/api/v1/applications/{application_id}/transition",
+        "/api/v1/applications/{application_id}/submit",
+        "/api/v1/applications/{application_id}/events",
+        "/api/v1/resume-versions",
+        "/api/v1/application-packages",
+        "/api/v1/follow-ups",
     }
 
 

@@ -447,6 +447,124 @@ evidence_records = sa.Table(
     sa.CheckConstraint("char_length(span_hash) = 64", name="span_hash_length"),
 )
 
+evidence_items = sa.Table(
+    "evidence_items",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "candidate_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.candidates.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column("kind", sa.String(32), nullable=False),
+    sa.Column("name", sa.Text(), nullable=False),
+    sa.Column("description", sa.Text(), server_default="", nullable=False),
+    sa.Column("repository", sa.Text(), server_default="", nullable=False),
+    sa.Column("commit_sha", sa.Text(), server_default="", nullable=False),
+    sa.Column("path", sa.Text(), server_default="", nullable=False),
+    sa.Column("symbol", sa.Text(), server_default="", nullable=False),
+    sa.Column("content_hash", sa.String(64), server_default="", nullable=False),
+    sa.Column("source_url", sa.Text(), server_default="", nullable=False),
+    sa.Column("verified", sa.Boolean(), server_default=sa.text("false"), nullable=False),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.CheckConstraint(
+        "kind IN ('skill', 'project', 'experience', 'certification', 'education')",
+        name="kind_values",
+    ),
+    sa.UniqueConstraint(
+        "candidate_id",
+        "repository",
+        "commit_sha",
+        "path",
+        "symbol",
+        "content_hash",
+        name="uq_evidence_items_idempotency",
+    ),
+)
+
+match_results = sa.Table(
+    "match_results",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "candidate_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.candidates.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column(
+        "canonical_job_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.canonical_jobs.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column("tier", sa.String(32), nullable=False),
+    sa.Column("overall_score", sa.Numeric(5, 4), nullable=False),
+    sa.Column(
+        "requirement_matches",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column("geographic_blocked", sa.Boolean(), server_default=sa.text("false"), nullable=False),
+    sa.Column("remote_verdict", sa.String(32), server_default="unknown", nullable=False),
+    sa.Column("rules_version", sa.Text(), server_default="", nullable=False),
+    sa.Column("input_hash", sa.String(64), server_default="", nullable=False),
+    sa.Column("output_hash", sa.String(64), server_default="", nullable=False),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.CheckConstraint(
+        "tier IN ('apply_now', 'strong_candidate', 'worth_exploring', "
+        "'stretch', 'not_recommended', 'blocked')",
+        name="tier_values",
+    ),
+    sa.CheckConstraint(
+        "remote_verdict IN ('eligible', 'not_eligible', 'review_required', 'unknown')",
+        name="remote_verdict_values",
+    ),
+    sa.CheckConstraint("overall_score >= 0 AND overall_score <= 1", name="score_range"),
+)
+
+sa.Index(
+    "ix_match_results_candidate_job",
+    match_results.c.candidate_id,
+    match_results.c.canonical_job_id,
+)
+
+compensation_records = sa.Table(
+    "compensation_records",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "canonical_job_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.canonical_jobs.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column("currency", sa.String(8), server_default="", nullable=False),
+    sa.Column("amount_min", sa.Numeric(14, 2)),
+    sa.Column("amount_max", sa.Numeric(14, 2)),
+    sa.Column("period", sa.String(16), server_default="", nullable=False),
+    sa.Column("fx_rate", sa.Numeric(14, 8)),
+    sa.Column("fx_effective_date", sa.Date()),
+    sa.Column("normalized_amount_min", sa.Numeric(14, 2)),
+    sa.Column("normalized_amount_max", sa.Numeric(14, 2)),
+    sa.Column("normalized_currency", sa.String(8), server_default="CNY", nullable=False),
+    sa.Column("score", sa.String(24), server_default="unknown", nullable=False),
+    sa.Column("source_text", sa.Text(), server_default="", nullable=False),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.CheckConstraint(
+        "score IN ('unknown', 'high', 'competitive', 'moderate', 'below_market', 'neutral')",
+        name="score_values",
+    ),
+)
+
 application_events = sa.Table(
     "application_events",
     metadata,
@@ -720,7 +838,7 @@ outbox_events = sa.Table(
         name="status_values",
     ),
     sa.CheckConstraint(
-        "event_type IN ('workflow_signal', 'internal_notification')",
+        "event_type IN ('workflow_signal', 'internal_notification', 'provider_write')",
         name="event_type_values",
     ),
     sa.CheckConstraint("attempt_count >= 0", name="attempt_count_nonnegative"),
@@ -1004,10 +1122,888 @@ sa.Index(
     postgresql_where=console_sessions.c.revoked_at.is_(None),
 )
 
+# ---------------------------------------------------------------------------
+# M3: Contacts, Applications, Resume Versions, Packages, Follow-ups
+# ---------------------------------------------------------------------------
+
+contacts = sa.Table(
+    "contacts",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "company_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.companies.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column("email", sa.Text(), nullable=False),
+    sa.Column("name", sa.Text(), server_default="", nullable=False),
+    sa.Column("role", sa.Text(), server_default="", nullable=False),
+    sa.Column("source", sa.String(32), nullable=False),
+    sa.Column("source_url", sa.Text(), nullable=False),
+    sa.Column("source_text", sa.Text(), server_default="", nullable=False),
+    sa.Column("publicly_listed", sa.Boolean(), server_default=sa.text("true"), nullable=False),
+    sa.Column("domain_match", sa.Boolean(), server_default=sa.text("true"), nullable=False),
+    sa.Column("confidence", sa.String(16), server_default="high", nullable=False),
+    sa.Column(
+        "allowed_actions",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[\"display\"]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column("verified_at", sa.DateTime(timezone=True)),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.UniqueConstraint("company_id", "email", name="uq_contacts_company_email"),
+    sa.CheckConstraint(
+        "source IN ('job_page', 'careers_page', 'ats_listing', "
+        "'official_recruiting_page', 'established_thread')",
+        name="source_values",
+    ),
+    sa.CheckConstraint(
+        "confidence IN ('high', 'medium', 'low')",
+        name="confidence_values",
+    ),
+    sa.CheckConstraint("publicly_listed = true", name="publicly_listed_required"),
+)
+
+applications = sa.Table(
+    "applications",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "candidate_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.candidates.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column(
+        "canonical_job_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.canonical_jobs.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column("state", sa.String(24), server_default="favorited", nullable=False),
+    sa.Column("apply_url", sa.Text(), server_default="", nullable=False),
+    sa.Column("submitted_at", sa.DateTime(timezone=True)),
+    sa.Column("follow_up_due_at", sa.DateTime(timezone=True)),
+    sa.Column("version", sa.Integer(), server_default="1", nullable=False),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.Column(
+        "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.UniqueConstraint("candidate_id", "canonical_job_id", name="uq_applications_candidate_job"),
+    sa.CheckConstraint(
+        "state IN ('favorited', 'ignored', 'preparing', 'submitted', "
+        "'interviewing', 'offer', 'rejected', 'withdrawn', 'on_hold')",
+        name="state_values",
+    ),
+    sa.CheckConstraint("version > 0", name="version_positive"),
+)
+
+sa.Index(
+    "ix_applications_candidate_state",
+    applications.c.candidate_id,
+    applications.c.state,
+)
+
+application_lifecycle_events = sa.Table(
+    "application_lifecycle_events",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "application_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.applications.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column("event_type", sa.String(32), nullable=False),
+    sa.Column("from_state", sa.String(24)),
+    sa.Column("to_state", sa.String(24)),
+    sa.Column("source", sa.String(24), nullable=False),
+    sa.Column("actor_id", sa.Text(), server_default="", nullable=False),
+    sa.Column("note", sa.Text(), server_default="", nullable=False),
+    sa.Column(
+        "event_data",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column("occurred_at", sa.DateTime(timezone=True), nullable=False),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.CheckConstraint(
+        "event_type IN ('created', 'state_changed', 'submitted_manually', "
+        "'note_added', 'package_attached', 'follow_up_scheduled', "
+        "'follow_up_cancelled', 'follow_up_snoozed', 'follow_up_rescheduled')",
+        name="event_type_values",
+    ),
+    sa.CheckConstraint(
+        "source IN ('user', 'system', 'workflow')",
+        name="source_values",
+    ),
+)
+
+sa.Index(
+    "ix_application_lifecycle_events_app_occurred",
+    application_lifecycle_events.c.application_id,
+    application_lifecycle_events.c.occurred_at,
+)
+
+resume_versions = sa.Table(
+    "resume_versions",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "candidate_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.candidates.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column("version_number", sa.Integer(), nullable=False),
+    sa.Column("file_reference", sa.Text(), nullable=False),
+    sa.Column("content_hash", sa.String(64), nullable=False),
+    sa.Column("target_type", sa.Text(), server_default="general", nullable=False),
+    sa.Column("human_confirmed", sa.Boolean(), server_default=sa.text("false"), nullable=False),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.UniqueConstraint(
+        "candidate_id", "version_number", name="uq_resume_versions_candidate_version"
+    ),
+    sa.CheckConstraint("version_number > 0", name="version_number_positive"),
+    sa.CheckConstraint("char_length(content_hash) = 64", name="content_hash_length"),
+)
+
+application_packages = sa.Table(
+    "application_packages",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "application_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.applications.id", ondelete="RESTRICT"),
+        nullable=False,
+        unique=True,
+    ),
+    sa.Column(
+        "resume_version_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.resume_versions.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column("cover_letter_text", sa.Text(), server_default="", nullable=False),
+    sa.Column("notes", sa.Text(), server_default="", nullable=False),
+    sa.Column(
+        "answers",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "claims",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column("approval_state", sa.String(24), server_default="draft", nullable=False),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.Column(
+        "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.CheckConstraint(
+        "approval_state IN ('draft', 'pending_review', 'approved', 'rejected')",
+        name="approval_state_values",
+    ),
+)
+
+follow_up_reminders = sa.Table(
+    "follow_up_reminders",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "application_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.applications.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column("rule_version", sa.Text(), nullable=False),
+    sa.Column("state", sa.String(16), server_default="active", nullable=False),
+    sa.Column("due_at", sa.DateTime(timezone=True)),
+    sa.Column("snoozed_until", sa.DateTime(timezone=True)),
+    sa.Column("cancelled_reason", sa.Text(), server_default="", nullable=False),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.Column(
+        "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.CheckConstraint(
+        "state IN ('active', 'snoozed', 'cancelled', 'completed')",
+        name="state_values",
+    ),
+)
+
+sa.Index(
+    "ix_follow_up_reminders_app_rule_active",
+    follow_up_reminders.c.application_id,
+    follow_up_reminders.c.rule_version,
+    postgresql_where=sa.and_(
+        follow_up_reminders.c.state == "active",
+    ),
+    unique=True,
+)
+
+# ---------------------------------------------------------------------------
+# M4: Gmail read-only sync, classification, internal drafts, approval
+# ---------------------------------------------------------------------------
+
+email_accounts = sa.Table(
+    "email_accounts",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column("email_address", sa.Text(), nullable=False, unique=True),
+    sa.Column(
+        "credential_reference_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.oauth_credential_references.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column("status", sa.String(16), server_default="active", nullable=False),
+    sa.Column("history_id", sa.Text(), server_default="", nullable=False),
+    sa.Column("watch_expiration", sa.DateTime(timezone=True)),
+    sa.Column("last_sync_at", sa.DateTime(timezone=True)),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.Column(
+        "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.CheckConstraint(
+        "status IN ('active', 'revoked', 'error')",
+        name="status_values",
+    ),
+)
+
+email_threads = sa.Table(
+    "email_threads",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "account_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.email_accounts.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column("provider_thread_id", sa.Text(), nullable=False),
+    sa.Column("subject", sa.Text(), server_default="", nullable=False),
+    sa.Column(
+        "application_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.applications.id", ondelete="SET NULL"),
+    ),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.Column(
+        "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.UniqueConstraint(
+        "account_id", "provider_thread_id", name="uq_email_threads_account_provider"
+    ),
+)
+
+email_messages = sa.Table(
+    "email_messages",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "thread_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.email_threads.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column(
+        "account_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.email_accounts.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column("provider_message_id", sa.Text(), nullable=False),
+    sa.Column("category", sa.String(24), server_default="unknown", nullable=False),
+    sa.Column("state", sa.String(24), server_default="synced", nullable=False),
+    sa.Column("sender_email", sa.Text(), server_default="", nullable=False),
+    sa.Column("sender_name", sa.Text(), server_default="", nullable=False),
+    sa.Column("subject", sa.Text(), server_default="", nullable=False),
+    sa.Column("received_at", sa.DateTime(timezone=True)),
+    sa.Column("snippet", sa.Text(), server_default="", nullable=False),
+    sa.Column("body_persisted", sa.Boolean(), server_default=sa.text("false"), nullable=False),
+    sa.Column(
+        "application_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.applications.id", ondelete="SET NULL"),
+    ),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.UniqueConstraint(
+        "account_id", "provider_message_id", name="uq_email_messages_account_provider"
+    ),
+    sa.CheckConstraint(
+        "category IN ('recruitment', 'non_recruitment', 'unknown')",
+        name="category_values",
+    ),
+    sa.CheckConstraint(
+        "state IN ('synced', 'classified', 'extracted', 'drafted', 'archived')",
+        name="state_values",
+    ),
+    sa.CheckConstraint(
+        "(category = 'non_recruitment' AND body_persisted = false) OR "
+        "category <> 'non_recruitment'",
+        name="non_recruitment_body_not_persisted",
+    ),
+)
+
+sa.Index(
+    "ix_email_messages_thread_received",
+    email_messages.c.thread_id,
+    email_messages.c.received_at,
+)
+
+email_extractions = sa.Table(
+    "email_extractions",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "message_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.email_messages.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column("extraction_type", sa.String(32), nullable=False),
+    sa.Column(
+        "extracted_data",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column("confidence", sa.Numeric(5, 4), server_default="0", nullable=False),
+    sa.Column("model_version", sa.Text(), server_default="", nullable=False),
+    sa.Column("rules_version", sa.Text(), server_default="", nullable=False),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.CheckConstraint("confidence >= 0 AND confidence <= 1", name="confidence_range"),
+)
+
+reply_drafts = sa.Table(
+    "reply_drafts",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "message_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.email_messages.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column(
+        "thread_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.email_threads.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column(
+        "account_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.email_accounts.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column(
+        "application_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.applications.id", ondelete="SET NULL"),
+    ),
+    sa.Column("status", sa.String(24), server_default="draft", nullable=False),
+    sa.Column("to_address", sa.Text(), server_default="", nullable=False),
+    sa.Column("subject", sa.Text(), server_default="", nullable=False),
+    sa.Column("body_text", sa.Text(), server_default="", nullable=False),
+    sa.Column("references_header", sa.Text(), server_default="", nullable=False),
+    sa.Column("in_reply_to_header", sa.Text(), server_default="", nullable=False),
+    sa.Column("payload_hash", sa.String(64), nullable=False),
+    sa.Column("approved_at", sa.DateTime(timezone=True)),
+    sa.Column("expires_at", sa.DateTime(timezone=True)),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.Column(
+        "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.CheckConstraint(
+        "status IN ('draft', 'pending_approval', 'approved', 'rejected', 'expired')",
+        name="status_values",
+    ),
+    sa.CheckConstraint("char_length(payload_hash) = 64", name="payload_hash_length"),
+    sa.CheckConstraint(
+        "(status = 'approved' AND approved_at IS NOT NULL) OR "
+        "(status <> 'approved' AND approved_at IS NULL)",
+        name="approval_timestamp_consistent",
+    ),
+)
+
+attachment_quarantine = sa.Table(
+    "attachment_quarantine",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "message_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.email_messages.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column("filename", sa.Text(), server_default="", nullable=False),
+    sa.Column("declared_mime", sa.Text(), server_default="", nullable=False),
+    sa.Column("detected_mime", sa.Text(), server_default="", nullable=False),
+    sa.Column("byte_size", sa.BigInteger(), server_default="0", nullable=False),
+    sa.Column("status", sa.String(16), server_default="quarantined", nullable=False),
+    sa.Column("deny_reason", sa.Text(), server_default="", nullable=False),
+    sa.Column("content_hash", sa.String(64), server_default="", nullable=False),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.Column("resolved_at", sa.DateTime(timezone=True)),
+    sa.CheckConstraint(
+        "status IN ('quarantined', 'cleared', 'denied', 'expired')",
+        name="status_values",
+    ),
+    sa.CheckConstraint("byte_size >= 0", name="byte_size_nonnegative"),
+    sa.CheckConstraint(
+        "(status IN ('cleared', 'denied', 'expired') AND resolved_at IS NOT NULL) OR "
+        "(status = 'quarantined' AND resolved_at IS NULL)",
+        name="resolution_timestamp_consistent",
+    ),
+)
+
+# ---------------------------------------------------------------------------
+# M5B: Calendar scheduling and interview management
+# ---------------------------------------------------------------------------
+
+schedule_proposals = sa.Table(
+    "schedule_proposals",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "application_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.applications.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column(
+        "canonical_job_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.canonical_jobs.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column(
+        "candidate_slots",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column("selected_slot", postgresql.JSONB(astext_type=sa.Text())),
+    sa.Column("status", sa.String(24), server_default="draft", nullable=False),
+    sa.Column("rules_version", sa.Text(), nullable=False),
+    sa.Column(
+        "scheduling_rules",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "calendar_ids_checked",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column("recruiter_confirmed_at", sa.DateTime(timezone=True)),
+    sa.Column("user_action_at", sa.DateTime(timezone=True)),
+    sa.Column(
+        "action_intent_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.action_intents.id", ondelete="SET NULL"),
+    ),
+    sa.Column("payload_hash", sa.String(64)),
+    sa.Column("freebusy_queried_at", sa.DateTime(timezone=True)),
+    sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+    sa.Column("conflict_reason", sa.Text()),
+    sa.Column("created_by", sa.Text(), nullable=False),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.Column(
+        "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.CheckConstraint(
+        "status IN ('draft', 'pending_recruiter', 'recruiter_confirmed', "
+        "'pending_user_action', 'executing', 'confirmed', 'conflict_review', "
+        "'cancelled', 'expired')",
+        name="status_values",
+    ),
+    sa.CheckConstraint(
+        "payload_hash IS NULL OR char_length(payload_hash) = 64",
+        name="payload_hash_length",
+    ),
+    sa.CheckConstraint(
+        "(status = 'confirmed' AND action_intent_id IS NOT NULL) OR status <> 'confirmed'",
+        name="confirmed_requires_intent",
+    ),
+)
+
+sa.Index(
+    "ix_schedule_proposals_application_status",
+    schedule_proposals.c.application_id,
+    schedule_proposals.c.status,
+)
+
+calendar_events = sa.Table(
+    "calendar_events",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "schedule_proposal_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.schedule_proposals.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column(
+        "action_intent_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.action_intents.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column("provider_event_id", sa.Text()),
+    sa.Column("calendar_id", sa.Text(), nullable=False),
+    sa.Column("reconciliation_key", sa.Text(), nullable=False, unique=True),
+    sa.Column("title", sa.Text(), nullable=False),
+    sa.Column(
+        "slot_data",
+        postgresql.JSONB(astext_type=sa.Text()),
+        nullable=False,
+    ),
+    sa.Column("meeting_link", sa.Text(), server_default="", nullable=False),
+    sa.Column("status", sa.String(24), server_default="pending", nullable=False),
+    sa.Column("conflict_detected_at", sa.DateTime(timezone=True)),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.Column(
+        "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.CheckConstraint(
+        "status IN ('pending', 'created', 'conflict_detected', 'cancelled')",
+        name="status_values",
+    ),
+    sa.CheckConstraint(
+        "(status = 'conflict_detected' AND conflict_detected_at IS NOT NULL) OR "
+        "status <> 'conflict_detected'",
+        name="conflict_timestamp_consistent",
+    ),
+)
+
+sa.Index(
+    "ix_calendar_events_proposal_status",
+    calendar_events.c.schedule_proposal_id,
+    calendar_events.c.status,
+)
+
+interview_records = sa.Table(
+    "interview_records",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "application_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.applications.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column(
+        "canonical_job_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.canonical_jobs.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column(
+        "calendar_event_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.calendar_events.id", ondelete="SET NULL"),
+    ),
+    sa.Column(
+        "schedule_proposal_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.schedule_proposals.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column("status", sa.String(24), server_default="scheduled", nullable=False),
+    sa.Column("interviewer_name", sa.Text(), server_default="", nullable=False),
+    sa.Column("interviewer_email", sa.Text(), server_default="", nullable=False),
+    sa.Column("interview_type", sa.Text(), server_default="video", nullable=False),
+    sa.Column("meeting_link", sa.Text(), server_default="", nullable=False),
+    sa.Column("notes", sa.Text(), server_default="", nullable=False),
+    sa.Column(
+        "evidence_summary",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.Column(
+        "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.CheckConstraint(
+        "status IN ('scheduled', 'completed', 'cancelled', 'rescheduled')",
+        name="status_values",
+    ),
+)
+
+sa.Index(
+    "ix_interview_records_application_status",
+    interview_records.c.application_id,
+    interview_records.c.status,
+)
+
+conflict_reviews = sa.Table(
+    "conflict_reviews",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "schedule_proposal_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.schedule_proposals.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column(
+        "calendar_event_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.calendar_events.id", ondelete="SET NULL"),
+    ),
+    sa.Column("conflict_type", sa.String(32), nullable=False),
+    sa.Column("description", sa.Text(), nullable=False),
+    sa.Column("detected_at", sa.DateTime(timezone=True), nullable=False),
+    sa.Column("resolved_at", sa.DateTime(timezone=True)),
+    sa.Column("resolution", sa.Text()),
+    sa.Column(
+        "confirmation_email_blocked",
+        sa.Boolean(),
+        server_default=sa.text("true"),
+        nullable=False,
+    ),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.CheckConstraint(
+        "conflict_type IN ('freebusy_race', 'duplicate_event', 'buffer_violation', "
+        "'reconciliation_failure')",
+        name="conflict_type_values",
+    ),
+    sa.CheckConstraint(
+        "confirmation_email_blocked = true",
+        name="confirmation_email_always_blocked",
+    ),
+    sa.CheckConstraint(
+        "(resolved_at IS NOT NULL AND resolution IS NOT NULL) OR "
+        "(resolved_at IS NULL AND resolution IS NULL)",
+        name="resolution_consistent",
+    ),
+)
+
+sa.Index(
+    "ix_conflict_reviews_proposal_unresolved",
+    conflict_reviews.c.schedule_proposal_id,
+    postgresql_where=conflict_reviews.c.resolved_at.is_(None),
+)
+
+# ---------------------------------------------------------------------------
+# M6: Gmail Send through the M5A authorization chain
+# ---------------------------------------------------------------------------
+
+send_attempts = sa.Table(
+    "send_attempts",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "action_intent_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.action_intents.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column("account_email", sa.Text(), nullable=False),
+    sa.Column("recipient", sa.Text(), nullable=False),
+    sa.Column("subject", sa.Text(), nullable=False),
+    sa.Column("body_hash", sa.String(64), nullable=False),
+    sa.Column("thread_id", sa.Text(), nullable=False),
+    sa.Column("in_reply_to", sa.Text(), server_default="", nullable=False),
+    sa.Column(
+        "references_list",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column("category", sa.String(48), nullable=False),
+    sa.Column("status", sa.String(32), server_default="pending", nullable=False),
+    sa.Column("idempotency_key", sa.String(64), nullable=False, unique=True),
+    sa.Column("reconciliation_key", sa.Text(), nullable=False),
+    sa.Column("provider_message_id", sa.Text()),
+    sa.Column("error_code", sa.Text()),
+    sa.Column("started_at", sa.DateTime(timezone=True)),
+    sa.Column("finished_at", sa.DateTime(timezone=True)),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.CheckConstraint(
+        "status IN ('pending', 'in_progress', 'succeeded', 'failed', 'reconciliation_required')",
+        name="send_attempts_status_values",
+    ),
+    sa.CheckConstraint(
+        "category IN ('delivery_confirmation', 'recruiter_contact_ack', "
+        "'assessment_receipt_ack', 'confirmed_time_ack', 'thanks_no_questions', "
+        "'scheduling_options', 'follow_up', 'resume_or_link', "
+        "'work_authorization', 'deadline_commitment', "
+        "'salary', 'offer', 'visa', 'relocation', 'tax', "
+        "'background_check', 'identity_or_bank', 'withdrawal', 'unknown')",
+        name="send_attempts_category_values",
+    ),
+    sa.CheckConstraint(
+        "char_length(body_hash) = 64",
+        name="send_attempts_body_hash_length",
+    ),
+    sa.CheckConstraint(
+        "char_length(idempotency_key) = 64",
+        name="send_attempts_idempotency_key_length",
+    ),
+)
+
+sa.Index(
+    "ix_send_attempts_intent_status",
+    send_attempts.c.action_intent_id,
+    send_attempts.c.status,
+)
+
+sa.Index(
+    "ix_send_attempts_reconciliation_key",
+    send_attempts.c.reconciliation_key,
+)
+
+send_receipts = sa.Table(
+    "send_receipts",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "send_attempt_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.send_attempts.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column("provider_message_id", sa.Text(), nullable=False),
+    sa.Column("thread_id", sa.Text(), nullable=False),
+    sa.Column("reconciliation_key", sa.Text(), nullable=False, unique=True),
+    sa.Column("final_state", sa.String(24), nullable=False),
+    sa.Column("provider_timestamp", sa.DateTime(timezone=True)),
+    sa.Column(
+        "received_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.CheckConstraint(
+        "final_state IN ('succeeded', 'failed', 'revoked')",
+        name="send_receipts_final_state_values",
+    ),
+)
+
+sa.Index(
+    "ix_send_receipts_attempt",
+    send_receipts.c.send_attempt_id,
+)
+
+reconciliation_records = sa.Table(
+    "reconciliation_records",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "send_attempt_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.send_attempts.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column(
+        "action_intent_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.action_intents.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column("reconciliation_key", sa.Text(), nullable=False),
+    sa.Column("status", sa.String(32), server_default="pending", nullable=False),
+    sa.Column("window_minutes", sa.Integer(), server_default="15", nullable=False),
+    sa.Column(
+        "attempts_within_window",
+        sa.Integer(),
+        server_default="0",
+        nullable=False,
+    ),
+    sa.Column(
+        "auto_retry_disabled",
+        sa.Boolean(),
+        server_default=sa.text("true"),
+        nullable=False,
+    ),
+    sa.Column("escalated_at", sa.DateTime(timezone=True)),
+    sa.Column("resolved_at", sa.DateTime(timezone=True)),
+    sa.Column("resolution_note", sa.Text()),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.CheckConstraint(
+        "status IN ('pending', 'confirmed_sent', 'confirmed_not_sent', "
+        "'ambiguous', 'escalated_manual')",
+        name="reconciliation_records_status_values",
+    ),
+    sa.CheckConstraint(
+        "auto_retry_disabled = true",
+        name="reconciliation_auto_retry_always_disabled",
+    ),
+    sa.CheckConstraint(
+        "window_minutes > 0",
+        name="reconciliation_window_positive",
+    ),
+    sa.CheckConstraint(
+        "(resolved_at IS NOT NULL AND resolution_note IS NOT NULL) OR "
+        "(resolved_at IS NULL AND resolution_note IS NULL)",
+        name="reconciliation_resolution_consistent",
+    ),
+)
+
+sa.Index(
+    "ix_reconciliation_records_intent_status",
+    reconciliation_records.c.action_intent_id,
+    reconciliation_records.c.status,
+)
+
+sa.Index(
+    "ix_reconciliation_records_unresolved",
+    reconciliation_records.c.status,
+    postgresql_where=reconciliation_records.c.resolved_at.is_(None),
+)
+
 APPEND_ONLY_TABLES = (
     "action_payload_versions",
     "application_events",
+    "application_lifecycle_events",
     "audit_events",
+    "email_extractions",
     "evidence_records",
     "job_merge_decisions",
     "job_posting_versions",

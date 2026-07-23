@@ -9,7 +9,10 @@ from careerops import __version__
 from careerops.api.errors import install_error_handlers
 from careerops.api.metrics_middleware import MetricsMiddleware
 from careerops.api.middleware import RequestIdMiddleware
+from careerops.api.routes.applications import router as applications_router
 from careerops.api.routes.health import router as health_router
+from careerops.api.routes.jobs import router as jobs_router
+from careerops.api.routes.matching import router as matching_router
 from careerops.api.routes.metrics import router as metrics_router
 from careerops.application.dashboard import DashboardSnapshotProvider
 from careerops.application.ports.readiness import ReadinessProbe
@@ -21,6 +24,7 @@ from careerops.infrastructure.redis import RedisAuthRateLimiter
 from careerops.infrastructure.runtime import RuntimeResources, create_runtime_resources
 from careerops.observability import Metrics
 from careerops.web import ConsoleWebSettings, install_console_web
+from careerops.web.matching_ui import router as matching_ui_router
 
 
 def create_app(
@@ -71,6 +75,10 @@ def create_app(
     install_error_handlers(app)
     app.include_router(health_router)
     app.include_router(metrics_router)
+    app.include_router(jobs_router)
+    app.include_router(matching_router)
+    app.include_router(matching_ui_router)
+    app.include_router(applications_router)
     if auth_service is not None:
         if resolved_dashboard_provider is None:
             raise ValueError(

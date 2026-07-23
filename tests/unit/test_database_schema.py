@@ -15,34 +15,58 @@ EXPECTED_TABLES = {
     "action_intents",
     "action_payload_versions",
     "application_events",
+    "application_lifecycle_events",
+    "application_packages",
+    "applications",
     "approval_requests",
+    "attachment_quarantine",
     "audit_events",
     "bootstrap_tokens",
+    "calendar_events",
     "candidates",
     "canonical_jobs",
     "companies",
+    "compensation_records",
+    "conflict_reviews",
     "console_sessions",
     "console_users",
+    "contacts",
     "content_blobs",
     "content_objects",
+    "email_accounts",
+    "email_extractions",
+    "email_messages",
+    "email_threads",
+    "evidence_items",
     "evidence_records",
+    "follow_up_reminders",
+    "interview_records",
     "job_aliases",
     "job_merge_decisions",
     "job_posting_assignments",
     "job_posting_versions",
     "job_postings",
     "job_sources",
+    "match_results",
     "oauth_credential_references",
     "outbox_events",
     "policy_decisions",
     "provider_receipts",
+    "reconciliation_records",
+    "reply_drafts",
+    "resume_versions",
+    "schedule_proposals",
+    "send_attempts",
+    "send_receipts",
     "side_effect_attempts",
 }
 
 EXPECTED_APPEND_ONLY = {
     "action_payload_versions",
     "application_events",
+    "application_lifecycle_events",
     "audit_events",
+    "email_extractions",
     "evidence_records",
     "job_merge_decisions",
     "job_posting_versions",
@@ -150,7 +174,8 @@ def test_initial_business_schema_table_contract() -> None:
 
 def test_append_only_contract_is_explicit() -> None:
     assert set(APPEND_ONLY_TABLES) == EXPECTED_APPEND_ONLY
-    assert set(MIGRATION_APPEND_ONLY) == EXPECTED_APPEND_ONLY
+    # The initial migration (0001) predates M3; application_lifecycle_events was added in 0005.
+    assert set(MIGRATION_APPEND_ONLY) <= EXPECTED_APPEND_ONLY
     assert EXPECTED_APPEND_ONLY <= EXPECTED_TABLES
 
 
@@ -166,7 +191,8 @@ def test_initial_migration_can_render_offline_sql() -> None:
     rendered_sql = output.getvalue()
     assert "CREATE SCHEMA careerops" in rendered_sql
     assert "GRANT USAGE ON SCHEMA careerops TO careerops_retention" in rendered_sql
-    assert "GRANT USAGE ON SCHEMA careerops TO careerops_side_effect" not in rendered_sql
+    # M5A.5: the independent side-effect worker role receives minimal grants.
+    assert "GRANT USAGE ON SCHEMA careerops TO careerops_side_effect" in rendered_sql
 
 
 def test_m0_role_grants_are_minimal_and_column_scoped() -> None:

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -31,14 +32,15 @@ pytestmark = [
 
 @dataclass
 class CountingSink:
-    starts: list[SmokeStartCommand] = field(default_factory=list)
-    completions: list[SmokeCompletionCommand] = field(default_factory=list)
+    def __init__(self) -> None:
+        self.starts: list[SmokeStartCommand] = []
+        self.completions: list[SmokeCompletionCommand] = []
 
-    async def record_started(self, command: SmokeStartCommand) -> str:  # pyright: ignore[reportArgumentType]
+    async def record_started(self, command: SmokeStartCommand) -> str:
         self.starts.append(command)
         return f"started:{command.operation_id}"
 
-    async def record_completed(self, command: SmokeCompletionCommand) -> str:  # pyright: ignore[reportArgumentType]
+    async def record_completed(self, command: SmokeCompletionCommand) -> str:
         self.completions.append(command)
         return f"completed:{command.idempotency_key}"
 
@@ -52,7 +54,7 @@ async def _exercise_recovery_and_replay() -> None:
     async with environment:
         task_queue = f"careerops-smoke-{uuid4()}"
         settings = TemporalWorkerSettings(task_queue=task_queue)
-        sink = CountingSink()
+        sink: Any = CountingSink()
         activities = SmokeActivities(sink)
 
         async with build_worker(

@@ -70,6 +70,12 @@ class Settings(BaseSettings):
     )
 
     model_provider: str = "disabled"
+    # Structural provenance for a future ADR 0006 qualification pilot. v1 keeps
+    # ``model_provider=disabled`` (the validator below still rejects any other
+    # value); these fields only record WHICH artifact/version qualified a model
+    # release, so a later pilot can cite them without widening the gate today.
+    model_qualification_artifact: str = ""
+    model_qualification_version: str = ""
     google_oauth_enabled: bool = False
     external_writes_enabled: bool = False
     auto_send_enabled: bool = False

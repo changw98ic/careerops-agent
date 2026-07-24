@@ -27,6 +27,7 @@ import hashlib
 import ipaddress
 import socket
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -41,6 +42,47 @@ class FetchError(Exception):
 
 class SSRFError(FetchError):
     """A URL or redirect target violated the SSRF policy."""
+
+
+class CircuitOpenError(FetchError):
+    """Raised when a domain's circuit breaker is open and denies a request.
+
+    Plan v0.4 §3 Stage 3.5: downstream circuit-breaker gate. Subclass of
+    ``FetchError`` so existing callers that handle ``FetchError`` keep working.
+    """
+
+
+class BreakerGate(Protocol):
+    """Structural contract for a circuit-breaker gate.
+
+    ``careerops.orchestration.circuit_breaker.CircuitBreaker`` satisfies this
+    protocol. ``http_fetcher`` depends on the protocol (not the concrete class)
+    so ``adapters`` never imports ``orchestration`` (which would cycle, since
+    ``orchestration`` already imports ``adapters``).
+    """
+
+    def allow(self, domain: str) -> bool: ...
+
+    def record_success(self, domain: str) -> None: ...
+
+    def record_failure(self, domain: str) -> None: ...
+
+
+class _PermissiveBreaker:
+    """Default no-op gate: admits every request and records nothing.
+
+    Keeps fetch behavior unchanged until a real circuit breaker is installed
+    via :func:`configure_circuit_breaker`.
+    """
+
+    def allow(self, domain: str) -> bool:
+        return True
+
+    def record_success(self, domain: str) -> None:
+        return None
+
+    def record_failure(self, domain: str) -> None:
+        return None
 
 
 _ALLOWED_SCHEMES: Final[frozenset[str]] = frozenset({"http", "https"})
@@ -59,10 +101,12 @@ _USER_AGENT: Final[str] = "careerops-http-fetcher/1.0"
 _CHUNK_SIZE: Final[int] = 8192
 
 # Module-level mutable runtime config (lowercase: not true constants).
-# Rate limiting, optional host allowlist, and the per-domain last-fetch map.
+# Rate limiting, optional host allowlist, the per-domain last-fetch map, and
+# the per-domain circuit-breaker gate.
 _last_fetch: dict[str, float] = {}
 _min_domain_interval: float = 1.0
 _host_allowlist: frozenset[str] | None = None
+_breaker: BreakerGate = _PermissiveBreaker()
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +144,17 @@ def configure_rate_limit(seconds: float) -> None:
     """Set the minimum per-domain interval. ``0`` disables rate limiting."""
     global _min_domain_interval
     _min_domain_interval = max(0.0, seconds)
+
+
+def configure_circuit_breaker(breaker: BreakerGate | None) -> None:
+    """Install (or clear, when ``None``) the per-domain circuit-breaker gate.
+
+    The concrete ``careerops.orchestration.circuit_breaker.CircuitBreaker`` is
+    wired in here at app bootstrap; passing ``None`` restores the permissive
+    default. ``http_fetcher`` never imports the concrete class itself.
+    """
+    global _breaker
+    _breaker = breaker if breaker is not None else _PermissiveBreaker()
 
 
 def _monotonic() -> float:
@@ -218,22 +273,41 @@ def _read_limited(resp: _UrlResponse, *, size_limit: int) -> bytes:
 def fetch(url: str, *, timeout: float = 30.0, size_limit: int = 1_000_000) -> FetchedResponse:
     """Fetch ``url`` and return immutable provenance.
 
-    Raises ``SSRFError`` for policy violations, ``FetchError`` for size violations,
-    and propagates ``urllib.error.HTTPError`` / ``URLError`` for transport errors.
+    Raises ``SSRFError`` for policy violations, ``CircuitOpenError`` when the
+    per-domain circuit breaker denies the request, ``FetchError`` for size
+    violations, and propagates ``urllib.error.HTTPError`` / ``URLError`` for
+    transport errors.
     """
     _validate_url(url)
     host = urllib.parse.urlsplit(url).hostname or ""
+    if not _breaker.allow(host):
+        raise CircuitOpenError(f"circuit breaker open for host {host!r}")
     _rate_limit(host)
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with _open(req, timeout=timeout) as resp:
-        fetched_at = datetime.now(tz=UTC)
-        status = resp.getcode()
-        final_url = resp.geturl()
-        body_bytes = _read_limited(resp, size_limit=size_limit)
-        return FetchedResponse(
-            status_code=status,
-            final_url=final_url,
-            fetched_at=fetched_at,
-            response_hash=hashlib.sha256(body_bytes).hexdigest(),
-            body=body_bytes.decode("utf-8", errors="replace"),
-        )
+    try:
+        with _open(req, timeout=timeout) as resp:
+            fetched_at = datetime.now(tz=UTC)
+            status = resp.getcode()
+            final_url = resp.geturl()
+            body_bytes = _read_limited(resp, size_limit=size_limit)
+    except urllib.error.HTTPError as e:
+        # 5xx indicates a downstream fault -> count as a failure. 4xx means the
+        # server responded (it is healthy) -> count as a success so the circuit
+        # can recover. Size/policy errors are not raised here.
+        if e.code >= 500:
+            _breaker.record_failure(host)
+        else:
+            _breaker.record_success(host)
+        raise
+    except urllib.error.URLError:
+        # Transport-level failure (DNS, connection refused, timeout).
+        _breaker.record_failure(host)
+        raise
+    _breaker.record_success(host)
+    return FetchedResponse(
+        status_code=status,
+        final_url=final_url,
+        fetched_at=fetched_at,
+        response_hash=hashlib.sha256(body_bytes).hexdigest(),
+        body=body_bytes.decode("utf-8", errors="replace"),
+    )

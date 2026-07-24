@@ -27,3 +27,4 @@ secrets/
 # Tool/runtime state (not project code)
 .omc/
 .qoder/
+.codegraph/

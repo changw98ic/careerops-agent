@@ -1,30 +1,45 @@
-"""Thin LangGraph node wrappers for CareerOps (plan v0.4 §3 Stage 1).
+"""Thin LangGraph node wrappers for CareerOps (plan v0.4 §3 Stage 1 + Stage 2).
 
 Each node is a thin adapter between domain code (adapters / application
 services / kernel) and the LangGraph state. Nodes MUST:
 
 - Read from ``state`` only via ``state.get(...)`` (TypedDict ``total=False``).
 - Return a plain ``dict`` update. Never mutate state in place.
-- Convert domain dataclasses to JSON-safe DTOs at the boundary.
+- Convert domain dataclasses to JSON-safe DTOs at the boundary via
+  ``orchestration.conversions`` (the ONLY place those translations happen).
 
-v1 simplifications (Stage 2 will fill out the rest):
+v1 wiring:
 
-- ``crawl`` accepts a pre-built tuple of ``RawJobDTO`` via a callable so tests
-  can inject fixtures; the v1 production path is still the same callable, just
-  populated by ``http_fetcher + adapter``.
-- ``extract`` accepts a callable that returns ``ContactDTO`` tuples.
-- ``filter`` is inlined (simple match_score threshold).
+- ``crawl`` accepts an injected ``Crawler`` callable so tests can pass fixtures.
+  The real boundary is ``AdapterCrawler`` (``http_fetcher`` + ``JobSourceAdapter``
+  + optional ``DetailJobSourceAdapter``), which converts via
+  ``raw_job_record_to_dto`` with the fetch layer's provenance.
+- ``extract`` accepts an injected ``ContactExtractor`` callable; the real path
+  is ``build_file_contact_extractor`` wrapping ``contact_extraction``.
+- ``filter`` delegates to the pure ``filter_jobs`` (remote / direction / region
+  / salary / description-coverage) and records rejected reasons on ``errors``.
 - ``match`` injects ``DisabledModelAdapter`` so v1 never makes a real model
-  call. The output is advisory and never a positive match.
+  call. The output is advisory and never a positive match (ADR 0006).
 - ``send`` runs ``kernel.execute`` against a ``FakeProvider``.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from json import JSONDecodeError
+from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
+from careerops.adapters.http_fetcher import FetchedResponse
+from careerops.adapters.job_sources import (
+    DetailJobSourceAdapter,
+    JobSourceAdapter,
+    RawJobRecord,
+)
+from careerops.application.contact_extraction import extract_from_file
 from careerops.application.email_drafting import generate_body
 from careerops.application.llm_matching import (
     JobMatchResult,
@@ -34,11 +49,20 @@ from careerops.application.llm_matching import (
 )
 from careerops.application.side_effect_kernel import SideEffectKernel
 from careerops.model_gateway.base import StructuredModelClient
+from careerops.orchestration.conversions import (
+    JobProvenance,
+    build_draft_dto,
+    job_match_result_to_dto,
+    raw_job_record_to_dto,
+    skill_profile_to_dto,
+)
+from careerops.orchestration.filter_node import FilterCriteria, filter_jobs
 from careerops.orchestration.state import (
     CareerOpsState,
     ContactDTO,
     DraftDTO,
     EditedDraftPayload,
+    ErrorDTO,
     JobMatchDTO,
     RawJobDTO,
     SendReceiptDTO,
@@ -46,8 +70,10 @@ from careerops.orchestration.state import (
 )
 
 __all__ = [
+    "AdapterCrawler",
     "ContactExtractor",
     "Crawler",
+    "HttpFetcher",
     "crawl_node",
     "draft_node",
     "extract_contacts_node",
@@ -75,6 +101,138 @@ class ContactExtractor(Protocol):
     def __call__(self, jobs: tuple[RawJobDTO, ...]) -> tuple[ContactDTO, ...]: ...
 
 
+class HttpFetcher(Protocol):
+    """Callable subset of ``adapters.http_fetcher`` used by ``AdapterCrawler``."""
+
+    def __call__(self, url: str) -> FetchedResponse: ...
+
+
+def _parse_body(body: str) -> object:
+    """Parse a fetch body into the form its adapter expects.
+
+    JSON-based adapters (Greenhouse / Lever / Ashby) take a parsed dict/list;
+    text-based adapters (JsonLd / Sitemap / StaticHtml) take the raw string. We
+    attempt JSON first and fall back to the string so one boundary serves both
+    families without each adapter having to re-parse.
+    """
+    stripped = body.lstrip()
+    if stripped and stripped[0] in "{[":
+        from json import loads
+
+        try:
+            return loads(body)
+        except (JSONDecodeError, ValueError):
+            return body
+    return body
+
+
+# ---------------------------------------------------------------------------
+# Real crawl boundary: http_fetcher + JobSourceAdapter (+ optional detail)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class AdapterCrawler:
+    """``Crawler`` backed by ``http_fetcher`` + a ``JobSourceAdapter``.
+
+    For each list URL the crawler fetches the body, runs the list adapter, and
+    converts each ``RawJobRecord`` to a ``RawJobDTO`` attaching the fetch
+    provenance (``source_url`` / ``fetched_at`` / ``response_hash`` /
+    ``parser_version``). When a ``detail_adapter`` + ``detail_url_for`` are
+    supplied AND a list record has no description, the crawler fetches the
+    per-job detail endpoint and lets the detail parser fill the JD body; the
+    detail response's provenance then overrides the list provenance (the
+    description is authoritative for what we store, plan v0.4 §2.3).
+
+    The injected ``fetcher`` is the ONLY I/O seam: production wires
+    ``http_fetcher.fetch``; tests pass a deterministic fake. The node itself
+    performs no I/O.
+    """
+
+    adapter: JobSourceAdapter
+    fetcher: HttpFetcher
+    list_urls: tuple[str, ...]
+    detail_adapter: DetailJobSourceAdapter | None = None
+    detail_url_for: Callable[[RawJobRecord], str] | None = None
+
+    def __call__(self) -> tuple[RawJobDTO, ...]:
+        out: list[RawJobDTO] = []
+        for url in self.list_urls:
+            resp = self.fetcher(url)
+            fetch_result = self.adapter.list_jobs(_parse_body(resp.body))
+            list_prov = JobProvenance(
+                source_url=resp.final_url or url,
+                fetched_at=resp.fetched_at,
+                response_hash=resp.response_hash,
+                parser_version=self.adapter.parser_version,
+            )
+            for record in fetch_result.jobs:
+                final_record = record
+                prov = list_prov
+                if (
+                    self.detail_adapter is not None
+                    and self.detail_url_for is not None
+                    and not record.description
+                ):
+                    detail_url = self.detail_url_for(record)
+                    dresp = self.fetcher(detail_url)
+                    final_record = self.detail_adapter.fetch_job(
+                        _parse_body(dresp.body),
+                        source_url=dresp.final_url or detail_url,
+                        fetched_at=dresp.fetched_at,
+                    )
+                    prov = JobProvenance(
+                        source_url=dresp.final_url or detail_url,
+                        fetched_at=dresp.fetched_at,
+                        response_hash=dresp.response_hash,
+                        parser_version=self.detail_adapter.parser_version,
+                    )
+                out.append(raw_job_record_to_dto(final_record, prov))
+        return tuple(out)
+
+
+def build_file_contact_extractor(snapshot_paths: tuple[Path, ...]) -> ContactExtractor:
+    """Build a ``ContactExtractor`` from on-disk social-content snapshots.
+
+    Wraps ``contact_extraction.extract_from_file`` (a pure file read + regex
+    extraction). The raw dicts it returns already match the ``ContactDTO``
+    shape (``email`` / ``platform`` / ``company_hint`` / ``post_type`` /
+    ``context`` / ``source_file`` / ``publicly_listed`` / ``extracted_at``); we
+    project them into typed DTOs and de-duplicate by email. ``jobs`` is accepted
+    to satisfy the ``ContactExtractor`` Protocol but is not used (v1 has no
+    per-job contact association).
+    """
+
+    def extractor(jobs: tuple[RawJobDTO, ...]) -> tuple[ContactDTO, ...]:
+        del jobs
+        seen: set[str] = set()
+        out: list[ContactDTO] = []
+        for path in snapshot_paths:
+            for raw in extract_from_file(path):
+                email = str(raw.get("email", ""))
+                if not email or email in seen:
+                    continue
+                seen.add(email)
+                dto: ContactDTO = ContactDTO(
+                    email=email,
+                    platform=str(raw.get("platform", "")),
+                    company_hint=str(raw.get("company_hint", "")),
+                    context=str(raw.get("context", "")),
+                    source_file=str(raw.get("source_file", "")),
+                    publicly_listed=bool(raw.get("publicly_listed", True)),
+                )
+                post_type = raw.get("post_type")
+                if isinstance(post_type, str):
+                    dto["post_type"] = post_type
+                extracted_at = raw.get("extracted_at")
+                if isinstance(extracted_at, str):
+                    dto["extracted_at"] = extracted_at
+                out.append(dto)
+        return tuple(out)
+
+    return extractor
+
+
 # ---------------------------------------------------------------------------
 # crawl
 # ---------------------------------------------------------------------------
@@ -83,9 +241,9 @@ class ContactExtractor(Protocol):
 def crawl_node(state: CareerOpsState, *, crawler: Crawler) -> dict[str, Any]:
     """Fetch raw job records via the injected crawler.
 
-    Production wires ``http_fetcher + JobSourceAdapter`` behind the callable;
-    tests inject a deterministic tuple. The node does no I/O of its own so it
-    remains a pure adapter for the graph.
+    Production wires ``AdapterCrawler`` (``http_fetcher + JobSourceAdapter``)
+    behind the callable; tests inject a deterministic tuple. The node does no
+    I/O of its own so it remains a pure adapter for the graph.
     """
     del state
     jobs = crawler()
@@ -116,31 +274,43 @@ def resume_node(state: CareerOpsState, *, resume_text: str) -> dict[str, Any]:
     advisory so this deterministic foundation is always present.
     """
     profile: SkillProfile = build_skill_profile(resume_text)
-    dto: SkillProfileDTO = {
-        "skills": profile.skills,
-        "level": profile.level,
-        "years": profile.years,
-        "highlights": profile.highlights,
-    }
+    dto: SkillProfileDTO = skill_profile_to_dto(profile)
     return {"resume_text": resume_text, "skill_profile": dto}
 
 
 # ---------------------------------------------------------------------------
-# filter (inlined for v1)
+# filter (delegates to pure filter_jobs)
 # ---------------------------------------------------------------------------
 
 
-def filter_node(state: CareerOpsState) -> dict[str, Any]:
-    """Deterministic filter: drop jobs whose description is empty.
+def filter_node(
+    state: CareerOpsState,
+    *,
+    criteria: FilterCriteria | None = None,
+) -> dict[str, Any]:
+    """Deterministic filter via ``filter_jobs``.
 
-    Stage 2 will plug the real filter service here. v1 keeps the bar at
-    "has a non-empty description" so the downstream match node has something
-    to score. This is intentionally not a match decision (ADR 0006).
+    Drops jobs that fail the description-coverage / remote / direction / region
+    / salary gates. The kept tuple OVERWRITES ``raw_job_records`` (filter is the
+    canonical job set after this point). Rejected jobs are appended to
+    ``errors`` as ``ErrorDTO`` entries (node="filter") so the reason is visible
+    downstream without leaking JD content.
+
+    This is intentionally not a match decision (ADR 0006); the advisory match
+    node runs after it.
     """
     jobs = state.get("raw_job_records") or ()
-    kept = tuple(j for j in jobs if (j.get("description") or "").strip())
-    # Overwrite (not append): filter is the canonical job set after this point.
-    return {"raw_job_records": kept}
+    result = filter_jobs(jobs, criteria=criteria)
+    errors = tuple(
+        ErrorDTO(
+            node="filter",
+            error_type=rejected.reason,
+            message=f"{rejected.external_id}:{rejected.title}",
+        )
+        for rejected in result.rejected
+    )
+    # Overwrite raw_job_records with the kept set; append rejection reasons.
+    return {"raw_job_records": result.kept, "errors": errors}
 
 
 # ---------------------------------------------------------------------------
@@ -150,33 +320,19 @@ def filter_node(state: CareerOpsState) -> dict[str, Any]:
 
 def _job_to_match_input(job: RawJobDTO) -> dict[str, Any]:
     """Render a RawJobDTO into the dict shape ``LLMJobMatcher.match_job`` expects."""
+    raw = job.get("raw_data")
+    company = ""
+    if isinstance(raw, dict):
+        company_value = raw.get("company", "")
+        if isinstance(company_value, str):
+            company = company_value
     return {
         "title": job.get("title", ""),
-        "company": job.get("raw_data", {}).get("company", "")
-        if isinstance(job.get("raw_data"), dict)
-        else "",
+        "company": company,
         "location": job.get("location", ""),
         "url": job.get("url", ""),
-        "raw_data": job.get("raw_data", {}),
+        "raw_data": dict(raw) if isinstance(raw, dict) else {},
     }
-
-
-def _match_result_to_dto(job: RawJobDTO, result: JobMatchResult) -> JobMatchDTO:
-    return JobMatchDTO(
-        external_id=job.get("external_id", ""),
-        company=result.company,
-        title=result.title,
-        match_score=result.match_score,
-        tier=result.tier,
-        recommendation=result.recommendation,
-        seniority_fit=result.seniority_fit,
-        remote_compatible=result.remote_compatible,
-        matched_requirements=result.matched_requirements,
-        gaps=result.gaps,
-        reasoning=result.reasoning,
-        is_review_only=result.is_review_only,
-        error=result.error,
-    )
 
 
 def match_node(
@@ -203,8 +359,8 @@ def match_node(
     jobs = state.get("raw_job_records") or ()
     results: list[JobMatchDTO] = []
     for job in jobs:
-        result = matcher.match_job(_job_to_match_input(job), profile)
-        results.append(_match_result_to_dto(job, result))
+        result: JobMatchResult = matcher.match_job(_job_to_match_input(job), profile)
+        results.append(job_match_result_to_dto(job.get("external_id", ""), result))
     # Sort by score desc, stable on external_id for deterministic ordering.
     results.sort(key=lambda r: (-r.get("match_score", 0), r.get("external_id", "")))
     return {"matches": tuple(results)}
@@ -312,12 +468,12 @@ def draft_node(state: CareerOpsState) -> dict[str, Any]:
             resume_text,
         )
         recipient = public_emails[0] if public_emails else ""
-        draft = DraftDTO(
-            id=str(uuid4()),
+        draft = build_draft_dto(
             job_external_id=job.get("external_id", ""),
             recipient=recipient,
             subject=subject,
             body=body,
+            draft_id=str(uuid4()),
             revision=0,
         )
         draft["payload_hash"] = _draft_hash(draft)
@@ -358,7 +514,7 @@ def send_node(
         provider_resource_id = latest.provider_resource_id
         reconciliation_key = latest.reconciliation_key
     receipt_dto: SendReceiptDTO = {
-        "intent_id": str(pending_intent_id),
+        "intent_id": pending_intent_id,
         "approval_id": pending_approval_id,
         "provider": provider,
         "provider_resource_id": provider_resource_id,

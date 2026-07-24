@@ -17,13 +17,16 @@ ADR 0006 invariants enforced here:
 
 from __future__ import annotations
 
+import email.utils
 import hashlib
 import json
 import re
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Any, cast
+from datetime import UTC, datetime
+from typing import Any, Protocol, cast
 
 import jsonschema
 
@@ -35,6 +38,64 @@ from careerops.model_gateway.base import (
 ANTHROPIC_VERSION = "2023-06-01"
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 _MODEL_VARIANT_RE = re.compile(r"\[[^\]]*\]$")
+
+# 429 backoff (plan v0.4 §3 Stage 3.5): exponential with Retry-After honored.
+_MAX_429_RETRIES: int = 3
+_BASE_BACKOFF_SECONDS: float = 1.0
+_HTTP_TOO_MANY_REQUESTS: int = 429
+
+
+def _sleep(seconds: float) -> None:
+    """Indirection so tests can capture waits without real sleeping."""
+    time.sleep(seconds)
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    """Parse an HTTP ``Retry-After`` header.
+
+    Accepts delta-seconds (``"120"``) or an RFC 7231 HTTP-date. Returns the
+    non-negative wait in seconds, or ``None`` when the header is absent/invalid.
+    """
+    if not value:
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    try:
+        seconds = float(raw)
+    except ValueError:
+        pass
+    else:
+        return max(0.0, seconds)
+    try:
+        parsed = email.utils.parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    delta = (parsed - datetime.now(tz=UTC)).total_seconds()
+    return max(0.0, delta)
+
+
+def _backoff_seconds(attempt: int, retry_after: float | None) -> float:
+    """Wait before the next 429 retry.
+
+    Honors the server's ``Retry-After`` when present; otherwise falls back to a
+    deterministic exponential backoff (``base * 2**attempt``).
+    """
+    if retry_after is not None:
+        return max(0.0, retry_after)
+    return _BASE_BACKOFF_SECONDS * (2**attempt)
+
+
+class LLMUsageRecorder(Protocol):
+    """Sink for aggregate LLM token usage.
+
+    ADR 0006: only aggregate token COUNTS are recorded here. Raw prompt or
+    response content is never passed through this interface.
+    """
+
+    def record_llm_tokens(self, *, input_tokens: int, output_tokens: int) -> None: ...
 
 
 class ModelInvocationError(RuntimeError):
@@ -85,6 +146,54 @@ def _validate_schema(result: dict[str, Any], schema: dict[str, object] | None) -
         raise ModelInvocationError(f"model output failed schema validation: {e.message}") from e
 
 
+class _MessagesText(str):
+    """A ``str`` carrying the aggregate token counts of its Messages-API call.
+
+    Token counts are operational metadata (ADR 0006): aggregate counts only,
+    never raw prompt/response content. Subclassing ``str`` keeps the existing
+    ``_call_messages -> str`` contract intact (tests that stub the private
+    method with a plain ``str`` keep working; counts default to 0 via
+    :func:`_usage_of`).
+    """
+
+    __slots__ = ("input_tokens", "output_tokens")
+
+    def __new__(cls, value: str, *, input_tokens: int = 0, output_tokens: int = 0) -> _MessagesText:
+        obj = super().__new__(cls, value)
+        obj.input_tokens = input_tokens
+        obj.output_tokens = output_tokens
+        return obj
+
+
+def _usage_of(raw: str) -> tuple[int, int]:
+    """Return ``(input_tokens, output_tokens)`` carried on a ``_MessagesText``.
+
+    Falls back to ``(0, 0)`` for plain strings (e.g. test fakes), so callers that
+    stub ``_call_messages`` with a bare ``str`` are unaffected by usage tracking.
+    """
+    return (
+        getattr(raw, "input_tokens", 0),
+        getattr(raw, "output_tokens", 0),
+    )
+
+
+def _extract_usage(data: dict[str, Any]) -> tuple[int, int]:
+    """Return ``(input_tokens, output_tokens)`` from a provider response.
+
+    Missing or non-numeric usage yields ``(0, 0)``. Negative values are clamped
+    to 0 so a malformed usage block can never decrement an aggregate counter.
+    """
+    raw_usage = data.get("usage")
+    if not isinstance(raw_usage, dict):
+        return 0, 0
+    usage = cast("dict[str, Any]", raw_usage)
+
+    def _as_count(raw: object) -> int:
+        return int(raw) if isinstance(raw, (int, float)) and raw >= 0 else 0
+
+    return _as_count(usage.get("input_tokens")), _as_count(usage.get("output_tokens"))
+
+
 @dataclass(frozen=True, slots=True)
 class AnthropicCompatConfig:
     """Connection config for an Anthropic-compatible provider."""
@@ -110,10 +219,16 @@ class AnthropicCompatClient:
     JSON output, validates it, and allows one repair attempt on malformed output.
     """
 
-    def __init__(self, config: AnthropicCompatConfig) -> None:
+    def __init__(
+        self,
+        config: AnthropicCompatConfig,
+        *,
+        usage_recorder: LLMUsageRecorder | None = None,
+    ) -> None:
         self._config = config
         self._model = normalize_model_name(config.model)
         self._endpoint = config.base_url.rstrip("/") + "/v1/messages"
+        self._usage_recorder = usage_recorder
 
     @property
     def is_enabled(self) -> bool:
@@ -130,16 +245,18 @@ class AnthropicCompatClient:
             (request.system_prompt + user_content).encode("utf-8")
         ).hexdigest()
 
-        raw_text = self._call_messages(
+        call_timeout = request.timeout_seconds or self._config.timeout_seconds
+        raw = self._call_messages(
             system=request.system_prompt,
             user=user_content,
             max_tokens=request.max_tokens,
-            timeout=request.timeout_seconds or self._config.timeout_seconds,
+            timeout=call_timeout,
         )
+        input_tokens, output_tokens = _usage_of(raw)
 
         repair_attempted = False
         try:
-            result = _extract_json(raw_text)
+            result = _extract_json(raw)
             _validate_schema(result, request.schema)
         except ModelInvocationError as first_err:
             # One structure-repair attempt covering BOTH parse and schema errors.
@@ -152,13 +269,20 @@ class AnthropicCompatClient:
                 user=(
                     f"Your previous response was unusable ({first_err}). "
                     "Return ONLY the corrected JSON object for this task:\n\n"
-                    f"{request.user_prompt}\n\nPrevious output:\n{raw_text[:2000]}"
+                    f"{request.user_prompt}\n\nPrevious output:\n{raw[:2000]}"
                 ),
                 max_tokens=request.max_tokens,
-                timeout=request.timeout_seconds or self._config.timeout_seconds,
+                timeout=call_timeout,
             )
             result = _extract_json(repaired)  # raises if still invalid JSON
             _validate_schema(result, request.schema)  # raises if still schema-invalid
+            extra_in, extra_out = _usage_of(repaired)
+            input_tokens += extra_in
+            output_tokens += extra_out
+
+        # ADR 0006: record aggregate token COUNTS only (never content), and only
+        # when the provider actually returned a usage block.
+        self._record_usage(input_tokens, output_tokens)
 
         confidence = (
             float(result.get("confidence", 0.0))
@@ -176,6 +300,14 @@ class AnthropicCompatClient:
             repair_attempted=repair_attempted,
             trace_id=request.trace_id or prompt_hash[:16],
         )
+
+    def _record_usage(self, input_tokens: int, output_tokens: int) -> None:
+        recorder = self._usage_recorder
+        if recorder is None:
+            return
+        if input_tokens <= 0 and output_tokens <= 0:
+            return
+        recorder.record_llm_tokens(input_tokens=input_tokens, output_tokens=output_tokens)
 
     def _compose_user_content(self, request: StructuredModelRequest) -> str:
         """Compose the user message, isolating untrusted content as data only."""
@@ -205,7 +337,18 @@ class AnthropicCompatClient:
         max_tokens: int,
         timeout: float,
     ) -> str:
-        """Make one Anthropic Messages API call and return the text content."""
+        """Call the Messages API once, retrying HTTP 429 with backoff.
+
+        Retries a 429 response up to ``_MAX_429_RETRIES`` times, honoring the
+        server's ``Retry-After`` header (delta-seconds or HTTP-date) and falling
+        back to exponential backoff. On a non-429 error, or once retries are
+        exhausted, the original :class:`ModelInvocationError` semantics apply.
+        The repair logic in :meth:`invoke` is unaffected: each call gets its own
+        retry budget.
+
+        Returns a :class:`_MessagesText` (a ``str``) so the aggregate token
+        counts ride along without changing the ``-> str`` contract.
+        """
         body: dict[str, object] = {
             "model": self._model,
             "max_tokens": max_tokens,
@@ -216,30 +359,44 @@ class AnthropicCompatClient:
         # NOTE: no "tools" field is ever sent (ADR 0006: no tool binding).
 
         payload = json.dumps(body).encode("utf-8")
-        req = urllib.request.Request(
-            self._endpoint,
-            data=payload,
-            headers={
-                "x-api-key": self._config.api_key,
-                "anthropic-version": ANTHROPIC_VERSION,
-                "content-type": "application/json",
-            },
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode("utf-8", errors="replace")[:300]
-            raise ModelInvocationError(f"model API HTTP {e.code}: {detail}") from e
-        except urllib.error.URLError as e:
-            raise ModelInvocationError(f"model API network error: {e.reason}") from e
+        for attempt in range(_MAX_429_RETRIES + 1):
+            req = urllib.request.Request(
+                self._endpoint,
+                data=payload,
+                headers={
+                    "x-api-key": self._config.api_key,
+                    "anthropic-version": ANTHROPIC_VERSION,
+                    "content-type": "application/json",
+                },
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as e:
+                if e.code == _HTTP_TOO_MANY_REQUESTS and attempt < _MAX_429_RETRIES:
+                    retry_after = _parse_retry_after(e.headers.get("Retry-After"))
+                    _sleep(_backoff_seconds(attempt, retry_after))
+                    continue
+                detail = e.read().decode("utf-8", errors="replace")[:300]
+                raise ModelInvocationError(f"model API HTTP {e.code}: {detail}") from e
+            except urllib.error.URLError as e:
+                raise ModelInvocationError(f"model API network error: {e.reason}") from e
 
-        content: list[dict[str, Any]] = data.get("content", []) or []
-        texts: list[str] = [
-            str(block.get("text", "")) for block in content if block.get("type") == "text"
-        ]
-        text = "".join(texts).strip()
-        if not text:
-            raise ModelInvocationError("model returned no text content")
-        return text
+            content: list[dict[str, Any]] = data.get("content", []) or []
+            texts: list[str] = [
+                str(block.get("text", "")) for block in content if block.get("type") == "text"
+            ]
+            text = "".join(texts).strip()
+            if not text:
+                raise ModelInvocationError("model returned no text content")
+            input_tokens, output_tokens = _extract_usage(data)
+            return _MessagesText(
+                text,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
+
+        # Unreachable: the loop returns on success or raises on every terminal
+        # attempt. Defensive guard for type-checker exhaustiveness.
+        raise ModelInvocationError("model API returned HTTP 429 after max retries")

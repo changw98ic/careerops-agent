@@ -79,6 +79,31 @@ class Metrics:
             for outcome in OperationalOutcome:
                 self._operations.labels(component=component.value, outcome=outcome.value)
 
+        # ADR 0006: aggregate token COUNTS only. Raw prompt/response content is
+        # never recorded. ``component`` is bounded to the provider surface;
+        # ``token_kind`` is bounded to input/output.
+        self._llm_tokens = Counter(
+            "careerops_llm_tokens_total",
+            "Aggregate LLM token usage (ADR 0006: count only, never content).",
+            ("component", "token_kind"),
+            registry=self.registry,
+        )
+        for token_kind in ("input", "output"):
+            self._llm_tokens.labels(component="provider", token_kind=token_kind)
+
+        # Business instrumentation (plan v0.4 §3 Stage 3.5). v1 only accumulates
+        # counts; conversion analysis lands once apply/interview data flows in.
+        self._apply_submitted = Counter(
+            "careerops_apply_submitted_total",
+            "Applications submitted through the apply pipeline.",
+            registry=self.registry,
+        )
+        self._interview_received = Counter(
+            "careerops_interview_received_total",
+            "Interview invitations received in response to applications.",
+            registry=self.registry,
+        )
+
     def observe_http(
         self,
         *,
@@ -103,6 +128,33 @@ class Metrics:
         outcome: OperationalOutcome,
     ) -> None:
         self._operations.labels(component=component.value, outcome=outcome.value).inc()
+
+    def record_llm_tokens(
+        self,
+        *,
+        input_tokens: int,
+        output_tokens: int,
+        component: str = "provider",
+    ) -> None:
+        """Record aggregate LLM token usage (ADR 0006: counts only, never content).
+
+        No-ops on non-positive counts so a missing/zero usage block cannot create
+        spurious label series.
+        """
+        if input_tokens > 0:
+            self._llm_tokens.labels(component=component, token_kind="input").inc(input_tokens)
+        if output_tokens > 0:
+            self._llm_tokens.labels(component=component, token_kind="output").inc(output_tokens)
+
+    def record_apply_submitted(self, amount: int = 1) -> None:
+        """Increment the apply-submitted counter (v1 instrumentation pipeline)."""
+        if amount > 0:
+            self._apply_submitted.inc(amount)
+
+    def record_interview_received(self, amount: int = 1) -> None:
+        """Increment the interview-received counter (v1 instrumentation pipeline)."""
+        if amount > 0:
+            self._interview_received.inc(amount)
 
     def render(self) -> bytes:
         return generate_latest(self.registry)

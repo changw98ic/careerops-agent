@@ -10,6 +10,7 @@ qualification-bound per ADR 0006; see docs/adr/0006-model-privacy.md.
 from careerops.model_gateway.anthropic_compat import (
     AnthropicCompatClient,
     AnthropicCompatConfig,
+    LLMUsageRecorder,
     ModelInvocationError,
     normalize_model_name,
 )
@@ -29,6 +30,7 @@ __all__ = [
     "AnthropicCompatClient",
     "AnthropicCompatConfig",
     "DisabledModelAdapter",
+    "LLMUsageRecorder",
     "ModelInvocationError",
     "ModelProviderDisabled",
     "ModelProviderNotConfigured",

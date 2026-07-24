@@ -22,6 +22,7 @@ class AuthAction(StrEnum):
     LOGOUT = "logout"
     SESSION_ROTATE = "session_rotate"
     SESSION_REVOKE = "session_revoke"
+    REVIEW = "review"
 
 
 class AuthOutcome(StrEnum):

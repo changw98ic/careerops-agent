@@ -14,6 +14,7 @@ from careerops.api.routes.health import router as health_router
 from careerops.api.routes.jobs import router as jobs_router
 from careerops.api.routes.matching import router as matching_router
 from careerops.api.routes.metrics import router as metrics_router
+from careerops.api.routes.review import install_review_endpoint
 from careerops.application.dashboard import DashboardSnapshotProvider
 from careerops.application.ports.readiness import ReadinessProbe
 from careerops.auth.service import ConsoleAuthService
@@ -84,16 +85,32 @@ def create_app(
             raise ValueError(
                 "a dashboard provider is required when console authentication is installed"
             )
-        install_console_web(
-            app,
-            auth_service,
-            resolved_dashboard_provider,
-            ConsoleWebSettings(
-                allowed_hosts=frozenset(resolved.console_allowed_hosts),
-                allowed_origins=frozenset(resolved.console_allowed_origins),
-                cookie_secure=resolved.console_cookie_secure,
-            ),
+        web_settings = ConsoleWebSettings(
+            allowed_hosts=frozenset(resolved.console_allowed_hosts),
+            allowed_origins=frozenset(resolved.console_allowed_origins),
+            cookie_secure=resolved.console_cookie_secure,
         )
+        install_console_web(app, auth_service, resolved_dashboard_provider, web_settings)
+        # Review endpoint (plan v0.4 §2.7 / §3 Stage 3): mounted ONLY outside
+        # PRODUCTION and only when the runtime actually compiled the in-process
+        # graph. PRODUCTION is fail-closed — ``RuntimeResources`` does not build
+        # the graph there, so this branch is skipped and the router is absent.
+        if (
+            resolved.environment is not RuntimeEnvironment.PRODUCTION
+            and isinstance(probe, RuntimeResources)
+            and probe.career_graph is not None
+            and probe.review_mapping is not None
+            and probe.side_effect_kernel is not None
+        ):
+            install_review_endpoint(
+                app,
+                auth_service=auth_service,
+                rate_limiter=RedisAuthRateLimiter(probe.redis_sync),
+                review_mapping=probe.review_mapping,
+                career_graph=probe.career_graph,
+                side_effect_kernel=probe.side_effect_kernel,
+                web_settings=web_settings,
+            )
     return app
 
 

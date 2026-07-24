@@ -11,7 +11,7 @@ from temporalio.api.enums.v1 import EventType
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer
 
-from careerops.infrastructure.temporal.activities import SmokeActivities
+from careerops.infrastructure.temporal.activities import SmokeActivities, SmokeActivitySink
 from careerops.infrastructure.temporal.worker import TemporalWorkerSettings, build_worker
 from careerops.workflows.smoke import RecoverableSmokeWorkflow
 from careerops.workflows.smoke_contracts import (
@@ -30,7 +30,7 @@ pytestmark = [
 
 
 @dataclass
-class CountingSink:
+class CountingSink(SmokeActivitySink):
     def __init__(self) -> None:
         self.starts: list[SmokeStartCommand] = []
         self.completions: list[SmokeCompletionCommand] = []

@@ -9,6 +9,9 @@ from careerops.infrastructure.temporal.health import (
     TemporalWorkerHealthResult,
     check_worker_health,
 )
+from careerops.infrastructure.temporal.internal_event_sink import (
+    LoggingInternalEventSink,
+)
 from careerops.infrastructure.temporal.worker import (
     TemporalWorkerSettings,
     build_worker,
@@ -16,6 +19,7 @@ from careerops.infrastructure.temporal.worker import (
 )
 
 __all__ = [
+    "LoggingInternalEventSink",
     "NoOpSmokeActivitySink",
     "SmokeActivities",
     "SmokeActivitySink",

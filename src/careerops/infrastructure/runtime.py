@@ -84,6 +84,21 @@ class RuntimeResources:
         self.side_effect_kernel: object | None = None
         self._build_career_graph_stack()
 
+        # In-memory read repositories and application services for API routes.
+        # These are created unconditionally; PRODUCTION should swap them for
+        # Postgres-backed implementations when available.
+        from careerops.infrastructure.memory_repos import (
+            InMemoryApplicationRepository,
+            InMemoryContactRepository,
+            InMemoryJobReadRepository,
+            InMemoryMatchingReadRepository,
+        )
+
+        self.matching_read_repo = InMemoryMatchingReadRepository()
+        self.job_read_repo = InMemoryJobReadRepository()
+        self.contact_repo = InMemoryContactRepository()
+        self.application_repo = InMemoryApplicationRepository()
+
     async def check(self) -> ReadinessReport:
         if self._closed:
             return ReadinessReport(
@@ -220,7 +235,13 @@ class RuntimeResources:
 
         # Wire LLM token recording via the model client factory (ADR 0006).
         usage_recorder = metrics if metrics is not None else None
-        model_client = create_model_client(settings.model_provider, usage_recorder=usage_recorder)
+        model_client = create_model_client(
+            settings.model_provider,
+            base_url=settings.model_base_url,
+            api_key=settings.model_api_key,
+            model=settings.model_name,
+            usage_recorder=usage_recorder,
+        )
 
         # Wire apply_submitted counter (non-blocking callback).
         send_callback: Callable[[int], None] | None = None
@@ -279,17 +300,13 @@ class RuntimeResources:
         """
         settings = self._settings
         if settings.auto_send_enabled and settings.external_writes_enabled:
-            from careerops.integrations.gmail_sender import GmailSender
-            from careerops.integrations.gmail_side_effect_provider import (
-                GmailSideEffectProvider,
-            )
-
             # Token loading placeholder: this path is unreachable because the
             # settings validator blocks auto_send_enabled/external_writes_enabled.
             # When unblocked, load the real OAuth token from the credentials store.
-            access_token = "placeholder"
-            sender = GmailSender(access_token)
-            return GmailSideEffectProvider(sender)
+            raise RuntimeError(
+                "Gmail OAuth token loading is not yet implemented; "
+                "auto_send_enabled/external_writes_enabled must remain disabled"
+            )
 
         from careerops.integrations.fake_side_effect_provider import (
             FakeSideEffectProvider,

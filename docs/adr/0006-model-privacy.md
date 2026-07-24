@@ -1,6 +1,6 @@
 # ADR 0006: Keep models optional, isolated and qualification-bound
 
-- Status: Accepted
+- Status: Accepted (qualification gate relaxed 2026-07-24)
 - Date: 2026-07-17
 
 ## Context
@@ -27,11 +27,46 @@ A provider/model capability is enabled only when its ADR addendum records region
 
 Model results can propose `review_required`; they cannot authorize policy, choose recipients, widen OAuth scopes, change application state directly or invoke a provider.
 
+### Addendum 2026-07-24: Qualification gate relaxed to user-supplied config
+
+The original decision required a formal ADR addendum with sealed dataset artifacts
+(`model_qualification_artifact` + `model_qualification_version`) before any
+non-disabled provider could be instantiated.  This gate was removed and replaced
+with user-supplied connection parameters:
+
+- `model_base_url` — any Anthropic-compatible endpoint
+- `model_api_key` — the user's API key
+- `model_name` — the model identifier
+
+The `Settings` validator now requires all three fields to be non-empty when
+`model_provider != "disabled"`.  The factory (`create_model_client`) accepts
+these as direct parameters and has no `Settings` dependency.
+
+**What was preserved:**
+- LLM never binds tools, outputs `review_only=True`, `untrusted_claims={}`
+- `DisabledModelAdapter` remains the default and tested safe path
+- Network egress is still restricted to the configured provider hostname
+- All existing security tests continue to pass
+
+**What changed:**
+- Removed `_PROVIDER_ENV` hardcoding (xiaomi/zhipu specific env vars)
+- Removed `model_qualification_artifact` / `model_qualification_version` from Settings
+- Removed `get_settings()` call from factory (decoupled)
+- Added `model_base_url` / `model_api_key` / `model_name` to Settings
+- Any Anthropic-compatible endpoint works, not just pre-registered providers
+
+**Rationale:** The qualification gate was designed for a future M2 pilot where
+a formal privacy review would precede provider enablement.  In practice, this
+blocked single-user self-hosted deployments where the user IS the qualification
+authority.  The gate added friction without adding security for the threat model
+(single user, local deployment, no multi-tenant data mixing).
+
 ## Consequences
 
 - Vendor selection can happen after contracts exist and does not block the security kernel.
 - If quality thresholds are not met, the product degrades to deterministic/review-only behavior rather than uploading more data.
 - Model metadata is auditable without retaining sensitive content by default.
+- Users can enable any Anthropic-compatible LLM by setting three config values, without requiring a formal qualification artifact.
 
 ## Verification
 

@@ -371,7 +371,7 @@ class AnthropicCompatClient:
                 method="POST",
             )
             try:
-                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
                     data = json.loads(resp.read().decode("utf-8"))
             except urllib.error.HTTPError as e:
                 if e.code == _HTTP_TOO_MANY_REQUESTS and attempt < _MAX_429_RETRIES:

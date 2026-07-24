@@ -10,15 +10,16 @@ ingesting postings into the CareerOps database with dedup and versioning.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
-import os
 import time
 import urllib.error
-import urllib.request
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
+from uuid import NAMESPACE_DNS, uuid5
+
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.engine import Engine
 
 from careerops.adapters import (
     AshbyAdapter,
@@ -27,6 +28,17 @@ from careerops.adapters import (
     LeverAdapter,
     RawJobRecord,
 )
+from careerops.adapters.http_fetcher import (
+    CircuitOpenError,
+    FetchError,
+    SSRFError,
+    fetch,
+)
+from careerops.config import Settings
+from careerops.infrastructure.database.engine import create_database_engine
+from careerops.infrastructure.database.schema import companies, job_sources
+from careerops.infrastructure.temporal.m1_crawl_sink import RealCrawlActivitySink
+from careerops.workflows.m1_contracts import CrawledPostingRecord
 
 # --- Seed list: companies with known public ATS boards ---
 
@@ -47,9 +59,7 @@ SEED_SOURCES: list[dict[str, str]] = [
     {"company": "Gong", "type": "greenhouse", "board": "gong"},
     {"company": "Wiz", "type": "greenhouse", "board": "wiz"},
     {"company": "Linear", "type": "greenhouse", "board": "linear"},
-    # Lever boards
-    {"company": "Airbnb", "type": "lever", "board": "airbnb"},
-    {"company": "Shopify", "type": "lever", "board": "shopify"},
+    # Lever boards (airbnb/shopify removed — 404 as of 2026-07)
     {"company": "Netflix", "type": "lever", "board": "netflix"},
     # Ashby boards
     {"company": "OpenAI", "type": "ashby", "board": "openai"},
@@ -124,19 +134,18 @@ def _raw_to_crawled(company: str, source_type: str, raw: RawJobRecord) -> Crawle
 
 
 def fetch_json(url: str) -> object | None:
-    """Fetch JSON from a URL with retries and rate limiting."""
+    """Fetch JSON from a URL with retries and rate limiting.
+
+    Uses careerops.adapters.http_fetcher.fetch which provides SSRF protection,
+    circuit breaker, and per-domain rate limiting.  Custom headers are not
+    supported by fetch(); the module's built-in User-Agent is used instead.
+    """
     for attempt in range(_MAX_RETRIES + 1):
         try:
-            req = urllib.request.Request(
-                url,
-                headers={
-                    "User-Agent": "CareerOps/0.1 (job discovery; +https://github.com/careerops)",
-                    "Accept": "application/json",
-                },
-            )
-            with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-                return json.loads(resp.read().decode("utf-8"))
+            result = fetch(url, timeout=float(_TIMEOUT))
+            return json.loads(result.body)
         except urllib.error.HTTPError as e:
+            # http_fetcher.fetch re-raises HTTPError after recording breaker state.
             if e.code == 429 and attempt < _MAX_RETRIES:
                 retry_after = int(e.headers.get("Retry-After", "5"))
                 print(f"    Rate limited, waiting {retry_after}s...")
@@ -149,7 +158,11 @@ def fetch_json(url: str) -> object | None:
                 continue
             print(f"    HTTP {e.code}: {e.reason}")
             return None
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
+        except (SSRFError, CircuitOpenError, FetchError) as e:
+            # Non-retryable: SSRF policy, circuit breaker, size violation
+            print(f"    Fetch rejected: {e}")
+            return None
+        except (urllib.error.URLError, OSError) as e:
             if attempt < _MAX_RETRIES:
                 time.sleep(2)
                 continue
@@ -204,15 +217,161 @@ CRAWLERS = {
 }
 
 
+def _company_slug(name: str) -> str:
+    """Lowercase, hyphen-joined company name for slug / domain derivation."""
+    return name.lower().replace(" ", "-")
+
+
+def _ensure_source_rows(
+    engine: Engine,
+    seed: list[dict[str, str]],
+) -> dict[str, str]:
+    """Upsert companies + job_sources for every seed entry.
+
+    Returns ``{board_slug: job_source_id}`` so callers can resolve the FK
+    before building ``CrawledPostingRecord``.
+    """
+    source_map: dict[str, str] = {}
+    with engine.begin() as conn:
+        for entry in seed:
+            company_name = entry["company"]
+            source_type = entry["type"]
+            board = entry["board"]
+            slug = _company_slug(company_name)
+            domain = f"{slug}.com"
+
+            # Upsert company (idempotent on normalized_name).
+            company_id = uuid5(NAMESPACE_DNS, f"careerops.company.{slug}")
+            conn.execute(
+                pg_insert(companies)
+                .values(
+                    id=company_id,
+                    name=company_name,
+                    normalized_name=slug,
+                    official_domains=[domain],
+                )
+                .on_conflict_do_nothing(index_elements=[companies.c.normalized_name])
+            )
+
+            # Upsert job_source (idempotent on company_id, source_type, source_identifier).
+            source_uuid = uuid5(NAMESPACE_DNS, f"careerops.board.{board}")
+            base_url = _base_url_for(source_type, board)
+            conn.execute(
+                pg_insert(job_sources)
+                .values(
+                    id=source_uuid,
+                    company_id=company_id,
+                    source_type=source_type,
+                    source_identifier=board,
+                    base_url=base_url,
+                    state="active",
+                )
+                .on_conflict_do_nothing(
+                    index_elements=[
+                        job_sources.c.company_id,
+                        job_sources.c.source_type,
+                        job_sources.c.source_identifier,
+                    ]
+                )
+            )
+            source_map[board] = str(source_uuid)
+    return source_map
+
+
+def _base_url_for(source_type: str, board: str) -> str:
+    """Return the canonical API base URL for a source type + board slug."""
+    if source_type == "greenhouse":
+        return GREENHOUSE_API.format(board=board)
+    if source_type == "lever":
+        return LEVER_API.format(board=board)
+    if source_type == "ashby":
+        return ASHBY_API.format(board=board)
+    return ""
+
+
+_ADAPTER_VERSIONS = {
+    "greenhouse": "greenhouse-v1",
+    "lever": "lever-v1",
+    "ashby": "ashby-v1",
+}
+
+
+def _job_to_record(job: CrawledJob, source_id: str) -> CrawledPostingRecord:
+    """Convert a CrawledJob to a CrawledPostingRecord for DB ingest."""
+    raw: dict[str, str] = {}
+    for k, v in job.raw_data.items():
+        raw[k] = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
+    return CrawledPostingRecord(
+        source_id=source_id,
+        external_id=job.external_id,
+        canonical_url=job.url,
+        source_url=job.url,
+        structured_data={
+            "title": job.title or "",
+            "location": job.location or "",
+            "description": job.description or "",
+            **raw,
+        },
+        parser_version=_ADAPTER_VERSIONS.get(job.source_type, "unknown-v1"),
+        fetched_at=job.fetched_at.isoformat(),
+    )
+
+
+def _ingest_jobs(
+    sink: RealCrawlActivitySink,
+    jobs: list[CrawledJob],
+    source_id: str,
+) -> tuple[int, int, list[str]]:
+    """Ingest a batch of CrawledJobs into the database.
+
+    Runs the async ingest_posting in a dedicated event loop.
+    Returns (new_postings, new_versions, errors).
+    """
+    import asyncio
+
+    async def _run() -> tuple[int, int, list[str]]:
+        new_postings = 0
+        new_versions = 0
+        errors: list[str] = []
+        for job in jobs:
+            try:
+                record = _job_to_record(job, source_id)
+                result = await sink.ingest_posting(record)
+                if result.get("is_new_posting"):
+                    new_postings += 1
+                if result.get("is_new_version"):
+                    new_versions += 1
+            except Exception as exc:
+                errors.append(f"{job.external_id}: {exc}")
+        return new_postings, new_versions, errors
+
+    return asyncio.run(_run())
+
+
 def crawl_all(dry_run: bool = False) -> None:
     total_jobs = 0
     total_sources = 0
     failed_sources = 0
+    total_new_postings = 0
+    total_new_versions = 0
+    all_errors: list[str] = []
 
     print(f"CareerOps Job Crawler - {datetime.now(UTC).isoformat()}")
     print(f"Seed sources: {len(SEED_SOURCES)}")
     print(f"Mode: {'DRY RUN' if dry_run else 'LIVE'}")
     print("=" * 60)
+
+    engine: Engine | None = None
+    sink: RealCrawlActivitySink | None = None
+    source_map: dict[str, str] = {}
+
+    if not dry_run:
+        settings = Settings()
+        engine = create_database_engine(settings)
+        sink = RealCrawlActivitySink(engine=engine)
+        print("Ensuring companies and job_sources rows exist...")
+        source_map = _ensure_source_rows(engine, SEED_SOURCES)
+        print(f"  Resolved {len(source_map)} source IDs.")
 
     for source in SEED_SOURCES:
         company = source["company"]
@@ -236,36 +395,31 @@ def crawl_all(dry_run: bool = False) -> None:
             print(f"{len(jobs)} jobs")
             total_jobs += len(jobs)
 
-            if not dry_run:
-                # Save to a JSONL file for ingestion
-                timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-                output_file = f"data/crawl_{source_type}_{board}_{timestamp}.jsonl"
-                os.makedirs("data", exist_ok=True)
-                with open(output_file, "w", encoding="utf-8") as f:
-                    for job in jobs:
-                        record = {
-                            "company": job.company,
-                            "source_type": job.source_type,
-                            "external_id": job.external_id,
-                            "title": job.title,
-                            "location": job.location,
-                            "url": job.url,
-                            "description": job.description,
-                            "raw_data": job.raw_data,
-                            "fetched_at": job.fetched_at.isoformat(),
-                            "content_hash": hashlib.sha256(
-                                json.dumps(job.raw_data, sort_keys=True, default=str).encode()
-                            ).hexdigest(),
-                        }
-                        f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+            if sink is not None:
+                sid = source_map.get(board)
+                if sid is None:
+                    all_errors.append(f"{company}: no source_id for board '{board}'")
+                else:
+                    np, nv, errs = _ingest_jobs(sink, jobs, sid)
+                    total_new_postings += np
+                    total_new_versions += nv
+                    all_errors.extend(errs)
+                    if np or nv:
+                        print(f"    -> DB: {np} new postings, {nv} new versions")
+                    if errs:
+                        for err in errs:
+                            print(f"    -> ERROR: {err}")
 
         time.sleep(_RATE_LIMIT_SECONDS)
 
     print("=" * 60)
     print(f"Summary: {total_jobs} jobs from {total_sources} sources ({failed_sources} failed)")
-    if not dry_run and total_jobs > 0:
-        print("Output: data/crawl_*.jsonl")
-        print("To ingest into DB, run the ingestion pipeline.")
+    if sink is not None:
+        print(f"DB ingest: {total_new_postings} new postings, {total_new_versions} new versions")
+        if all_errors:
+            print(f"DB errors: {len(all_errors)}")
+            for err in all_errors[:10]:
+                print(f"  - {err}")
 
 
 if __name__ == "__main__":

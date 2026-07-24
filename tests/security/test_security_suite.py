@@ -359,8 +359,8 @@ class TestOAuthSecurity:
             Settings(auto_send_enabled=True)
 
     def test_model_provider_disabled_by_default(self) -> None:
-        """Model provider is disabled by default."""
+        """Model provider rejects values without required connection config."""
         from careerops.config import Settings
 
-        with pytest.raises(ValueError, match="M2"):
-            Settings(model_provider="openai")
+        with pytest.raises(ValueError, match="requires"):
+            Settings(model_provider="bogus")

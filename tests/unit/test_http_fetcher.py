@@ -326,7 +326,11 @@ class TestCircuitBreakerInFetch:
 
 
 class TestSSRFBlocksNewRanges:
-    """SSRF blocks CGNAT (100.64.0.0/10) and benchmarking (198.18.0.0/15)."""
+    """SSRF blocks CGNAT (100.64.0.0/10).
+
+    198.18.0.0/15 (RFC 2544 benchmarking) is NOT blocked — local DNS proxies
+    and VPNs commonly resolve external hostnames into this range.
+    """
 
     def test_cgnat_100_64_rejected(self) -> None:
         with pytest.raises(SSRFError, match="private/reserved"):
@@ -336,25 +340,18 @@ class TestSSRFBlocksNewRanges:
         with pytest.raises(SSRFError, match="private/reserved"):
             fetch("http://100.127.255.254/")
 
-    def test_benchmarking_198_18_rejected(self) -> None:
-        with pytest.raises(SSRFError, match="private/reserved"):
-            fetch("http://198.18.0.1/")
-
-    def test_benchmarking_198_19_rejected(self) -> None:
-        with pytest.raises(SSRFError, match="private/reserved"):
-            fetch("http://198.19.255.254/")
-
     def test_cgnat_host_resolving_to_range_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(http_fetcher, "_resolve_host", lambda _host: ("100.64.1.1",))
         with pytest.raises(SSRFError, match="private/reserved"):
             fetch("http://cgnat.example.com/")
 
-    def test_benchmarking_host_resolving_to_range_rejected(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_benchmarking_198_18_allowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """198.18.x.x passes SSRF check (local DNS proxy common)."""
         monkeypatch.setattr(http_fetcher, "_resolve_host", lambda _host: ("198.18.5.5",))
-        with pytest.raises(SSRFError, match="private/reserved"):
-            fetch("http://bench.example.com/")
+        fake = _FakeResponse(b"ok")
+        _stub_open_with_fake(fake, monkeypatch)
+        result = fetch("http://bench.example.com/")
+        assert result.status_code == 200
 
 
 class TestDNSRebinding:

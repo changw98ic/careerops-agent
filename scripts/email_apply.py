@@ -26,10 +26,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import UUID
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -257,12 +260,33 @@ def cmd_review(args: argparse.Namespace) -> None:
 # ----------------------------- send -----------------------------
 
 
+def _draft_resource_id(draft: dict) -> UUID:
+    """Derive a stable UUID from company + title for idempotent proposals."""
+    key = f"{draft.get('company', '')}|{draft.get('title', '')}"
+    digest = hashlib.sha256(key.encode()).hexdigest()
+    return UUID(digest[:32])
+
+
 def cmd_send(args: argparse.Namespace) -> None:
+    from sqlalchemy import create_engine
+
+    from careerops.application.side_effect_kernel import (
+        ExecutionOutcome,
+        ProposalInput,
+        SideEffectKernel,
+    )
+    from careerops.domain.side_effects import IntentStatus
+    from careerops.infrastructure.database.outbox import PostgresOutboxStore
+    from careerops.infrastructure.database.side_effect_postgres import (
+        PostgresSideEffectStore,
+    )
     from careerops.integrations.gmail_sender import (
         GmailSender,
         GmailSendError,
-        OutgoingEmail,
         refresh_access_token,
+    )
+    from careerops.integrations.gmail_side_effect_provider import (
+        GmailSideEffectProvider,
     )
 
     token_file = PROJECT_ROOT / "secrets" / "gmail_send_token.json"
@@ -275,7 +299,9 @@ def cmd_send(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     resume_path = Path(args.resume) if args.resume else None
-    attachments = (resume_path,) if resume_path and resume_path.exists() else ()
+    attachment_refs: tuple[str, ...] = (
+        (str(resume_path),) if resume_path and resume_path.exists() else ()
+    )
 
     drafts = load_drafts()
     approved = [d for d in drafts if d["status"] == "approved"]
@@ -307,28 +333,73 @@ def cmd_send(args: argparse.Namespace) -> None:
             print(f"Warning: token refresh failed ({e}); using stored token.")
 
     sender = GmailSender(access_token)
+
+    # Build the kernel with Postgres-backed stores and the Gmail provider.
+    db_url = os.environ.get("CAREEROPS_DATABASE_URL")
+    if not db_url:
+        print("Error: CAREEROPS_DATABASE_URL not set.")
+        sys.exit(1)
+    engine = create_engine(db_url)
+    store = PostgresSideEffectStore(engine)
+    provider = GmailSideEffectProvider(sender)
+    outbox = PostgresOutboxStore(engine)
+    kernel = SideEffectKernel(store, provider, outbox_store=outbox)
+
+    now = datetime.now(UTC)
     sent_count = 0
     for d in approved:
-        email = OutgoingEmail(
-            to=d["to"],
-            subject=d["subject"],
-            body=d["body"],
-            attachments=attachments,
+        resource_id = _draft_resource_id(d)
+        idempotency_key = f"email_send:{resource_id}"
+
+        proposal = ProposalInput(
+            action_kind="email_send",
+            resource_type="email",
+            resource_id=resource_id,
+            idempotency_key=idempotency_key,
+            created_by="email_apply_cli",
+            target={"to": d["to"]},
+            payload={"subject": d["subject"], "body": d["body"]},
+            attachment_refs=attachment_refs,
+            trusted_facts={"capability_released": True, "target_allowlisted": True},
+            evidence_refs=("operator_reviewed_draft",),
         )
+
         try:
-            result = sender.send(email)
+            result = kernel.propose(proposal, now=now)
+            approval = kernel.get_or_create_pending_approval(
+                result.intent.id,
+                requested_for="email_apply_cli",
+                now=now,
+            )
+            kernel.approve(approval.id, now=now)
+            outcome: ExecutionOutcome = kernel.execute(result.intent.id, now=now)
+        except Exception as exc:
+            d["status"] = "send_failed"
+            d["error"] = str(exc)
+            print(f"  FAILED -> {d['to']}: {exc}")
+            continue
+
+        if outcome.status is IntentStatus.CONFIRMED:
+            receipt = outcome.receipt
             d["status"] = "sent"
-            d["sent_at"] = datetime.now(UTC).isoformat()
-            d["provider_message_id"] = result.provider_message_id
-            d["thread_id"] = result.thread_id
+            d["sent_at"] = now.isoformat()
+            if receipt:
+                d["provider_message_id"] = receipt.provider_resource_id
             sent_count += 1
-            print(f"  SENT -> {d['to']} (msg {result.provider_message_id})")
+            print(f"  SENT -> {d['to']} (msg {receipt.provider_resource_id if receipt else 'n/a'})")
             with open(SENT_FILE, "a", encoding="utf-8") as f:
                 f.write(json.dumps(d, ensure_ascii=False) + "\n")
-        except GmailSendError as e:
+        elif outcome.status is IntentStatus.RECONCILIATION_REQUIRED:
+            d["status"] = "reconciliation_required"
+            d["error"] = f"reconciliation needed: {','.join(outcome.reason_codes)}"
+            print(
+                f"  WARNING -> {d['to']}: send result uncertain, "
+                f"reconciliation required ({','.join(outcome.reason_codes)})"
+            )
+        else:
             d["status"] = "send_failed"
-            d["error"] = str(e)
-            print(f"  FAILED -> {d['to']}: {e}")
+            d["error"] = f"kernel status: {outcome.status.value}"
+            print(f"  FAILED -> {d['to']}: {outcome.status.value}")
 
     save_drafts(drafts)
     print(f"\nDone: {sent_count}/{len(approved)} sent.")

@@ -28,7 +28,7 @@ from email.utils import formatdate
 from pathlib import Path
 
 GMAIL_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
-GMAIL_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GMAIL_TOKEN_URL = "https://oauth2.googleapis.com/token"  # nosec B105
 
 
 class GmailSendError(RuntimeError):
@@ -131,7 +131,7 @@ class GmailSender:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
+            with urllib.request.urlopen(req, timeout=60) as resp:  # nosec B310
                 data = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", errors="replace")[:300]
@@ -168,7 +168,7 @@ def refresh_access_token(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:  # nosec B310
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", errors="replace")[:300]

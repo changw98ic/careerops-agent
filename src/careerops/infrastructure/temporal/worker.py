@@ -55,7 +55,7 @@ class TemporalWorkerSettings:
         return cls(
             target=values.get("CAREEROPS_TEMPORAL_ADDRESS", "127.0.0.1:7233"),
             namespace=values.get("CAREEROPS_TEMPORAL_NAMESPACE", "default"),
-            task_queue=values.get("CAREEROPS_TEMPORAL_TASK_QUEUE", "careerops-m0"),
+            task_queue=values.get("CAREEROPS_TEMPORAL_TASK_QUEUE", "careerops-m1"),
             identity=identity,
         )
 
@@ -138,12 +138,47 @@ async def run_worker(
 
 
 def main() -> None:
+    from careerops.application.outbox import OutboxPublisher
+    from careerops.application.side_effect_kernel import SideEffectKernel
+    from careerops.config import get_settings
+    from careerops.infrastructure.database.engine import create_database_engine
+    from careerops.infrastructure.database.outbox import PostgresOutboxStore
+    from careerops.infrastructure.database.side_effect_postgres import PostgresSideEffectStore
+    from careerops.infrastructure.temporal.activities import (
+        ApprovalSweeperActivities,
+        OutboxDrainActivities,
+    )
+    from careerops.infrastructure.temporal.internal_event_sink import LoggingInternalEventSink
     from careerops.infrastructure.temporal.m1_crawl_sink import RealCrawlActivitySink
+    from careerops.integrations.fake_side_effect_provider import FakeSideEffectProvider
+
+    settings = get_settings()
+    engine = create_database_engine(settings)
+
+    side_effect_store = PostgresSideEffectStore(engine)
+    outbox_store = PostgresOutboxStore(engine)
+
+    kernel = SideEffectKernel(
+        store=side_effect_store,
+        provider=FakeSideEffectProvider(),
+        outbox_store=outbox_store,
+    )
+
+    outbox_publisher = OutboxPublisher(
+        store=outbox_store,
+        sink=LoggingInternalEventSink(),
+    )
+
+    m1_activities = M1ActivityBundles(
+        outbox_drain=OutboxDrainActivities(publisher=outbox_publisher),
+        approval_sweeper=ApprovalSweeperActivities(kernel=kernel),
+    )
 
     asyncio.run(
         run_worker(
             TemporalWorkerSettings.from_environment(),
-            crawl_sink=RealCrawlActivitySink(fetcher=fetch),
+            m1_activities=m1_activities,
+            crawl_sink=RealCrawlActivitySink(fetcher=fetch, engine=engine),
         )
     )
 

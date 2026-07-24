@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-import os
-from types import SimpleNamespace
-from unittest.mock import patch
-
 import pytest
 
 from careerops.model_gateway.base import (
@@ -101,7 +97,7 @@ class TestStructuredModelResponse:
 
 
 class TestCreateModelClient:
-    """Tests for the factory runtime gate (qualification check)."""
+    """Tests for the factory — direct parameter validation."""
 
     def test_disabled_returns_adapter(self) -> None:
         client = create_model_client("disabled")
@@ -111,45 +107,24 @@ class TestCreateModelClient:
         client = create_model_client("")
         assert isinstance(client, DisabledModelAdapter)
 
-    def test_unknown_provider_raises(self) -> None:
-        with pytest.raises(ModelProviderNotConfigured, match="unknown model provider"):
-            create_model_client("bogus")
+    def test_missing_params_raises(self) -> None:
+        """No base_url/api_key/model -> rejected with clear message."""
+        with pytest.raises(ModelProviderNotConfigured, match="requires"):
+            create_model_client("custom", base_url="", api_key="", model="")
 
-    def test_unqualified_provider_raises(self) -> None:
-        """Env vars present but qualification fields empty -> rejected."""
-        env = {
-            "XIAOMI_BASE_URL": "https://api.example.com",
-            "XIAOMI_API_KEY": "sk-test",
-            "XIAOMI_MODEL": "test-model",
-        }
-        # Settings with empty qualification fields (default state)
-        fake_settings = SimpleNamespace(
-            model_qualification_artifact="",
-            model_qualification_version="",
-        )
-        with (
-            patch.dict(os.environ, env, clear=False),
-            patch("careerops.model_gateway.factory.get_settings", return_value=fake_settings),
-            pytest.raises(ModelProviderNotConfigured, match="qualification"),
-        ):
-            create_model_client("xiaomi")
+    def test_partial_params_raises(self) -> None:
+        """Only some params set -> rejected listing missing ones."""
+        with pytest.raises(ModelProviderNotConfigured, match="api_key, model"):
+            create_model_client("custom", base_url="https://api.example.com")
 
-    def test_qualified_provider_creates_client(self) -> None:
-        """Env vars + qualification fields set -> AnthropicCompatClient."""
+    def test_all_params_creates_client(self) -> None:
+        """All params present -> AnthropicCompatClient."""
         from careerops.model_gateway.anthropic_compat import AnthropicCompatClient
 
-        env = {
-            "ZHIPU_BASE_URL": "https://api.example.com",
-            "ZHIPU_API_KEY": "sk-test",
-            "ZHIPU_MODEL": "test-model",
-        }
-        fake_settings = SimpleNamespace(
-            model_qualification_artifact="adr-0006-pilot",
-            model_qualification_version="1.0.0",
+        client = create_model_client(
+            "custom",
+            base_url="https://api.example.com",
+            api_key="sk-test",
+            model="test-model",
         )
-        with (
-            patch.dict(os.environ, env, clear=False),
-            patch("careerops.model_gateway.factory.get_settings", return_value=fake_settings),
-        ):
-            client = create_model_client("zhipu")
-            assert isinstance(client, AnthropicCompatClient)
+        assert isinstance(client, AnthropicCompatClient)

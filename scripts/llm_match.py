@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -57,7 +58,18 @@ def main() -> None:
     parser.add_argument("--resume", required=True)
     parser.add_argument("--filter", help="Filter jobs by keyword")
     parser.add_argument("--limit", type=int, default=5)
-    parser.add_argument("--provider", default="xiaomi", help="xiaomi | zhipu | disabled")
+    parser.add_argument(
+        "--provider", default="xiaomi", help="Model provider name (any non-disabled value works)"
+    )
+    parser.add_argument(
+        "--base-url", default="", help="LLM API base URL (default: $CAREEROPS_MODEL_BASE_URL)"
+    )
+    parser.add_argument(
+        "--api-key", default="", help="LLM API key (default: $CAREEROPS_MODEL_API_KEY)"
+    )
+    parser.add_argument(
+        "--model", default="", help="LLM model name (default: $CAREEROPS_MODEL_NAME)"
+    )
     args = parser.parse_args()
 
     resume_path = Path(args.resume)
@@ -71,7 +83,12 @@ def main() -> None:
     )
     from careerops.model_gateway import create_model_client
 
-    client = create_model_client(args.provider)
+    client = create_model_client(
+        args.provider,
+        base_url=args.base_url or os.environ.get("CAREEROPS_MODEL_BASE_URL", ""),
+        api_key=args.api_key or os.environ.get("CAREEROPS_MODEL_API_KEY", ""),
+        model=args.model or os.environ.get("CAREEROPS_MODEL_NAME", ""),
+    )
     if not client.is_enabled:
         print(f"Error: provider '{args.provider}' is not enabled.")
         sys.exit(1)

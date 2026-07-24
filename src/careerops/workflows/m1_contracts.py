@@ -9,8 +9,6 @@ DISCOVER_COMPANY_SOURCES_ACTIVITY = "careerops.m1.discover_company_sources"
 CRAWL_JOB_SOURCE_ACTIVITY = "careerops.m1.crawl_job_source"
 INGEST_POSTING_ACTIVITY = "careerops.m1.ingest_posting"
 PURGE_RAW_DOCUMENT_ACTIVITY = "careerops.m1.purge_raw_document"
-PERSIST_EVIDENCE_SNIPPET_ACTIVITY = "careerops.m1.persist_evidence_snippet"
-VERIFY_NO_DANGLING_REFS_ACTIVITY = "careerops.m1.verify_no_dangling_refs"
 
 
 class WorkflowPhase(StrEnum):

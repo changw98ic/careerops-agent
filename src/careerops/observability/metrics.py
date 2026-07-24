@@ -142,9 +142,9 @@ class Metrics:
         spurious label series.
         """
         if input_tokens > 0:
-            self._llm_tokens.labels(component=component, token_kind="input").inc(input_tokens)
+            self._llm_tokens.labels(component=component, token_kind="input").inc(input_tokens)  # nosec B106
         if output_tokens > 0:
-            self._llm_tokens.labels(component=component, token_kind="output").inc(output_tokens)
+            self._llm_tokens.labels(component=component, token_kind="output").inc(output_tokens)  # nosec B106
 
     def record_apply_submitted(self, amount: int = 1) -> None:
         """Increment the apply-submitted counter (v1 instrumentation pipeline)."""

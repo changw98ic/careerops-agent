@@ -1,21 +1,17 @@
 """Model client factory.
 
-Creates the appropriate ``StructuredModelClient`` for a named provider, reading
-connection config from the environment. ``disabled`` (the safe default) returns
-the ``DisabledModelAdapter``; ``xiaomi`` / ``zhipu`` return an
-``AnthropicCompatClient`` pointed at the provider's Anthropic-compatible endpoint.
+Creates the appropriate ``StructuredModelClient`` from user-supplied Settings.
+``disabled`` (the safe default) returns the ``DisabledModelAdapter``; any other
+value creates an ``AnthropicCompatClient`` pointed at the user's endpoint.
 
-Provider connection is read from environment variables (not the app ``Settings``
-startup gate, which keeps ``model_provider=disabled`` as the production-safe
-default per ADR 0006). A capability is only enabled when its ADR 0006 addendum
-records the privacy qualification.
+The user configures ``model_base_url``, ``model_api_key``, and ``model_name``
+in Settings (or via environment variables ``CAREEROPS_MODEL_BASE_URL``,
+``CAREEROPS_MODEL_API_KEY``, ``CAREEROPS_MODEL_NAME``).  No provider-specific
+hardcoding — any Anthropic-compatible endpoint works.
 """
 
 from __future__ import annotations
 
-import os
-
-from careerops.config import get_settings
 from careerops.model_gateway.anthropic_compat import (
     AnthropicCompatClient,
     AnthropicCompatConfig,
@@ -26,63 +22,43 @@ from careerops.model_gateway.base import (
     StructuredModelClient,
 )
 
-# provider name -> (base_url env, api_key env, model env)
-_PROVIDER_ENV: dict[str, tuple[str, str, str]] = {
-    "xiaomi": ("XIAOMI_BASE_URL", "XIAOMI_API_KEY", "XIAOMI_MODEL"),
-    "zhipu": ("ZHIPU_BASE_URL", "ZHIPU_API_KEY", "ZHIPU_MODEL"),
-}
-
 
 class ModelProviderNotConfigured(RuntimeError):
-    """Raised when a requested provider lacks required environment config."""
+    """Raised when a requested provider lacks required config."""
 
 
 def create_model_client(
     provider: str,
     *,
+    base_url: str = "",
+    api_key: str = "",
+    model: str = "",
     usage_recorder: LLMUsageRecorder | None = None,
 ) -> StructuredModelClient:
-    """Create a model client for the given provider name.
+    """Create a model client for the given provider.
 
-    ``disabled`` returns the safe DisabledModelAdapter. ``xiaomi``/``zhipu``
-    return an Anthropic-compatible client configured from the environment.
+    ``disabled`` returns the safe DisabledModelAdapter.  Any other value
+    creates an Anthropic-compatible client from the supplied ``base_url``,
+    ``api_key``, and ``model``.
 
-    When ``usage_recorder`` is provided, the created client records aggregate
-    LLM token counts via the recorder (ADR 0006: counts only, never content).
+    The caller (``runtime.py``) reads these values from ``Settings`` and
+    passes them in — this function has no Settings dependency.
     """
     if provider in ("", "disabled"):
         return DisabledModelAdapter()
 
-    env_names = _PROVIDER_ENV.get(provider)
-    if env_names is None:
-        raise ModelProviderNotConfigured(
-            f"unknown model provider '{provider}'; supported: "
-            f"{', '.join(['disabled', *_PROVIDER_ENV])}"
-        )
-
-    base_url_env, api_key_env, model_env = env_names
-    base_url = os.environ.get(base_url_env, "")
-    api_key = os.environ.get(api_key_env, "")
-    model = os.environ.get(model_env, "")
     missing = [
         name
         for name, value in (
-            (base_url_env, base_url),
-            (api_key_env, api_key),
-            (model_env, model),
+            ("base_url", base_url),
+            ("api_key", api_key),
+            ("model", model),
         )
         if not value
     ]
     if missing:
         raise ModelProviderNotConfigured(
-            f"provider '{provider}' is missing env config: {', '.join(missing)}"
-        )
-
-    settings = get_settings()
-    if not settings.model_qualification_artifact or not settings.model_qualification_version:
-        raise ModelProviderNotConfigured(
-            f"provider '{provider}' requires model_qualification_artifact and "
-            f"model_qualification_version to be set (ADR 0006 qualification)"
+            f"model_provider='{provider}' requires: {', '.join(missing)}"
         )
 
     return AnthropicCompatClient(

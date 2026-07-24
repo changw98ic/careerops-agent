@@ -39,7 +39,7 @@ def test_safe_defaults_are_loopback_and_capability_off() -> None:
         ({"database_url": "sqlite:///careerops.db"}, "PostgreSQL psycopg"),
         ({"redis_url": "http://redis:6379"}, "Redis URL"),
         ({"temporal_address": "https://temporal:7233"}, "host:port"),
-        ({"model_provider": "external"}, "privacy qualification"),
+        ({"model_provider": "external"}, "requires"),
         ({"google_oauth_enabled": True}, "M4 integration gate"),
         ({"external_writes_enabled": True}, "M5A side-effect gate"),
         ({"auto_send_enabled": True}, "M7 Release Qualification"),

@@ -10,16 +10,73 @@ Reddit and X are also crawled via ego-browser (direct API is blocked).
 
 from __future__ import annotations
 
+import ipaddress
 import json
+import logging
 import re
 import subprocess
 import sys
 import time
+import urllib.parse
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from careerops.adapters.job_sources import JsonLdAdapter, RawJobRecord
+
+logger = logging.getLogger(__name__)
+
+# --- SSRF validation constants ---
+_ALLOWED_SCHEMES = frozenset({"http", "https"})
+_BLOCKED_NETWORKS = (
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("198.18.0.0/15"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+)
+_METADATA_HOST = "169.254.169.254"
+
+
+def _is_safe_url(url: str) -> bool:
+    """Return True if *url* passes SSRF checks (scheme + hostname not private).
+
+    This is a lightweight pre-flight for URLs handed to ego-browser.  It checks:
+    1. Scheme is http or https.
+    2. Hostname is present.
+    3. Hostname is not the cloud-metadata endpoint.
+    4. If the hostname is a literal IP, it must not be in a private/reserved range.
+       Domain names are trusted (ego-browser resolves them itself).
+    """
+    try:
+        parts = urllib.parse.urlsplit(url)
+    except Exception:
+        return False
+
+    if parts.scheme.lower() not in _ALLOWED_SCHEMES:
+        return False
+
+    host = parts.hostname
+    if not host:
+        return False
+
+    if host == _METADATA_HOST:
+        return False
+
+    # If the host is a literal IP address, reject private/reserved ranges.
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        # Not a literal IP -- it's a domain name.  Allow it.
+        return True
+
+    return all(not (net.version == ip.version and ip in net) for net in _BLOCKED_NETWORKS)
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT = PROJECT_ROOT / "data" / f"crawl_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}"
@@ -95,6 +152,9 @@ def run_ego(script: str, timeout: int = 60) -> str:
 
 def ego_save_page(url: str, output_file: str, wait_seconds: int = 8) -> bool:
     """Open a URL in ego-browser and save the snapshot text to a file."""
+    if not _is_safe_url(url):
+        logger.warning("SSRF: rejected URL %s", url)
+        return False
     script = (
         f"const task = await useOrCreateTaskSpace('career-crawl'); "
         f"await openOrReuseTab('{url}', {{ wait: true, timeout: 30 }}); "
@@ -115,6 +175,9 @@ def ego_save_raw_html(url: str, output_file: str, wait_seconds: int = 8) -> bool
     Unlike ego_save_page which uses snapshotText() (accessibility tree),
     this captures the actual DOM including <script> tags needed for JSON-LD.
     """
+    if not _is_safe_url(url):
+        logger.warning("SSRF: rejected URL %s", url)
+        return False
     script = (
         f"const task = await useOrCreateTaskSpace('career-crawl'); "
         f"await openOrReuseTab('{url}', {{ wait: true, timeout: 30 }}); "

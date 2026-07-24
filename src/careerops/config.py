@@ -70,12 +70,12 @@ class Settings(BaseSettings):
     )
 
     model_provider: str = "disabled"
-    # Structural provenance for a future ADR 0006 qualification pilot. v1 keeps
-    # ``model_provider=disabled`` (the validator below still rejects any other
-    # value); these fields only record WHICH artifact/version qualified a model
-    # release, so a later pilot can cite them without widening the gate today.
-    model_qualification_artifact: str = ""
-    model_qualification_version: str = ""
+    # User-supplied LLM connection. When model_provider != "disabled", all three
+    # fields are required. The provider is any Anthropic-compatible endpoint
+    # (Xiaomi MiMo, Zhipu GLM, OpenAI, Anthropic, etc.).
+    model_base_url: str = ""
+    model_api_key: str = ""
+    model_name: str = ""
     google_oauth_enabled: bool = False
     external_writes_enabled: bool = False
     auto_send_enabled: bool = False
@@ -104,7 +104,19 @@ class Settings(BaseSettings):
         ):
             raise ValueError("public bind requires the bounded compose-loopback deployment mode")
         if self.model_provider != "disabled":
-            raise ValueError("model providers require an M2 privacy qualification")
+            missing = [
+                name
+                for name, value in (
+                    ("model_base_url", self.model_base_url),
+                    ("model_api_key", self.model_api_key),
+                    ("model_name", self.model_name),
+                )
+                if not value
+            ]
+            if missing:
+                raise ValueError(
+                    f"model_provider='{self.model_provider}' requires: {', '.join(missing)}"
+                )
         if self.google_oauth_enabled:
             raise ValueError("Google OAuth is unavailable before the M4 integration gate")
         if self.external_writes_enabled:

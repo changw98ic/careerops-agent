@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from uuid import UUID
 
 from fastapi import Depends, FastAPI
 
@@ -20,13 +21,67 @@ from careerops.application.dashboard import DashboardSnapshotProvider
 from careerops.application.ports.readiness import ReadinessProbe
 from careerops.auth.service import ConsoleAuthService
 from careerops.config import RuntimeEnvironment, Settings, get_settings
+from careerops.domain.applications import (
+    ApplicationPackage,
+    FollowUpReminder,
+    ResumeVersion,
+)
 from careerops.infrastructure.auth import create_console_auth_service
 from careerops.infrastructure.dashboard import RuntimeDashboardSnapshotProvider
+from careerops.infrastructure.memory_repos import InMemoryApplicationRepository
 from careerops.infrastructure.redis import RedisAuthRateLimiter
 from careerops.infrastructure.runtime import RuntimeResources
 from careerops.observability import Metrics
 from careerops.web import ConsoleWebSettings, install_console_web
+from careerops.web.jobs_ui import web_router as jobs_ui_router
 from careerops.web.matching_ui import router as matching_ui_router
+
+# ---------------------------------------------------------------------------
+# Protocol adapters for InMemoryApplicationRepository
+# ---------------------------------------------------------------------------
+# ApplicationService.__init__ expects four separate Protocol-typed repos,
+# each with a ``save`` method.  InMemoryApplicationRepository stores
+# everything in one class but renames the write methods to avoid
+# signature collisions (save_resume, save_package, save_follow_up).
+# These thin wrappers bridge the gap.
+
+
+class _ResumeRepoAdapter:
+    def __init__(self, repo: InMemoryApplicationRepository) -> None:
+        self._repo = repo
+
+    def find_latest_version(self, candidate_id: UUID) -> ResumeVersion | None:
+        return self._repo.find_latest_version(candidate_id)
+
+    def save(self, version: ResumeVersion) -> None:
+        self._repo.save_resume(version)
+
+
+class _PackageRepoAdapter:
+    def __init__(self, repo: InMemoryApplicationRepository) -> None:
+        self._repo = repo
+
+    def find_by_application(self, application_id: UUID) -> ApplicationPackage | None:
+        return self._repo.find_by_application(application_id)
+
+    def save(self, package: ApplicationPackage) -> None:
+        self._repo.save_package(package)
+
+
+class _FollowUpRepoAdapter:
+    def __init__(self, repo: InMemoryApplicationRepository) -> None:
+        self._repo = repo
+
+    def find_by_id(self, reminder_id: UUID) -> FollowUpReminder | None:
+        return self._repo.find_follow_up_by_id(reminder_id)
+
+    def find_active_by_application_and_rule(
+        self, application_id: UUID, rule_version: str
+    ) -> FollowUpReminder | None:
+        return self._repo.find_active_by_application_and_rule(application_id, rule_version)
+
+    def save(self, reminder: FollowUpReminder) -> None:
+        self._repo.save_follow_up(reminder)
 
 
 def create_app(
@@ -78,6 +133,31 @@ def create_app(
     app.state.readiness_probe = probe
     app.state.auth_service = auth_service
     app.state.metrics = metrics
+
+    # Wire API route repositories and services when using RuntimeResources.
+    # Routes gracefully degrade to empty results when these are absent, but
+    # wiring them here lets the REST endpoints return real data.
+    if isinstance(probe, RuntimeResources):
+        from careerops.application.applications import ApplicationService
+        from careerops.application.contacts import ContactService
+        from careerops.application.matching import (
+            EvidenceImportService,
+            MatchOrchestrator,
+        )
+
+        app.state.matching_repository = probe.matching_read_repo
+        app.state.evidence_import_service = EvidenceImportService(probe.matching_read_repo)
+        app.state.match_orchestrator = MatchOrchestrator(data_repository=probe.matching_read_repo)
+        app.state.job_read_repository = probe.job_read_repo
+        app.state.contact_repository = probe.contact_repo
+        app.state.contact_service = ContactService(probe.contact_repo)
+        app.state.application_repository = probe.application_repo
+        app.state.application_service = ApplicationService(
+            application_repo=probe.application_repo,
+            resume_repo=_ResumeRepoAdapter(probe.application_repo),
+            package_repo=_PackageRepoAdapter(probe.application_repo),
+            follow_up_repo=_FollowUpRepoAdapter(probe.application_repo),
+        )
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(MetricsMiddleware, metrics=metrics)
     install_error_handlers(app)
@@ -98,7 +178,8 @@ def create_app(
     app.include_router(jobs_router, dependencies=[Depends(require_api_auth)])
     app.include_router(matching_router, dependencies=[Depends(require_api_auth)])
     app.include_router(applications_router, dependencies=[Depends(require_api_auth)])
-    app.include_router(matching_ui_router)
+    app.include_router(jobs_ui_router, dependencies=[Depends(require_api_auth)])
+    app.include_router(matching_ui_router, dependencies=[Depends(require_api_auth)])
 
     if auth_service is not None:
         if web_settings is None:

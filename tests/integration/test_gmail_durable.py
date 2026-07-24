@@ -8,9 +8,8 @@ Run with: ``uv run python -m pytest tests/integration/test_gmail_durable.py``
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 from collections.abc import Iterator
+from datetime import UTC, datetime
 
 import pytest
 import sqlalchemy as sa

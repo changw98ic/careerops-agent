@@ -19,6 +19,7 @@ dependencies = [
     "python-multipart>=0.0.20,<1",
     "jsonschema>=4,<5",
     "langgraph==1.2.9",
+    "langgraph-checkpoint-postgres>=3,<4",
 ]
 
 [project.scripts]

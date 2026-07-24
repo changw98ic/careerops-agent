@@ -34,11 +34,11 @@ class CountingSink:
     starts: list[SmokeStartCommand] = field(default_factory=list)
     completions: list[SmokeCompletionCommand] = field(default_factory=list)
 
-    async def record_started(self, command: SmokeStartCommand) -> str:  # type: ignore[reportArgumentType]
+    async def record_started(self, command: SmokeStartCommand) -> str:  # pyright: ignore[reportArgumentType]
         self.starts.append(command)
         return f"started:{command.operation_id}"
 
-    async def record_completed(self, command: SmokeCompletionCommand) -> str:  # type: ignore[reportArgumentType]
+    async def record_completed(self, command: SmokeCompletionCommand) -> str:  # pyright: ignore[reportArgumentType]
         self.completions.append(command)
         return f"completed:{command.idempotency_key}"
 

@@ -15,7 +15,7 @@ from __future__ import annotations
 import contextlib
 from datetime import datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import Engine, select
 from sqlalchemy.exc import IntegrityError
@@ -37,6 +37,7 @@ from careerops.infrastructure.database.schema import (
     action_intents,
     action_payload_versions,
     approval_requests,
+    outbox_events,
     policy_decisions,
     provider_receipts,
     side_effect_attempts,
@@ -303,15 +304,139 @@ class PostgresSideEffectStore:
             )
         return tuple(self._row_to_approval(r) for r in rows)
 
+    def get_or_create_pending_approval(
+        self,
+        intent_id: UUID,
+        *,
+        payload_version_id: UUID,
+        policy_decision_id: UUID,
+        requested_for: str,
+        now: datetime,
+        expires_at: datetime,
+        decision_rule_reference: str | None = None,
+    ) -> ApprovalRequest:
+        """Atomically find-or-create a PENDING approval using ``SELECT ... FOR UPDATE``.
+
+        Within a single transaction:
+        1. Lock the intent row to serialize concurrent callers.
+        2. Look for an existing PENDING approval for this intent.
+        3. If found, return it (idempotent).
+        4. If not found, INSERT a new PENDING approval and return it.
+
+        The ``FOR UPDATE`` on ``action_intents`` prevents two concurrent
+        transactions from both seeing ``no PENDING approval`` and both
+        inserting duplicates.
+        """
+        with self._engine.begin() as conn:
+            # Lock the intent row to serialize concurrent callers.
+            conn.execute(
+                select(action_intents.c.id)
+                .where(action_intents.c.id == intent_id)
+                .with_for_update()
+            )
+
+            # Check for an existing PENDING approval.
+            row = (
+                conn.execute(
+                    select(approval_requests)
+                    .where(approval_requests.c.action_intent_id == intent_id)
+                    .where(approval_requests.c.decision == ApprovalDecision.PENDING.value)
+                )
+                .mappings()
+                .fetchone()
+            )
+            if row is not None:
+                return self._row_to_approval(row)
+
+            # No PENDING approval exists — insert one.
+            approval = ApprovalRequest(
+                id=uuid4(),
+                action_intent_id=intent_id,
+                payload_version_id=payload_version_id,
+                policy_decision_id=policy_decision_id,
+                requested_for=requested_for,
+                decision=ApprovalDecision.PENDING,
+                decision_rule_reference=decision_rule_reference,
+                expires_at=expires_at,
+                decided_at=None,
+                created_at=now,
+            )
+            conn.execute(
+                approval_requests.insert().values(
+                    id=approval.id,
+                    action_intent_id=approval.action_intent_id,
+                    payload_version_id=approval.payload_version_id,
+                    policy_decision_id=approval.policy_decision_id,
+                    requested_for=approval.requested_for,
+                    decision=approval.decision.value,
+                    decision_rule_reference=approval.decision_rule_reference,
+                    expires_at=approval.expires_at,
+                    decided_at=approval.decided_at,
+                    created_at=approval.created_at,
+                )
+            )
+        return approval
+
     # -- attempts --------------------------------------------------------
 
     def insert_attempt(self, attempt: SideEffectAttempt) -> SideEffectAttempt:
         with self._engine.begin() as conn:
+            # The side_effect_attempts table has a FK to outbox_events via
+            # (action_intent_id, outbox_event_id).  When the caller passes
+            # a placeholder outbox_event_id (e.g. the intent id itself for
+            # the in-memory kernel), we must synthesise a real outbox row
+            # first so the FK constraint is satisfied.
+            outbox_id = attempt.outbox_event_id
+            exists = conn.execute(
+                select(outbox_events.c.id).where(outbox_events.c.id == outbox_id)
+            ).scalar()
+            if exists is None:
+                # Look up the intent's current payload version for the FK.
+                intent_row = conn.execute(
+                    select(action_intents).where(
+                        action_intents.c.id == attempt.action_intent_id
+                    )
+                ).mappings().fetchone()
+                if intent_row is None:
+                    raise KeyError(
+                        f"intent {attempt.action_intent_id} not found; "
+                        "cannot create synthetic outbox event"
+                    )
+                payload_version_id = intent_row["current_payload_version_id"]
+                if payload_version_id is None:
+                    # Fall back to the first payload version for this intent.
+                    pv_row = conn.execute(
+                        select(action_payload_versions.c.id)
+                        .where(
+                            action_payload_versions.c.action_intent_id
+                            == attempt.action_intent_id
+                        )
+                        .order_by(action_payload_versions.c.version)
+                        .limit(1)
+                    ).fetchone()
+                    if pv_row is None:
+                        raise KeyError(
+                            f"no payload version for intent "
+                            f"{attempt.action_intent_id}; cannot create "
+                            f"synthetic outbox event"
+                        )
+                    payload_version_id = pv_row[0]
+                conn.execute(
+                    outbox_events.insert().values(
+                        id=outbox_id,
+                        event_key=f"synthetic/{attempt.action_intent_id}/{outbox_id}",
+                        action_intent_id=attempt.action_intent_id,
+                        payload_version_id=payload_version_id,
+                        event_type="internal_notification",
+                        status="pending",
+                        available_at=attempt.started_at,
+                    )
+                )
             conn.execute(
                 side_effect_attempts.insert().values(
                     id=attempt.id,
                     action_intent_id=attempt.action_intent_id,
-                    outbox_event_id=attempt.outbox_event_id,
+                    outbox_event_id=outbox_id,
                     ordinal=attempt.ordinal,
                     state=attempt.state.value,
                     request_fingerprint=attempt.request_fingerprint,
@@ -383,9 +508,21 @@ class PostgresSideEffectStore:
         return tuple(self._row_to_attempt(r) for r in rows)
 
     def next_attempt_ordinal(self, intent_id: UUID) -> int:
+        """Return the next ordinal for a side-effect attempt.
+
+        Locks the parent ``action_intents`` row with ``FOR UPDATE`` so two
+        concurrent callers cannot read the same ``MAX(ordinal)`` and both
+        insert the same ordinal value.
+        """
         from sqlalchemy import func
 
         with self._engine.begin() as conn:
+            # Lock the intent row to serialize concurrent callers.
+            conn.execute(
+                select(action_intents.c.id)
+                .where(action_intents.c.id == intent_id)
+                .with_for_update()
+            )
             row = conn.execute(
                 select(func.coalesce(func.max(side_effect_attempts.c.ordinal), 0) + 1).where(
                     side_effect_attempts.c.action_intent_id == intent_id

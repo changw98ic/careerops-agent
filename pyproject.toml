@@ -20,6 +20,7 @@ dependencies = [
     "jsonschema>=4,<5",
     "langgraph==1.2.9",
     "langgraph-checkpoint-postgres>=3,<4",
+    "cryptography>=45,<46",
 ]
 
 [project.scripts]
@@ -73,5 +74,5 @@ select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
 pythonVersion = "3.12"
 typeCheckingMode = "basic"
 include = ["src", "tests"]
-exclude = [".venv"]
+exclude = [".venv", "venv"]
 strict = ["src"]

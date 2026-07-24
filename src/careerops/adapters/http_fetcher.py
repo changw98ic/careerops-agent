@@ -92,6 +92,8 @@ _BLOCKED_NETWORKS: Final[tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ..
     ipaddress.ip_network("172.16.0.0/12"),
     ipaddress.ip_network("192.168.0.0/16"),
     ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("198.18.0.0/15"),
     ipaddress.ip_network("::1/128"),
     ipaddress.ip_network("fc00::/7"),
     ipaddress.ip_network("fe80::/10"),
@@ -101,12 +103,13 @@ _USER_AGENT: Final[str] = "careerops-http-fetcher/1.0"
 _CHUNK_SIZE: Final[int] = 8192
 
 # Module-level mutable runtime config (lowercase: not true constants).
-# Rate limiting, optional host allowlist, the per-domain last-fetch map, and
-# the per-domain circuit-breaker gate.
+# Rate limiting, optional host allowlist, the per-domain last-fetch map, the
+# per-domain circuit-breaker gate, and the DNS-rebinding resolution cache.
 _last_fetch: dict[str, float] = {}
 _min_domain_interval: float = 1.0
 _host_allowlist: frozenset[str] | None = None
 _breaker: BreakerGate = _PermissiveBreaker()
+_dns_cache: dict[str, frozenset[str]] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,8 +212,18 @@ def _validate_url(url: str) -> None:
         raise SSRFError("cloud metadata endpoint is blocked")
     if _host_allowlist is not None and host not in _host_allowlist:
         raise SSRFError(f"host {host!r} is not in the allowlist")
-    for ip_str in _resolve_host(host):
+    resolved = _resolve_host(host)
+    for ip_str in resolved:
         _reject_if_blocked(ip_str, host=host)
+    # DNS-rebinding re-check: reject if resolved IPs changed between calls.
+    current = frozenset(resolved)
+    cached = _dns_cache.get(host)
+    _dns_cache[host] = current
+    if cached is not None and current != cached:
+        raise SSRFError(
+            f"DNS rebinding detected for host {host!r}: "
+            f"IPs changed from {sorted(cached)} to {sorted(current)}"
+        )
 
 
 def _rate_limit(host: str) -> None:

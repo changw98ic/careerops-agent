@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 
+from careerops.config import get_settings
 from careerops.model_gateway.anthropic_compat import (
     AnthropicCompatClient,
     AnthropicCompatConfig,
@@ -67,6 +68,13 @@ def create_model_client(provider: str) -> StructuredModelClient:
     if missing:
         raise ModelProviderNotConfigured(
             f"provider '{provider}' is missing env config: {', '.join(missing)}"
+        )
+
+    settings = get_settings()
+    if not settings.model_qualification_artifact or not settings.model_qualification_version:
+        raise ModelProviderNotConfigured(
+            f"provider '{provider}' requires model_qualification_artifact and "
+            f"model_qualification_version to be set (ADR 0006 qualification)"
         )
 
     return AnthropicCompatClient(

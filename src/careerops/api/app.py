@@ -3,9 +3,10 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 
 from careerops import __version__
+from careerops.api.auth_dependency import require_api_auth
 from careerops.api.errors import install_error_handlers
 from careerops.api.metrics_middleware import MetricsMiddleware
 from careerops.api.middleware import RequestIdMiddleware
@@ -69,6 +70,7 @@ def create_app(
     )
     app.state.settings = resolved
     app.state.readiness_probe = probe
+    app.state.auth_service = auth_service
     metrics = Metrics(version=__version__, settings=resolved)
     app.state.metrics = metrics
     app.add_middleware(RequestIdMiddleware)
@@ -76,20 +78,30 @@ def create_app(
     install_error_handlers(app)
     app.include_router(health_router)
     app.include_router(metrics_router)
-    app.include_router(jobs_router)
-    app.include_router(matching_router)
-    app.include_router(matching_ui_router)
-    app.include_router(applications_router)
+
+    # Build web_settings once; needed for both console web and API auth.
+    web_settings: ConsoleWebSettings | None = None
     if auth_service is not None:
-        if resolved_dashboard_provider is None:
-            raise ValueError(
-                "a dashboard provider is required when console authentication is installed"
-            )
         web_settings = ConsoleWebSettings(
             allowed_hosts=frozenset(resolved.console_allowed_hosts),
             allowed_origins=frozenset(resolved.console_allowed_origins),
             cookie_secure=resolved.console_cookie_secure,
         )
+        app.state.web_settings = web_settings
+
+    # Protected API routers — require session cookie + CSRF header.
+    app.include_router(jobs_router, dependencies=[Depends(require_api_auth)])
+    app.include_router(matching_router, dependencies=[Depends(require_api_auth)])
+    app.include_router(applications_router, dependencies=[Depends(require_api_auth)])
+    app.include_router(matching_ui_router)
+
+    if auth_service is not None:
+        if web_settings is None:
+            raise ValueError("web_settings is required when console authentication is installed")
+        if resolved_dashboard_provider is None:
+            raise ValueError(
+                "a dashboard provider is required when console authentication is installed"
+            )
         install_console_web(app, auth_service, resolved_dashboard_provider, web_settings)
         # Review endpoint (plan v0.4 §2.7 / §3 Stage 3): mounted when the
         # runtime actually compiled the graph (durable in PRODUCTION via

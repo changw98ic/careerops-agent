@@ -17,6 +17,8 @@ import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
 from careerops.domain.email import (
     ALLOWED_GMAIL_SCOPES,
     ScopeViolationError,
@@ -154,24 +156,24 @@ def decrypt_token(
 
 
 def _aes_gcm_encrypt(key: bytes, nonce: bytes, plaintext: bytes) -> bytes:
-    """AES-256-GCM encrypt. Requires cryptography library in production."""
-    # Placeholder: in production, use cryptography.hazmat or equivalent.
-    # The structural invariant is enforced: plaintext never stored.
+    """AES-256-GCM encrypt. Returns ciphertext with appended 16-byte auth tag."""
     if len(key) != 32:
         raise ValueError("envelope key must be 32 bytes for AES-256")
     if len(nonce) != 12:
         raise ValueError("nonce must be 12 bytes for GCM")
-    # XOR-based placeholder for structural testing only
-    return bytes(b ^ key[i % 32] for i, b in enumerate(plaintext))
+    aesgcm = AESGCM(key)
+    # associated_data binds the ciphertext to context (empty for now)
+    return aesgcm.encrypt(nonce, plaintext, associated_data=None)
 
 
 def _aes_gcm_decrypt(key: bytes, nonce: bytes, ciphertext: bytes) -> bytes:
-    """AES-256-GCM decrypt. Requires cryptography library in production."""
+    """AES-256-GCM decrypt. Raises on tampered ciphertext or wrong key."""
     if len(key) != 32:
         raise ValueError("envelope key must be 32 bytes for AES-256")
     if len(nonce) != 12:
         raise ValueError("nonce must be 12 bytes for GCM")
-    return bytes(b ^ key[i % 32] for i, b in enumerate(ciphertext))
+    aesgcm = AESGCM(key)
+    return aesgcm.decrypt(nonce, ciphertext, associated_data=None)
 
 
 def assert_no_send_capability() -> None:

@@ -734,6 +734,24 @@ policy_decisions = sa.Table(
     sa.Column("payload_hash", sa.String(64), nullable=False),
     sa.Column("expires_at", sa.DateTime(timezone=True)),
     sa.Column(
+        "trusted_facts",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "evidence_refs",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "untrusted_claims",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
         "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     ),
     sa.CheckConstraint(

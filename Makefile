@@ -66,7 +66,7 @@ verify-m1: verify-m1-contracts
 
 verify: verify-m1-contracts
 	uv lock --check
-	uv run ruff format --check .
-	uv run ruff check .
-	uv run pyright
-	uv run python -m pytest --cov=careerops --cov-report=term-missing
+	uv run --no-sync ruff format --check .
+	uv run --no-sync ruff check .
+	uv run --no-sync pyright
+	uv run --no-sync python -m pytest --cov=careerops --cov-report=term-missing

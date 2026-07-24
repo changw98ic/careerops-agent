@@ -18,6 +18,7 @@ import pytest
 
 from careerops.adapters import http_fetcher
 from careerops.adapters.http_fetcher import (
+    CircuitOpenError,
     FetchedResponse,
     FetchError,
     SSRFError,
@@ -64,6 +65,7 @@ def _no_real_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(http_fetcher, "_min_domain_interval", 0.0)
     monkeypatch.setattr(http_fetcher, "_last_fetch", {})
     monkeypatch.setattr(http_fetcher, "_sleep", lambda _s: None)
+    monkeypatch.setattr(http_fetcher, "_dns_cache", {})
 
 
 def _stub_open_with_fake(fake: _FakeResponse, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -253,3 +255,156 @@ class TestRateLimit:
         fetch("http://example.com/a")
         fetch("http://example.com/a")
         assert called == []
+
+
+class TestCircuitBreakerInFetch:
+    """Circuit breaker integration: open circuit rejects, recovery works."""
+
+    def test_open_circuit_rejects_request(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When breaker.allow returns False, fetch raises CircuitOpenError."""
+        from careerops.orchestration.circuit_breaker import (
+            CircuitBreaker,
+            CircuitBreakerConfig,
+        )
+
+        # Use a breaker with threshold=1 so one failure opens the circuit.
+        breaker = CircuitBreaker(
+            CircuitBreakerConfig(failure_threshold=1, recovery_timeout_seconds=30.0)
+        )
+        monkeypatch.setattr(http_fetcher, "_breaker", breaker)
+        _stub_open_with_fake(_FakeResponse(b"ok"), monkeypatch)
+
+        # Trigger a failure to open the circuit.
+        monkeypatch.setattr(http_fetcher, "_resolve_host", lambda _host: ("10.0.0.1",))
+        with pytest.raises(SSRFError):
+            fetch("http://example.com/x")
+        # SSRFError counts as nothing for breaker (no record_failure called).
+        # Manually trip it.
+        breaker.record_failure("example.com")
+        assert breaker.state("example.com").value == "open"
+
+        # Now restore valid resolution but circuit is open.
+        monkeypatch.setattr(http_fetcher, "_resolve_host", lambda _host: ("93.184.216.34",))
+        with pytest.raises(CircuitOpenError, match="circuit breaker open"):
+            fetch("http://example.com/x")
+
+    def test_circuit_breaker_recovery(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """After recovery_timeout, half-open admits one probe; success closes it."""
+        from careerops.orchestration.circuit_breaker import (
+            CircuitBreaker,
+            CircuitBreakerConfig,
+        )
+
+        clock_time = 1000.0
+        nonlocal_clock: list[float] = [clock_time]
+
+        def fake_clock() -> float:
+            return nonlocal_clock[0]
+
+        breaker = CircuitBreaker(
+            CircuitBreakerConfig(failure_threshold=1, recovery_timeout_seconds=10.0),
+            clock=fake_clock,
+        )
+        monkeypatch.setattr(http_fetcher, "_breaker", breaker)
+        _stub_open_with_fake(_FakeResponse(b"ok"), monkeypatch)
+
+        # Trip the circuit.
+        breaker.record_failure("example.com")
+        assert breaker.state("example.com").value == "open"
+
+        # Still open before recovery timeout.
+        nonlocal_clock[0] = 1005.0
+        with pytest.raises(CircuitOpenError):
+            fetch("http://example.com/x")
+
+        # Advance past recovery timeout -> HALF_OPEN, probe allowed.
+        nonlocal_clock[0] = 1011.0
+        result = fetch("http://example.com/x")
+        assert result.status_code == 200
+        # Success recorded -> circuit closed.
+        assert breaker.state("example.com").value == "closed"
+
+
+class TestSSRFBlocksNewRanges:
+    """SSRF blocks CGNAT (100.64.0.0/10) and benchmarking (198.18.0.0/15)."""
+
+    def test_cgnat_100_64_rejected(self) -> None:
+        with pytest.raises(SSRFError, match="private/reserved"):
+            fetch("http://100.64.0.1/")
+
+    def test_cgnat_100_127_rejected(self) -> None:
+        with pytest.raises(SSRFError, match="private/reserved"):
+            fetch("http://100.127.255.254/")
+
+    def test_benchmarking_198_18_rejected(self) -> None:
+        with pytest.raises(SSRFError, match="private/reserved"):
+            fetch("http://198.18.0.1/")
+
+    def test_benchmarking_198_19_rejected(self) -> None:
+        with pytest.raises(SSRFError, match="private/reserved"):
+            fetch("http://198.19.255.254/")
+
+    def test_cgnat_host_resolving_to_range_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(http_fetcher, "_resolve_host", lambda _host: ("100.64.1.1",))
+        with pytest.raises(SSRFError, match="private/reserved"):
+            fetch("http://cgnat.example.com/")
+
+    def test_benchmarking_host_resolving_to_range_rejected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(http_fetcher, "_resolve_host", lambda _host: ("198.18.5.5",))
+        with pytest.raises(SSRFError, match="private/reserved"):
+            fetch("http://bench.example.com/")
+
+
+class TestDNSRebinding:
+    """DNS-rebinding detection: reject when resolved IPs change between calls."""
+
+    def test_dns_rebinding_detected_on_ip_change(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """First resolve → public IP; second resolve → different public IP → blocked."""
+        call_count = 0
+
+        def resolving_host(host: str) -> tuple[str, ...]:
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 1:
+                return ("93.184.216.34",)
+            return ("93.184.216.99",)
+
+        monkeypatch.setattr(http_fetcher, "_resolve_host", resolving_host)
+        # First call succeeds and caches IPs.
+        fake = _FakeResponse(b"ok")
+        monkeypatch.setattr(http_fetcher, "_open", lambda _r, *, timeout=0.0: fake)
+        fetch("http://rebind.example.com/")
+
+        # Second call with different IPs triggers rebinding detection.
+        with pytest.raises(SSRFError, match="DNS rebinding"):
+            fetch("http://rebind.example.com/")
+
+    def test_dns_consistent_resolution_allowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Same IPs on subsequent calls → no rebinding error."""
+        monkeypatch.setattr(http_fetcher, "_resolve_host", lambda _h: ("93.184.216.34",))
+        fake = _FakeResponse(b"ok")
+        monkeypatch.setattr(http_fetcher, "_open", lambda _r, *, timeout=0.0: fake)
+        fetch("http://stable.example.com/")
+        result = fetch("http://stable.example.com/")
+        assert result.status_code == 200
+
+    def test_dns_rebinding_multi_ip_set_change(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """IP set changes even if one IP overlaps → blocked."""
+        call_count = 0
+
+        def resolving_host(host: str) -> tuple[str, ...]:
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 1:
+                return ("93.184.216.34", "93.184.216.35")
+            return ("93.184.216.34", "93.184.216.99")
+
+        monkeypatch.setattr(http_fetcher, "_resolve_host", resolving_host)
+        fake = _FakeResponse(b"ok")
+        monkeypatch.setattr(http_fetcher, "_open", lambda _r, *, timeout=0.0: fake)
+        fetch("http://multi.example.com/")
+
+        with pytest.raises(SSRFError, match="DNS rebinding"):
+            fetch("http://multi.example.com/")

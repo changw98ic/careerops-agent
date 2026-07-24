@@ -406,6 +406,88 @@ class SideEffectKernel:
         store.insert_approval(approval)
         return approval
 
+    def get_or_create_pending_approval(
+        self,
+        intent_id: UUID,
+        *,
+        requested_for: str,
+        now: datetime,
+        decision_rule_reference: str | None = None,
+    ) -> ApprovalRequest:
+        """Atomically return the single PENDING approval for an intent.
+
+        LangGraph ``review_gate`` resumes by re-running the whole node, so the
+        pre-interrupt side effect (approval request) MUST be idempotent. A simple
+        ``find_pending + request_approval`` sequence races between concurrent
+        resumes; this method performs the find-then-create under ``self._lock``
+        so the same intent can never accumulate two PENDING approvals.
+
+        If a PENDING approval already exists for ``intent_id`` (regardless of
+        ``requested_for``), it is returned as-is. Owner / expiry / decision
+        re-validation happens at decision time in ``decide_approval``.
+
+        Policy rules are unchanged: the underlying ``request_approval`` still
+        rejects intents without a non-DENY policy decision.
+        """
+        with self._lock:
+            store = self._store
+            for approval in store.list_approvals(intent_id):
+                if approval.decision is ApprovalDecision.PENDING:
+                    return approval
+            return self.request_approval(
+                intent_id,
+                requested_for=requested_for,
+                now=now,
+                decision_rule_reference=decision_rule_reference,
+            )
+
+    def decide_approval(
+        self,
+        approval_id: UUID,
+        *,
+        action: str,
+        requested_for: str,
+        now: datetime,
+        decision_rule_reference: str | None = None,
+    ) -> ApprovalRequest:
+        """Idempotently decide an approval.
+
+        Re-validates owner (``requested_for`` must match the approval's
+        ``requested_for``) and terminal state on every call:
+
+        - If the approval is already decided, the existing record is returned
+          unchanged. Repeat decisions do not mutate state or re-fire audit.
+        - If ``requested_for`` does not match, ``ApprovalInvalidError`` is
+          raised (cross-user decision attempt).
+        - If expired, the existing ``approve``/``reject`` path raises
+          ``ApprovalInvalidError`` exactly as a first-time decision would.
+
+        ``action`` must be ``"approve"`` or ``"reject"``. ``"edit"`` is a
+        transport-level concern handled in the orchestration layer (it rejects
+        the current approval and re-proposes); the kernel only sees the
+        resulting reject.
+        """
+        with self._lock:
+            store = self._store
+            approval = store.get_approval(approval_id)
+            if approval.requested_for != requested_for:
+                raise ApprovalInvalidError("requested_for does not match approval owner")
+            if approval.decision is not ApprovalDecision.PENDING:
+                return approval
+            if action == "approve":
+                return self.approve(
+                    approval_id,
+                    now=now,
+                    decision_rule_reference=decision_rule_reference,
+                )
+            if action == "reject":
+                return self.reject(
+                    approval_id,
+                    now=now,
+                    decision_rule_reference=decision_rule_reference,
+                )
+            raise SideEffectError(f"unknown approval action: {action!r}")
+
     def approve(
         self,
         approval_id: UUID,

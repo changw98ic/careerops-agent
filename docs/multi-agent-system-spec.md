@@ -247,39 +247,60 @@ flowchart LR
 
 ---
 
-## 8. 实现状态（截至 2026-07-23）
+## 8. 实现状态（截至 2026-07-24）
 
 | 模块 | 状态 | 说明 / 证据 |
 |------|------|------|
 | 职位采集（ATS + 浏览器 + Reddit/X） | ✅ 已实现 | 多源爬取、聚合、结构化；`scripts/crawl_*.py`、`data/crawl_*/` 产物 |
-| 采集去重 | 🟡 部分 | 确定性 key 去重（source ID / URL / company+title）已实现；**语义去重未实现**（见 §3.1） |
-| 招聘联系方式提取 | ✅ 已实现 | `scripts/extract_contacts.py`，按邮箱去重 + provenance |
-| 简历分析（确定性技能提取） | ✅ 已实现 | `scripts/resume_review.py` |
-| LLM 网关端口 + disabled 适配器 | ✅ 已实现 | `model_gateway/base.py`（Protocol + dataclass 契约） |
-| LLM 接入（Anthropic 兼容） | ✅ 已实现 | `anthropic_compat.py`；小米 MiMo 真实调用验证 |
-| schema 强制校验 | ❌ 缺口 | `schema_name` 仅 prompt 提示，`_extract_json` 只验 JSON 合法性、不校验字段（见 §4.1） |
-| LLM 岗位匹配 | 🟡 部分 | `application/llm_matching.py` 服务已建；但**爬虫未抓 JD 详情**（当前正文覆盖率待 fixture manifest 固化，历史 `7191` 不作为当前基线），模型仅收到 title/company/location，真实调用报 `model returned no text content`。需先补 detail parser 详情抓取（见 §9） |
-| 邮件发送链路（kernel→审阅→批量→回执） | ✅ 已实现 | `side_effect_kernel.py`，测试邮件真实收到 |
-| HITL 审核（approval state + expiration） | ✅ 已实现 | side-effect kernel + dashboard `pending_approvals` |
-| 邮件 Agent（面试邀请识别 + 信息提取） | ⏳ 待建 | M4 有邮件分类基础，未串成完整流程 |
-| 多 Agent 编排（LangGraph） | 🎯 目标 | **未引入依赖**；当前为 scripts 模块，待 LangGraph 状态图 + interrupt 审核 |
-| 定向过滤（remote/方向/地区/薪资） | ⏳ 待建 | 当前采集宽泛 |
-| 运维可观测性 | ✅ 已实现 | `observability/metrics.py`（operations / http / capability） |
-| 业务质量指标（匹配准确率、LLM 成本） | ⏳ 待建 | 见 §11.3 |
+| 采集去重 | 🟡 部分 | 确定性 key 去重已实现；**语义去重未实现**（见 §3.1） |
+| 招聘联系方式提取 | ✅ 已实现 | `application/contact_extraction.py`（上提自 scripts），按邮箱去重 + provenance |
+| 简历分析 | ✅ 已实现 | `application/resume_analysis.py`（上提自 scripts） |
+| LLM 网关 + disabled 适配器 | ✅ 已实现 | `model_gateway/base.py`（Protocol + dataclass 契约） |
+| LLM 接入（Anthropic 兼容） | ✅ 已实现 | `anthropic_compat.py`；MiMo 真实调用验证 |
+| **schema 强制校验** | ✅ 已实现 | `StructuredModelRequest.schema` + jsonschema 校验 + 一次修复（`anthropic_compat._validate_schema`） |
+| **LLM 岗位匹配** | ✅ 已实现 | `application/llm_matching.py`；JD 正文从 adapter `fetch_job` 获取（Stage 0 detail parser） |
+| 邮件发送链路 | ✅ 已实现 | `side_effect_kernel.py` + `GmailSender`，测试邮件真实收到 |
+| HITL 审核 | ✅ 已实现 | side-effect kernel + `get_or_create_pending_approval` + `decide_approval`（原子/幂等）+ LangGraph `review_gate` interrupt |
+| 邮件 Agent（面试邀请识别） | ⏳ 待建 | M4 有邮件分类基础，未串成完整流程 |
+| **多 Agent 编排（LangGraph）** | ✅ 已实现 | `CareerOpsState` + 8 节点 `StateGraph` + `review_gate` interrupt + `CapabilityResolver` + conversions/filter（Stage 1-3） |
+| **review endpoint** | ✅ 已实现 | `api/routes/review.py`（cookie+CSRF+owner+rate-limit）；PRODUCTION guard |
+| 定向过滤 | ✅ 已实现 | `orchestration/filter_node.py`（remote/方向/地区/薪资） |
+| 运维可观测性 | ✅ 已实现 | `metrics.py`（operations/http/capability） |
+| **429 退避 + circuit breaker** | ✅ 已实现 | `anthropic_compat` Retry-After + `circuit_breaker.py`（failure=5 / recovery=30s / half-open=1） |
+| **LLM token 聚合** | ✅ 已实现 | `metrics.py` careerops_llm_tokens_total（ADR 0006：只记聚合，不记内容） |
+| **OAuth AES-GCM** | ✅ 已实现 | `google_oauth.py` 用 `cryptography` AES-256-GCM 替换 XOR 占位 |
+| **factory qualification gate** | ✅ 已实现 | `factory.py` 加 `model_qualification_artifact/version` 运行时门控 |
+| **API 认证统一** | ✅ 已实现 | `auth_dependency.py`（cookie+CSRF）挂载 jobs/matching/applications |
+| **kernel Postgres 化** | ✅ 已实现 | `side_effect_postgres.py`（SELECT FOR UPDATE 原子）+ migration 0010 |
+| **PostgresSaver** | ✅ 已实现 | `langgraph` schema migration 0011 + `from_conn_string`/`setup` |
+| **Temporal M1 通电** | ✅ 已实现 | `m1_crawl_sink.py`（RealCrawlActivitySink）+ worker 注册 M1 |
+| **GmailSideEffectProvider** | ✅ 已实现 | `gmail_side_effect_provider.py`（GmailSender→SideEffectProvider） |
+| 业务质量指标 | ⏳ 待建 | apply→interview 转化（数据依赖） |
 
 ---
 
-## 9. 后续规划（按优先级）
+## 9. 已知限制与待办
 
-1. **补 detail parser 详情抓取**：采集 Agent 当前只做 list（标题/地点/URL），未抓职位详情页 JD 正文（覆盖率待 `tests/fixtures/adapter_manifest.json` 固化，历史 `7191` 不作为当前基线）。这是 LLM 匹配成立的前提——没有 JD，语义匹配名不副实。用受 SSRF/allowlist 约束的 HTTP fetcher 抓详情页并回填 `raw_data.description`。
-2. **补 schema 强制校验**：`StructuredModelClient` 返回前用 jsonschema / pydantic 校验 `result`，堵 §4.1 缺口。
-3. **LangGraph 多 Agent 编排**：引入依赖，定义 `CareerOpsState`（草案见 §9.1），串采集/简历/匹配/邮件，`interrupt_before` 接审核门。
-4. **邮件 Agent 完整化**：面试邀请识别 + 时间/地点/链接提取 + 回复草稿。
-5. **定向过滤**：按 remote/方向/地区/薪资筛选采集结果与联系方式。
-6. **语义去重**：SimHash/MinHash + 语义候选（仅提议，人工合并）。
-7. **错误处理矩阵补全**：见 §11.2，补 LLM rate-limit 退避、爬虫 circuit breaker、outbox 重试上限。
-8. **业务质量指标**：匹配准确率（apply→interview 转化）、LLM token 聚合计数（受 ADR 0006 约束，不记内容）。
-9. **LLM 资格化**：补 ADR 0006 附录，记录小米 MiMo 隐私资格。
+### v1 已知限制
+
+- **review_gate 并发**：approval 创建/ordinal 用进程内 RLock（kernel），多进程下可能重复（v1 单进程 OK；v1.1 用 Postgres `SELECT FOR UPDATE` 解决）。
+- **GmailSideEffectProvider 幂等**：内存 `_sent` dict（`gmail_side_effect_provider.py:48`），进程重启后失效（v1 不真发信；v1.1 用 durable store）。
+- **Temporal M1 `ingest_posting` stub**（`m1_crawl_sink.py:99`）：返回 `is_new_posting=True` 不写 DB（v1 采集走 LangGraph 节点，不走 Temporal ingest）。
+- **`crawl_full.py` 未改用 JsonLdAdapter**：官网 `parse_career_page` 仍是旧 regex（v1 用 `JsonLdAdapter` 覆盖能覆盖的站点，其余站点 v1.1 补）。
+- **side_effect_postgres ordinal**（`side_effect_postgres.py:386-394`）：`next_attempt_ordinal` 用 `MAX(ordinal)+1` 无并发保护（v1 单进程 OK；v1.1 用 DB sequence 或 `SELECT FOR UPDATE`）。
+- **业务质量指标**：apply→interview 转化管道待数据积累（v1 disabled 不发信）。
+- **adapter `fetch_job` 未覆盖 Lever/Ashby**：`fetch_job` 目前只有 GreenhouseDetailAdapter；Lever/Ashby list 自带 `descriptionPlain`，v1 不需 detail；v1.1 按需补。
+
+### v1.1 待办
+
+1. Temporal M1 真实通电（`ingest_posting` 写 `job_postings` + `job_posting_versions`）。
+2. PostgresSaver + kernel Postgres 化全面验证（`make verify-db` 全绿）。
+3. 语义去重（SimHash/MinHash + 人工合并 UI）。
+4. outbox 完整驱动（`publish_batch` 接真实 provider）。
+5. approval 过期 sweeper（`kernel.expire_pending_approvals`）。
+6. `crawl_full.py` 用 `JsonLdAdapter` 覆盖官网。
+7. 业务质量指标（apply→interview 转化 + LLM token 成本分析）。
+8. Temporal M1 通电完整（worker 真实注入 `RealCrawlActivitySink`，当前 `main()` 已注入但 `run_worker()` 默认参数需确认）。
 
 ### 9.1 目标 State 草案（LangGraph 落地时细化）
 

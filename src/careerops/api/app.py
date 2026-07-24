@@ -28,6 +28,9 @@ from careerops.domain.applications import (
 )
 from careerops.infrastructure.auth import create_console_auth_service
 from careerops.infrastructure.dashboard import RuntimeDashboardSnapshotProvider
+from careerops.infrastructure.database.postgres_application_repo import (
+    PostgresApplicationRepository,
+)
 from careerops.infrastructure.memory_repos import InMemoryApplicationRepository
 from careerops.infrastructure.redis import RedisAuthRateLimiter
 from careerops.infrastructure.runtime import RuntimeResources
@@ -47,7 +50,7 @@ from careerops.web.matching_ui import router as matching_ui_router
 
 
 class _ResumeRepoAdapter:
-    def __init__(self, repo: InMemoryApplicationRepository) -> None:
+    def __init__(self, repo: InMemoryApplicationRepository | PostgresApplicationRepository) -> None:
         self._repo = repo
 
     def find_latest_version(self, candidate_id: UUID) -> ResumeVersion | None:
@@ -58,7 +61,7 @@ class _ResumeRepoAdapter:
 
 
 class _PackageRepoAdapter:
-    def __init__(self, repo: InMemoryApplicationRepository) -> None:
+    def __init__(self, repo: InMemoryApplicationRepository | PostgresApplicationRepository) -> None:
         self._repo = repo
 
     def find_by_application(self, application_id: UUID) -> ApplicationPackage | None:
@@ -69,7 +72,7 @@ class _PackageRepoAdapter:
 
 
 class _FollowUpRepoAdapter:
-    def __init__(self, repo: InMemoryApplicationRepository) -> None:
+    def __init__(self, repo: InMemoryApplicationRepository | PostgresApplicationRepository) -> None:
         self._repo = repo
 
     def find_by_id(self, reminder_id: UUID) -> FollowUpReminder | None:

@@ -84,20 +84,39 @@ class RuntimeResources:
         self.side_effect_kernel: object | None = None
         self._build_career_graph_stack()
 
-        # In-memory read repositories and application services for API routes.
-        # These are created unconditionally; PRODUCTION should swap them for
-        # Postgres-backed implementations when available.
-        from careerops.infrastructure.memory_repos import (
-            InMemoryApplicationRepository,
-            InMemoryContactRepository,
-            InMemoryJobReadRepository,
-            InMemoryMatchingReadRepository,
-        )
+        # Read repositories and application services for API routes.
+        # PRODUCTION uses Postgres-backed repos; non-production uses in-memory.
+        is_production = settings.environment is RuntimeEnvironment.PRODUCTION
+        if is_production:
+            from careerops.infrastructure.database.postgres_application_repo import (
+                PostgresApplicationRepository,
+            )
+            from careerops.infrastructure.database.postgres_contact_repo import (
+                PostgresContactRepository,
+            )
+            from careerops.infrastructure.database.postgres_job_repo import (
+                PostgresJobReadRepository,
+            )
+            from careerops.infrastructure.database.postgres_matching_repo import (
+                PostgresMatchingReadRepository,
+            )
 
-        self.matching_read_repo = InMemoryMatchingReadRepository()
-        self.job_read_repo = InMemoryJobReadRepository()
-        self.contact_repo = InMemoryContactRepository()
-        self.application_repo = InMemoryApplicationRepository()
+            self.matching_read_repo = PostgresMatchingReadRepository(self.database)
+            self.job_read_repo = PostgresJobReadRepository(self.database)
+            self.contact_repo = PostgresContactRepository(self.database)
+            self.application_repo = PostgresApplicationRepository(self.database)
+        else:
+            from careerops.infrastructure.memory_repos import (
+                InMemoryApplicationRepository,
+                InMemoryContactRepository,
+                InMemoryJobReadRepository,
+                InMemoryMatchingReadRepository,
+            )
+
+            self.matching_read_repo = InMemoryMatchingReadRepository()
+            self.job_read_repo = InMemoryJobReadRepository()
+            self.contact_repo = InMemoryContactRepository()
+            self.application_repo = InMemoryApplicationRepository()
 
     async def check(self) -> ReadinessReport:
         if self._closed:

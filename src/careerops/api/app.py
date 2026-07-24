@@ -23,7 +23,7 @@ from careerops.config import RuntimeEnvironment, Settings, get_settings
 from careerops.infrastructure.auth import create_console_auth_service
 from careerops.infrastructure.dashboard import RuntimeDashboardSnapshotProvider
 from careerops.infrastructure.redis import RedisAuthRateLimiter
-from careerops.infrastructure.runtime import RuntimeResources, create_runtime_resources
+from careerops.infrastructure.runtime import RuntimeResources
 from careerops.observability import Metrics
 from careerops.web import ConsoleWebSettings, install_console_web
 from careerops.web.matching_ui import router as matching_ui_router
@@ -37,7 +37,13 @@ def create_app(
     dashboard_provider: DashboardSnapshotProvider | None = None,
 ) -> FastAPI:
     resolved = settings or get_settings()
-    probe = readiness_probe or create_runtime_resources(resolved)
+    # Create metrics first so it can be wired into the runtime's graph
+    # (LLM token recording + apply_submitted counter).
+    metrics = Metrics(version=__version__, settings=resolved)
+    if readiness_probe is not None:
+        probe = readiness_probe
+    else:
+        probe = RuntimeResources(resolved, metrics=metrics)
     auth_service = console_auth_service
     if auth_service is None and isinstance(probe, RuntimeResources):
         auth_service = create_console_auth_service(
@@ -71,7 +77,6 @@ def create_app(
     app.state.settings = resolved
     app.state.readiness_probe = probe
     app.state.auth_service = auth_service
-    metrics = Metrics(version=__version__, settings=resolved)
     app.state.metrics = metrics
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(MetricsMiddleware, metrics=metrics)

@@ -26,6 +26,7 @@ v1 wiring:
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from json import JSONDecodeError
@@ -313,6 +314,28 @@ def filter_node(
     return {"filtered_jobs": result.kept, "errors": errors}
 
 
+def dedup_node(state: CareerOpsState) -> dict[str, Any]:
+    """Semantic deduplication via SimHash on description text.
+
+    Drops jobs within ``DedupCriteria.threshold`` Hamming distance of a
+    previously seen description (first occurrence kept). Duplicate reasons
+    are appended to ``errors`` so the review gate can surface them.
+    """
+    from careerops.orchestration.dedup import DedupCriteria, dedup_jobs
+
+    jobs = state.get("filtered_jobs") or state.get("raw_job_records") or ()
+    result = dedup_jobs(jobs, criteria=DedupCriteria())
+    errors = tuple(
+        ErrorDTO(
+            node="dedup",
+            error_type="semantic_duplicate",
+            message=f"{dup.external_id}:{dup.title} (distance={dup.distance})",
+        )
+        for dup in result.duplicates
+    )
+    return {"filtered_jobs": result.kept, "errors": errors}
+
+
 # ---------------------------------------------------------------------------
 # match
 # ---------------------------------------------------------------------------
@@ -490,6 +513,7 @@ def send_node(
     state: CareerOpsState,
     *,
     kernel: SideEffectKernel,
+    send_callback: Callable[[int], None] | None = None,
 ) -> dict[str, Any]:
     """Execute the side effect for the approved intent.
 
@@ -497,6 +521,11 @@ def send_node(
     successful approve decision. The node calls ``kernel.execute`` and records
     the receipt. The kernel's own Gate 2 enforces APPROVED + non-expired; no
     additional check is performed here.
+
+    When ``send_callback`` is provided, it is called with ``amount=1`` after a
+    confirmed send (``IntentStatus.CONFIRMED``). The callback MUST be
+    non-blocking and never raise; failures are swallowed so the main flow is
+    unaffected.
     """
     pending_intent_id = state.get("pending_intent_id")
     if not pending_intent_id:
@@ -513,6 +542,10 @@ def send_node(
         provider = latest.provider
         provider_resource_id = latest.provider_resource_id
         reconciliation_key = latest.reconciliation_key
+    # Increment apply_submitted on confirmed send (non-blocking, never raises).
+    if outcome.status.value == "confirmed" and send_callback is not None:
+        with suppress(Exception):
+            send_callback(1)
     receipt_dto: SendReceiptDTO = {
         "intent_id": pending_intent_id,
         "approval_id": pending_approval_id,

@@ -19,6 +19,7 @@ from careerops.config import get_settings
 from careerops.model_gateway.anthropic_compat import (
     AnthropicCompatClient,
     AnthropicCompatConfig,
+    LLMUsageRecorder,
 )
 from careerops.model_gateway.base import (
     DisabledModelAdapter,
@@ -36,11 +37,18 @@ class ModelProviderNotConfigured(RuntimeError):
     """Raised when a requested provider lacks required environment config."""
 
 
-def create_model_client(provider: str) -> StructuredModelClient:
+def create_model_client(
+    provider: str,
+    *,
+    usage_recorder: LLMUsageRecorder | None = None,
+) -> StructuredModelClient:
     """Create a model client for the given provider name.
 
     ``disabled`` returns the safe DisabledModelAdapter. ``xiaomi``/``zhipu``
     return an Anthropic-compatible client configured from the environment.
+
+    When ``usage_recorder`` is provided, the created client records aggregate
+    LLM token counts via the recorder (ADR 0006: counts only, never content).
     """
     if provider in ("", "disabled"):
         return DisabledModelAdapter()
@@ -78,5 +86,6 @@ def create_model_client(provider: str) -> StructuredModelClient:
         )
 
     return AnthropicCompatClient(
-        AnthropicCompatConfig(base_url=base_url, api_key=api_key, model=model)
+        AnthropicCompatConfig(base_url=base_url, api_key=api_key, model=model),
+        usage_recorder=usage_recorder,
     )

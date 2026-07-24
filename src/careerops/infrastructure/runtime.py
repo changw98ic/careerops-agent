@@ -23,6 +23,7 @@ from careerops.application.ports.readiness import (
 from careerops.config import RuntimeEnvironment, Settings
 from careerops.infrastructure.database.engine import create_database_engine
 from careerops.infrastructure.storage.local import LocalContentAddressedStorage
+from careerops.observability.metrics import Metrics
 from careerops.orchestration.mapping_store import ReviewMappingStore
 
 _COMPONENTS = ("database", "redis", "temporal", "storage")
@@ -43,8 +44,9 @@ class SyncRedisClient(Protocol):
 class RuntimeResources:
     """Process-owned clients and bounded, non-sensitive readiness probes."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, *, metrics: Metrics | None = None) -> None:
         self._settings = settings
+        self._metrics = metrics
         self.database: Engine = create_database_engine(settings)
         self.redis = cast(
             "AsyncRedisClient",
@@ -174,7 +176,7 @@ class RuntimeResources:
         from careerops.integrations.fake_side_effect_provider import (
             FakeSideEffectProvider,
         )
-        from careerops.model_gateway.base import DisabledModelAdapter
+        from careerops.model_gateway.factory import create_model_client
         from careerops.orchestration.capability_resolver import (
             SettingsCapabilityResolver,
         )
@@ -183,6 +185,7 @@ class RuntimeResources:
         from careerops.orchestration.state import ContactDTO, RawJobDTO
 
         settings = self._settings
+        metrics = self._metrics
         is_production = settings.environment is RuntimeEnvironment.PRODUCTION
 
         # Checkpointer: PostgresSaver in PRODUCTION (if available), MemorySaver otherwise.
@@ -215,6 +218,15 @@ class RuntimeResources:
         review_mapping: ReviewMappingStore = InMemoryReviewMappingStore()
         capability_resolver = SettingsCapabilityResolver(settings)
 
+        # Wire LLM token recording via the model client factory (ADR 0006).
+        usage_recorder = metrics if metrics is not None else None
+        model_client = create_model_client(settings.model_provider, usage_recorder=usage_recorder)
+
+        # Wire apply_submitted counter (non-blocking callback).
+        send_callback: Callable[[int], None] | None = None
+        if metrics is not None:
+            send_callback = metrics.record_apply_submitted
+
         def demo_crawler() -> tuple[RawJobDTO, ...]:
             return ()
 
@@ -228,11 +240,12 @@ class RuntimeResources:
             crawler=demo_crawler,
             extractor=demo_extractor,
             resume_text="",
-            model_client=DisabledModelAdapter(),
+            model_client=model_client,
             kernel=kernel,
             review_mapping=review_mapping,
             capability_resolver=capability_resolver,
             checkpointer=checkpointer,
+            send_callback=send_callback,
         )
 
     def _build_postgres_saver(self) -> Any:

@@ -20,6 +20,7 @@ Inputs are passed via dependency injection:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import partial
 from typing import Any
 
@@ -37,6 +38,7 @@ from careerops.orchestration.nodes import (
     ContactExtractor,
     Crawler,
     crawl_node,
+    dedup_node,
     draft_node,
     extract_contacts_node,
     filter_node,
@@ -62,6 +64,7 @@ def build_graph(
     review_mapping: ReviewMappingStore,
     capability_resolver: CapabilityResolver,
     checkpointer: BaseCheckpointSaver[Any],
+    send_callback: Callable[[int], None] | None = None,
 ) -> CareerGraph:
     """Compile the CareerOps graph.
 
@@ -81,6 +84,7 @@ def build_graph(
     graph.add_node("extract_contacts", partial(extract_contacts_node, extractor=extractor))
     graph.add_node("resume", partial(resume_node, resume_text=resume_text))
     graph.add_node("filter", filter_node)
+    graph.add_node("dedup", dedup_node)
     graph.add_node("match", partial(match_node, model_client=model_client))
     graph.add_node("draft", draft_node)
     graph.add_node(
@@ -92,13 +96,14 @@ def build_graph(
             capability_resolver=capability_resolver,
         ),
     )
-    graph.add_node("send", partial(send_node, kernel=kernel))
+    graph.add_node("send", partial(send_node, kernel=kernel, send_callback=send_callback))
 
     graph.add_edge(START, "crawl")
     graph.add_edge("crawl", "extract_contacts")
     graph.add_edge("extract_contacts", "resume")
     graph.add_edge("resume", "filter")
-    graph.add_edge("filter", "match")
+    graph.add_edge("filter", "dedup")
+    graph.add_edge("dedup", "match")
     graph.add_edge("match", "draft")
     graph.add_edge("draft", "review_gate")
     # ``review_gate``'s ``Command(goto=...)`` return routes dynamically; no

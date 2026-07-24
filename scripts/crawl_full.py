@@ -17,6 +17,9 @@ import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
+
+from careerops.adapters.job_sources import JsonLdAdapter, RawJobRecord
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT = PROJECT_ROOT / "data" / f"crawl_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}"
@@ -106,70 +109,127 @@ def ego_save_page(url: str, output_file: str, wait_seconds: int = 8) -> bool:
     return "saved" in output
 
 
+def ego_save_raw_html(url: str, output_file: str, wait_seconds: int = 8) -> bool:
+    """Open a URL in ego-browser and save the raw HTML (outerHTML) to a file.
+
+    Unlike ego_save_page which uses snapshotText() (accessibility tree),
+    this captures the actual DOM including <script> tags needed for JSON-LD.
+    """
+    script = (
+        f"const task = await useOrCreateTaskSpace('career-crawl'); "
+        f"await openOrReuseTab('{url}', {{ wait: true, timeout: 30 }}); "
+        f"await wait({wait_seconds}); "
+        f"await scrollBy(0, 1500); await wait(2); "
+        f"const html = await evaluate(() => document.documentElement.outerHTML); "
+        f"const fs = await import('fs'); "
+        f"fs.writeFileSync('{output_file}', html); "
+        f"cliLog('saved ' + html.length)"
+    )
+    output = run_ego(script, timeout=60)
+    return "saved" in output
+
+
+_JSONLD_ADAPTER = JsonLdAdapter()
+
+
+def _records_to_dicts(
+    records: tuple[RawJobRecord, ...], company: str, url: str
+) -> list[dict[str, Any]]:
+    """Map adapter RawJobRecords to the crawl output dict format."""
+    return [
+        {
+            "company": company,
+            "source_type": "career_page_jsonld",
+            "title": r.title,
+            "url": r.url or url,
+            "location": r.location,
+            "description": r.description,
+            "fetched_at": datetime.now(UTC).isoformat(),
+            "source_url": url,
+        }
+        for r in records
+        if r.title
+    ]
+
+
 def parse_career_page(text: str, company: str, url: str) -> list[dict]:
-    """Extract job titles from a career page snapshot."""
-    jobs = []
+    """Extract job listings from career page content.
+
+    *text* may be raw HTML (from ego_save_raw_html) or an accessibility-tree
+    snapshot (from ego_save_page / snapshotText).
+
+    Strategy:
+      1. Try JsonLdAdapter on the raw HTML to extract JobPosting JSON-LD.
+      2. If no JSON-LD found, fall back to the legacy regex heuristic on the
+         snapshot text.
+    """
+    # --- Strategy 1: JSON-LD via adapter ---
+    result = _JSONLD_ADAPTER.list_jobs(text)
+    if result.jobs:
+        return _records_to_dicts(result.jobs, company, url)
+
+    # --- Strategy 2: regex fallback (snapshotText format) ---
+    jobs: list[dict[str, Any]] = []
     titles = re.findall(r'text "([^"]{10,150})"', text)
-    seen = set()
+    role_keywords = [
+        "engineer",
+        "developer",
+        "manager",
+        "designer",
+        "analyst",
+        "scientist",
+        "architect",
+        "lead",
+        "director",
+        "specialist",
+        "consultant",
+        "administrator",
+        "coordinator",
+        "intern",
+        "researcher",
+        "product",
+        "program",
+        "operations",
+        "marketing",
+        "sales",
+        "support",
+        "infrastructure",
+        "platform",
+        "security",
+        "data",
+        "machine learning",
+        "ai",
+        "ml",
+        "sre",
+        "devops",
+        "frontend",
+        "backend",
+        "fullstack",
+        "full-stack",
+        "mobile",
+        "ios",
+        "android",
+        "cloud",
+        "network",
+        "systems",
+        "software",
+        "technical",
+        "senior",
+        "staff",
+        "principal",
+        "junior",
+        "associate",
+        "vp",
+        "head of",
+        "chief",
+    ]
+    seen: set[str] = set()
     for title in titles:
         title = title.strip()
         if title in seen or len(title) < 15:
             continue
         if any(noise in title.lower() for noise in NOISE_PHRASES):
             continue
-        # Heuristic: job titles typically have role keywords
-        role_keywords = [
-            "engineer",
-            "developer",
-            "manager",
-            "designer",
-            "analyst",
-            "scientist",
-            "architect",
-            "lead",
-            "director",
-            "specialist",
-            "consultant",
-            "administrator",
-            "coordinator",
-            "intern",
-            "researcher",
-            "product",
-            "program",
-            "operations",
-            "marketing",
-            "sales",
-            "support",
-            "infrastructure",
-            "platform",
-            "security",
-            "data",
-            "machine learning",
-            "ai",
-            "ml",
-            "sre",
-            "devops",
-            "frontend",
-            "backend",
-            "fullstack",
-            "full-stack",
-            "mobile",
-            "ios",
-            "android",
-            "cloud",
-            "network",
-            "systems",
-            "software",
-            "technical",
-            "senior",
-            "staff",
-            "principal",
-            "junior",
-            "associate",
-            "vp",
-            "head of",
-            "chief",
-        ]
         if any(kw in title.lower() for kw in role_keywords):
             seen.add(title)
             jobs.append(
@@ -193,12 +253,13 @@ def crawl_career_pages(output_dir: Path) -> list[dict]:
     tmp_dir.mkdir(exist_ok=True)
 
     for company, url in CAREER_PAGES:
+        slug = company.lower().replace(" ", "_")
         print(f"  [{company}] Rendering {url[:60]}...", end=" ", flush=True)
-        tmp_file = str(tmp_dir / f"{company.lower().replace(' ', '_')}.txt")
+        tmp_html = str(tmp_dir / f"{slug}.html")
 
-        if ego_save_page(url, tmp_file):
-            text = Path(tmp_file).read_text(errors="replace")
-            jobs = parse_career_page(text, company, url)
+        if ego_save_raw_html(url, tmp_html):
+            html = Path(tmp_html).read_text(errors="replace")
+            jobs = parse_career_page(html, company, url)
             print(f"{len(jobs)} jobs")
             all_jobs.extend(jobs)
         else:

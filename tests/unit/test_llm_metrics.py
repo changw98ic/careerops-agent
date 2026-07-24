@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import urllib.request
+from typing import Any
 
 import pytest
 
@@ -276,3 +277,95 @@ class TestApplyInterviewCounters:
         rendered = _metrics().render().decode()
         assert _sample_value(rendered, "careerops_apply_submitted_total") == 0.0
         assert _sample_value(rendered, "careerops_interview_received_total") == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Wiring verification (Stage 3.5 quality metrics)
+# ---------------------------------------------------------------------------
+
+
+class TestLLMTokenAggregateIncremented:
+    """Verify LLM token counter is wired through the model client."""
+
+    def test_llm_token_aggregate_incremented(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When a model client with a usage_recorder invokes the provider,
+        the aggregate token counter is incremented."""
+        body = _messages_body('{"v": 1}', input_tokens=50, output_tokens=30)
+        monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=0.0: _FakeResp(body))
+
+        metrics = _metrics()
+        client = AnthropicCompatClient(_config(), usage_recorder=metrics)
+        client.invoke(StructuredModelRequest(task_type="test", user_prompt="q"))
+
+        rendered = metrics.render().decode()
+        assert (
+            _sample_value(
+                rendered, "careerops_llm_tokens_total", component="provider", token_kind="input"
+            )
+            == 50.0
+        )
+        assert (
+            _sample_value(
+                rendered, "careerops_llm_tokens_total", component="provider", token_kind="output"
+            )
+            == 30.0
+        )
+
+
+class TestApplySubmittedIncremented:
+    """Verify send_node wires apply_submitted counter on confirmed send."""
+
+    def test_apply_submitted_incremented(self) -> None:
+        """When kernel.execute returns CONFIRMED, send_callback is invoked."""
+        from unittest.mock import MagicMock
+
+        from careerops.application.side_effect_kernel import ExecutionOutcome
+        from careerops.domain.side_effects import IntentStatus
+        from careerops.orchestration.nodes import send_node
+
+        metrics = _metrics()
+        kernel = MagicMock()
+        kernel.execute.return_value = ExecutionOutcome(
+            intent_id=MagicMock(),
+            status=IntentStatus.CONFIRMED,
+            attempt=None,
+            receipt=None,
+        )
+        kernel.replay.return_value = MagicMock(receipts=())
+
+        state: dict[str, Any] = {"pending_intent_id": "00000000-0000-0000-0000-000000000001"}
+        send_node(state, kernel=kernel, send_callback=metrics.record_apply_submitted)  # type: ignore[arg-type]
+
+        rendered = metrics.render().decode()
+        assert _sample_value(rendered, "careerops_apply_submitted_total") == 1.0
+
+
+class TestMetricsNonBlocking:
+    """Verify metric callback failures never affect the main flow."""
+
+    def test_metrics_non_blocking(self) -> None:
+        """When send_callback raises, send_node still returns receipts."""
+        from unittest.mock import MagicMock
+
+        from careerops.application.side_effect_kernel import ExecutionOutcome
+        from careerops.domain.side_effects import IntentStatus
+        from careerops.orchestration.nodes import send_node
+
+        def _broken_callback(amount: int) -> None:
+            raise RuntimeError("metrics sink unavailable")
+
+        kernel = MagicMock()
+        kernel.execute.return_value = ExecutionOutcome(
+            intent_id=MagicMock(),
+            status=IntentStatus.CONFIRMED,
+            attempt=None,
+            receipt=None,
+        )
+        kernel.replay.return_value = MagicMock(receipts=())
+
+        state: dict[str, Any] = {"pending_intent_id": "00000000-0000-0000-0000-000000000001"}
+        result = send_node(state, kernel=kernel, send_callback=_broken_callback)  # type: ignore[arg-type]
+
+        # Main flow completes: receipts are returned despite callback failure.
+        assert "send_receipts" in result
+        assert len(result["send_receipts"]) == 1

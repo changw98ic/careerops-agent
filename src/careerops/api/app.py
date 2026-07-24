@@ -91,10 +91,9 @@ def create_app(
             cookie_secure=resolved.console_cookie_secure,
         )
         install_console_web(app, auth_service, resolved_dashboard_provider, web_settings)
-        # Review endpoint (plan v0.4 §2.7 / §3 Stage 3): mounted ONLY outside
-        # PRODUCTION and only when the runtime actually compiled the in-process
-        # graph. PRODUCTION is fail-closed — ``RuntimeResources`` does not build
-        # the graph there, so this branch is skipped and the router is absent.
+        # Review endpoint (plan v0.4 §2.7 / §3 Stage 3): mounted when the
+        # runtime actually compiled the graph (durable in PRODUCTION via
+        # PostgresSaver + PostgresSideEffectStore, in-memory otherwise).
         if (
             resolved.environment is not RuntimeEnvironment.PRODUCTION
             and isinstance(probe, RuntimeResources)

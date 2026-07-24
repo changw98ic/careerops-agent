@@ -1,3 +1,5 @@
+# langgraph ships without bundled pyright stubs.
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportMissingTypeStubs=false
 from __future__ import annotations
 
 import asyncio
@@ -7,7 +9,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from datetime import timedelta
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
 from redis import Redis as SyncRedis
 from redis.asyncio import Redis as AsyncRedis
@@ -78,8 +80,7 @@ class RuntimeResources:
         self.career_graph: object | None = None
         self.review_mapping: ReviewMappingStore | None = None
         self.side_effect_kernel: object | None = None
-        if settings.environment is not RuntimeEnvironment.PRODUCTION:
-            self._build_career_graph_stack()
+        self._build_career_graph_stack()
 
     async def check(self) -> ReadinessReport:
         if self._closed:
@@ -156,34 +157,20 @@ class RuntimeResources:
         await asyncio.to_thread(_verify_storage_directory, self._settings.storage_root)
 
     def _build_career_graph_stack(self) -> None:
-        """Compile the v1 in-process LangGraph review stack onto this runtime.
+        """Compile the LangGraph review stack onto this runtime.
 
-        All collaborators are in-memory and process-owned (plan v0.4 §2.4): a
-        ``MemorySaver`` checkpointer, a ``SideEffectKernel`` backed by
-        ``InMemorySideEffectStore`` + ``FakeSideEffectProvider``, an
-        ``InMemoryReviewMappingStore``, and the production
-        ``SettingsCapabilityResolver``. The compiled graph is exposed as
-        ``career_graph`` so the review endpoint can resume interrupted threads;
-        ``review_mapping`` and ``side_effect_kernel`` are exposed so the endpoint
-        can reverse-resolve approvals and disambiguate duplicate vs conflicting
-        decisions.
+        PRODUCTION uses durable stores (``PostgresSaver`` +
+        ``PostgresSideEffectStore`` + ``GmailSideEffectProvider`` when flags
+        allow). Non-production uses in-memory stores
+        (``MemorySaver`` + ``InMemorySideEffectStore`` +
+        ``FakeSideEffectProvider``).
 
-        The graph's crawl/extract/resume inputs are demo defaults. v1 exposes NO
-        fresh-run API path: the review endpoint only resumes threads that an
-        orchestration driver (or tests) have already driven to ``review_gate``.
-        A fresh invoke of this compiled graph would produce no drafts and
-        ``review_gate`` would fail-closed on the empty batch; that is the
-        intended posture, not a wiring gap. The model client is always
-        ``DisabledModelAdapter`` (ADR 0006: v1 stays ``disabled``).
+        The compiled graph is exposed as ``career_graph`` so the review endpoint
+        can resume interrupted threads; ``review_mapping`` and
+        ``side_effect_kernel`` are exposed so the endpoint can reverse-resolve
+        approvals and disambiguate duplicate vs conflicting decisions.
         """
-        # Lazy imports keep PRODUCTION (which never calls this) free of the
-        # langgraph dependency at module import time.
-        from langgraph.checkpoint.memory import MemorySaver
-
         from careerops.application.side_effect_kernel import SideEffectKernel
-        from careerops.infrastructure.database.side_effect_memory import (
-            InMemorySideEffectStore,
-        )
         from careerops.integrations.fake_side_effect_provider import (
             FakeSideEffectProvider,
         )
@@ -195,15 +182,40 @@ class RuntimeResources:
         from careerops.orchestration.mapping_store import InMemoryReviewMappingStore
         from careerops.orchestration.state import ContactDTO, RawJobDTO
 
-        checkpointer = MemorySaver()
-        side_effect_store = InMemorySideEffectStore()
-        side_effect_provider = FakeSideEffectProvider()
-        kernel = SideEffectKernel(side_effect_store, side_effect_provider)
-        review_mapping = InMemoryReviewMappingStore()
-        capability_resolver = SettingsCapabilityResolver(self._settings)
+        settings = self._settings
+        is_production = settings.environment is RuntimeEnvironment.PRODUCTION
+
+        # Checkpointer: PostgresSaver in PRODUCTION (if available), MemorySaver otherwise.
+        # PRODUCTION wraps in try/except so the app starts even without a
+        # database (fail-open for the non-review endpoints).
+        if is_production:
+            try:
+                checkpointer = self._build_postgres_saver()
+            except Exception:
+                # Database unavailable in PRODUCTION: review endpoint stays absent.
+                return
+            from careerops.infrastructure.database.side_effect_postgres import (
+                PostgresSideEffectStore,
+            )
+
+            side_effect_store: object = PostgresSideEffectStore(self.database)
+            side_effect_provider = self._build_side_effect_provider()
+        else:
+            from langgraph.checkpoint.memory import MemorySaver
+
+            checkpointer = MemorySaver()
+            from careerops.infrastructure.database.side_effect_memory import (
+                InMemorySideEffectStore,
+            )
+
+            side_effect_store = InMemorySideEffectStore()
+            side_effect_provider = FakeSideEffectProvider()
+
+        kernel = SideEffectKernel(side_effect_store, side_effect_provider)  # type: ignore[arg-type]
+        review_mapping: ReviewMappingStore = InMemoryReviewMappingStore()
+        capability_resolver = SettingsCapabilityResolver(settings)
 
         def demo_crawler() -> tuple[RawJobDTO, ...]:
-            # v1 exposes no fresh-run API; see docstring.
             return ()
 
         def demo_extractor(jobs: tuple[RawJobDTO, ...]) -> tuple[ContactDTO, ...]:
@@ -222,6 +234,55 @@ class RuntimeResources:
             capability_resolver=capability_resolver,
             checkpointer=checkpointer,
         )
+
+    def _build_postgres_saver(self) -> Any:
+        """Build a ``PostgresSaver`` and run ``setup()`` to create tables.
+
+        ``from_conn_string`` is a context manager in v3 that yields a
+        ``PostgresSaver`` backed by a connection pool. We enter the context
+        manager, call ``setup()`` to create the checkpoint tables in the
+        ``langgraph`` schema, and store the saver for the process lifetime.
+        Cleanup happens in ``close()``.
+        """
+        from langgraph.checkpoint.postgres import PostgresSaver
+
+        raw_url = self._settings.database_url.get_secret_value()
+        # from_conn_string expects psycopg DSN: strip the +psycopg driver suffix.
+        conn_string = raw_url.replace("postgresql+psycopg://", "postgresql://")
+        ctx = PostgresSaver.from_conn_string(conn_string)
+        saver: PostgresSaver = ctx.__enter__()  # type: ignore[attr-defined]
+        saver.setup()
+        # Store the context manager so it stays alive; the underlying pool
+        # will be cleaned up when the process exits (or on explicit close).
+        self._postgres_saver_ctx = ctx  # type: ignore[attr-defined]
+        return saver
+
+    def _build_side_effect_provider(self) -> object:
+        """Build the production side-effect provider.
+
+        Uses ``GmailSideEffectProvider`` when both ``auto_send_enabled`` and
+        ``external_writes_enabled`` are True; otherwise falls back to
+        ``FakeSideEffectProvider``.
+        """
+        settings = self._settings
+        if settings.auto_send_enabled and settings.external_writes_enabled:
+            from careerops.integrations.gmail_sender import GmailSender
+            from careerops.integrations.gmail_side_effect_provider import (
+                GmailSideEffectProvider,
+            )
+
+            # Token loading placeholder: this path is unreachable because the
+            # settings validator blocks auto_send_enabled/external_writes_enabled.
+            # When unblocked, load the real OAuth token from the credentials store.
+            access_token = "placeholder"
+            sender = GmailSender(access_token)
+            return GmailSideEffectProvider(sender)
+
+        from careerops.integrations.fake_side_effect_provider import (
+            FakeSideEffectProvider,
+        )
+
+        return FakeSideEffectProvider()
 
 
 def _verify_storage_directory(root: Path) -> None:

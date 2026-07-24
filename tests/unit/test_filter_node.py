@@ -225,8 +225,8 @@ class TestFilterNodeWiring:
             )
         }
         update = filter_node(state)  # type: ignore[arg-type]
-        # Kept set overwrites raw_job_records.
-        kept = update["raw_job_records"]
+        # Kept set written to filtered_jobs (overwriting reducer).
+        kept = update["filtered_jobs"]
         assert [j.get("external_id") for j in kept] == ["1"]
         # Rejection reason surfaced as ErrorDTO entries.
         errors = update["errors"]
@@ -242,13 +242,13 @@ class TestFilterNodeWiring:
             )
         }
         update = filter_node(state, criteria=FilterCriteria(remote_only=True))  # type: ignore[arg-type]
-        kept = update["raw_job_records"]
+        kept = update["filtered_jobs"]
         assert [j.get("external_id") for j in kept] == ["1"]
         assert update["errors"][0].get("error_type") == "not_remote"
 
     def test_node_no_jobs_returns_empty(self) -> None:
         update = filter_node({})  # type: ignore[arg-type]
-        assert update["raw_job_records"] == ()
+        assert update["filtered_jobs"] == ()
         assert update["errors"] == ()
 
 

@@ -257,7 +257,7 @@ def crawl_node(state: CareerOpsState, *, crawler: Crawler) -> dict[str, Any]:
 
 def extract_contacts_node(state: CareerOpsState, *, extractor: ContactExtractor) -> dict[str, Any]:
     """Extract recruiting contacts from the crawled jobs' raw_data."""
-    jobs = state.get("raw_job_records") or ()
+    jobs = state.get("filtered_jobs") or state.get("raw_job_records") or ()
     contacts = extractor(jobs)
     return {"contacts": contacts}
 
@@ -299,7 +299,7 @@ def filter_node(
     This is intentionally not a match decision (ADR 0006); the advisory match
     node runs after it.
     """
-    jobs = state.get("raw_job_records") or ()
+    jobs = state.get("filtered_jobs") or state.get("raw_job_records") or ()
     result = filter_jobs(jobs, criteria=criteria)
     errors = tuple(
         ErrorDTO(
@@ -310,7 +310,7 @@ def filter_node(
         for rejected in result.rejected
     )
     # Overwrite raw_job_records with the kept set; append rejection reasons.
-    return {"raw_job_records": result.kept, "errors": errors}
+    return {"filtered_jobs": result.kept, "errors": errors}
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +356,7 @@ def match_node(
         highlights=profile_dto.get("highlights", ""),
     )
     matcher = LLMJobMatcher(model_client)
-    jobs = state.get("raw_job_records") or ()
+    jobs = state.get("filtered_jobs") or state.get("raw_job_records") or ()
     results: list[JobMatchDTO] = []
     for job in jobs:
         result: JobMatchResult = matcher.match_job(_job_to_match_input(job), profile)
@@ -443,7 +443,7 @@ def draft_node(state: CareerOpsState) -> dict[str, Any]:
         updated = _apply_edit_payload(existing, edit_payload)
         return {"drafts": updated, "edit_payload": None}
 
-    jobs = state.get("raw_job_records") or ()
+    jobs = state.get("filtered_jobs") or state.get("raw_job_records") or ()
     contacts = state.get("contacts") or ()
     resume_text = state.get("resume_text", "")
 

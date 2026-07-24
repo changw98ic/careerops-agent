@@ -211,6 +211,7 @@ class CareerOpsState(TypedDict, total=False):
 
     requested_for: str
     raw_job_records: AnnotatedJobs
+    filtered_jobs: tuple[RawJobDTO, ...]  # filter_node output: overwriting reducer
     contacts: AnnotatedContacts
     resume_text: str
     skill_profile: SkillProfileDTO | None

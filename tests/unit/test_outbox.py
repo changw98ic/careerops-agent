@@ -7,6 +7,7 @@ from careerops.application.outbox import (
     ClaimedOutboxEvent,
     InternalDeliveryError,
     OutboxPublisher,
+    PendingOutboxEvent,
 )
 
 
@@ -26,6 +27,9 @@ def event(*, event_type: str = "workflow_signal", attempt_count: int = 1) -> Cla
 
 
 class RecordingStore:
+    def enqueue(self, event: PendingOutboxEvent) -> None:
+        pass  # no-op for test stub
+
     def __init__(self, events: tuple[ClaimedOutboxEvent, ...]) -> None:
         self.events = events
         self.published: list[tuple[UUID, UUID]] = []

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from collections.abc import Iterator
+
 import pytest
 import sqlalchemy as sa
 
@@ -24,7 +26,7 @@ DATABASE_URL = "postgresql+psycopg://careerops_runtime@127.0.0.1:5432/careerops_
 
 
 @pytest.fixture(scope="module")
-def engine() -> sa.Engine:
+def engine() -> Iterator[sa.Engine]:
     eng = sa.create_engine(DATABASE_URL, pool_pre_ping=True)
     yield eng
     eng.dispose()

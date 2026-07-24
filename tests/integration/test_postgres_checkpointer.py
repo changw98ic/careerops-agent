@@ -8,6 +8,7 @@ Requires ``CAREEROPS_TEST_DATABASE_URL`` pointing to a disposable PostgreSQL.
 
 from __future__ import annotations
 
+import contextlib
 import os
 from collections.abc import Iterator
 from uuid import uuid4
@@ -130,7 +131,7 @@ class TestGraphInterruptResume:
             # so we can retrieve it after the error.
             from careerops.orchestration.kernel_adapter import ReviewDecisionError
 
-            try:
+            with contextlib.suppress(ReviewDecisionError):
                 graph.invoke(
                     {
                         "raw_job_records": (),
@@ -139,9 +140,7 @@ class TestGraphInterruptResume:
                         "requested_for": "integration-test",
                     },
                     config,
-                )
-            except ReviewDecisionError:
-                pass  # expected with empty drafts
+                )  # expected with empty drafts
 
             graph_state = graph.get_state(config)
 

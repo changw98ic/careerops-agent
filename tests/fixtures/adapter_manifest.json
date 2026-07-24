@@ -3,9 +3,9 @@
   "generated_at": "2026-07-24T00:00:00Z",
   "fixtures_dir": "tests/fixtures/adapter_responses",
   "hash_algorithm": "sha256 over sorted (filename, file-bytes) pairs joined by NUL",
-  "fixtures_sha256": "061c4a10e63f3b6a0be62f335f177eb737c4a79997e5146a8a3ed6a485928d8a",
-  "total_sample_count": 9,
-  "total_description_covered": 5,
+  "fixtures_sha256": "2e2cccdd2783f3696a676d011be82bc294b8e2f1b86a462b5fb8a7c7c5fa8068",
+  "total_sample_count": 10,
+  "total_description_covered": 6,
   "sources": {
     "greenhouse": {
       "fixture_files": [
@@ -55,7 +55,17 @@
       "description_covered": 0,
       "adapter": "AshbyAdapter",
       "parser_version": "ashby-v1",
-      "note": "Ashby list omits JD body; description requires a detail fetch."
+      "note": "Ashby list omits JD body; description requires AshbyDetailAdapter."
+    },
+    "ashby_detail": {
+      "fixture_files": [
+        "ashby_detail.json"
+      ],
+      "sample_count": 1,
+      "description_covered": 1,
+      "adapter": "AshbyDetailAdapter",
+      "parser_version": "ashby-detail-v1",
+      "note": "Detail response carries JD body in 'descriptionPlain' (fallback 'description')."
     }
   }
 }

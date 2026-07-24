@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from careerops.adapters import (
+    AshbyDetailAdapter,
     GreenhouseDetailAdapter,
     JsonLdAdapter,
     RawJobRecord,
@@ -72,6 +73,19 @@ def _greenhouse_detail_coverage(data: Any) -> int:
 def _ashby_coverage(data: Any) -> int:
     jobs = data.get("jobs", []) if isinstance(data, dict) else []
     return sum(1 for j in jobs if isinstance(j, dict) and str(j.get("description", "")).strip())
+
+
+def _ashby_detail_coverage(data: Any) -> int:
+    if not isinstance(data, dict):
+        return 0
+    return (
+        1
+        if (
+            str(data.get("descriptionPlain", "")).strip()
+            or str(data.get("description", "")).strip()
+        )
+        else 0
+    )
 
 
 def _lever_coverage(data: Any) -> int:
@@ -199,6 +213,16 @@ class TestDescriptionCoverage:
         assert manifest["sources"]["ashby"]["description_covered"] == _ashby_coverage(data)
         assert manifest["sources"]["ashby"]["description_covered"] == 0
 
+    def test_ashby_detail_carries_description_body(self) -> None:
+        manifest = _manifest()
+        data = _load_json("ashby_detail.json")
+
+        assert (
+            manifest["sources"]["ashby_detail"]["description_covered"]
+            == _ashby_detail_coverage(data)
+            == 1
+        )
+
 
 class TestAdapterSurfacesDescription:
     """End-to-end: adapters that claim description coverage must surface it.
@@ -220,6 +244,20 @@ class TestAdapterSurfacesDescription:
         assert isinstance(record, RawJobRecord)
         assert record.description.strip() != ""
         assert record.external_id == "1001"
+
+    def test_ashby_detail_adapter_reads_description(self) -> None:
+        adapter = AshbyDetailAdapter()
+        detail = _load_json("ashby_detail.json")
+
+        record = adapter.fetch_job(
+            detail,
+            source_url="https://careers.ashbyhq.com/acme/ashby-1",
+            fetched_at=datetime(2026, 7, 24, tzinfo=UTC),
+        )
+
+        assert isinstance(record, RawJobRecord)
+        assert record.description.strip() != ""
+        assert record.external_id == "ashby-1"
 
     def test_json_ld_adapter_reads_descriptions(self) -> None:
         adapter = JsonLdAdapter()

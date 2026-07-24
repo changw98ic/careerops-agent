@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from careerops.adapters import (
+    AshbyDetailAdapter,
     GreenhouseDetailAdapter,
     JsonLdAdapter,
     RawJobRecord,
@@ -106,6 +107,77 @@ class TestGreenhouseDetailAdapterFetchJob:
 
         assert record.external_id == ""
         assert record.title == ""
+        assert record.description == ""
+        assert record.url == fetched_url
+
+
+class TestAshbyDetailAdapterFetchJob:
+    def test_parses_description_plain_into_description(self) -> None:
+        adapter = AshbyDetailAdapter()
+        detail = {
+            "id": "ashby-1",
+            "title": "Reliability Engineer",
+            "location": "Remote (Global)",
+            "url": "https://careers.ashbyhq.com/acme/ashby-1",
+            "descriptionPlain": "We are looking for a reliability engineer.",
+            "description": "<p>We are looking for a reliability engineer.</p>",
+        }
+        fetched_at = datetime(2026, 7, 24, tzinfo=UTC)
+
+        record = adapter.fetch_job(
+            detail,
+            source_url="https://careers.ashbyhq.com/acme/ashby-1",
+            fetched_at=fetched_at,
+        )
+
+        # descriptionPlain preferred over description
+        assert record.description == "We are looking for a reliability engineer."
+        assert record.external_id == "ashby-1"
+        assert record.title == "Reliability Engineer"
+        assert record.location == "Remote (Global)"
+        assert record.url == "https://careers.ashbyhq.com/acme/ashby-1"
+        assert record.raw_data is detail
+
+    def test_falls_back_to_description_when_plain_missing(self) -> None:
+        adapter = AshbyDetailAdapter()
+
+        record = adapter.fetch_job(
+            {"id": "a", "title": "Eng", "description": "<p>JD body</p>"},
+            source_url="https://careers.ashbyhq.com/acme/a",
+            fetched_at=datetime(2026, 7, 24, tzinfo=UTC),
+        )
+
+        assert record.description == "<p>JD body</p>"
+
+    def test_source_type_and_parser_version_pinned(self) -> None:
+        adapter = AshbyDetailAdapter()
+
+        assert adapter.source_type == "ashby_detail"
+        assert adapter.parser_version == "ashby-detail-v1"
+
+    def test_url_falls_back_to_source_url_when_missing(self) -> None:
+        adapter = AshbyDetailAdapter()
+        fetched_url = "https://careers.ashbyhq.com/acme/9"
+
+        record = adapter.fetch_job(
+            {"id": "9", "title": "Eng", "descriptionPlain": "JD"},
+            source_url=fetched_url,
+            fetched_at=datetime(2026, 7, 24, tzinfo=UTC),
+        )
+
+        assert record.url == fetched_url
+
+    def test_non_dict_response_returns_empty_record(self) -> None:
+        adapter = AshbyDetailAdapter()
+        fetched_url = "https://careers.ashbyhq.com/acme/x"
+
+        record = adapter.fetch_job(
+            "not-json",
+            source_url=fetched_url,
+            fetched_at=datetime(2026, 7, 24, tzinfo=UTC),
+        )
+
+        assert record.external_id == ""
         assert record.description == ""
         assert record.url == fetched_url
 

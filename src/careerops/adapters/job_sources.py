@@ -252,6 +252,44 @@ class AshbyAdapter:
         )
 
 
+class AshbyDetailAdapter:
+    """Detail parser for a single Ashby job.
+
+    Parses the Ashby posting-api job detail response. The list endpoint omits
+    the JD body; the detail response carries it in ``descriptionPlain`` (text)
+    falling back to ``description`` (HTML), which becomes
+    ``RawJobRecord.description``. Ashby ``location`` is a plain string, unlike
+    Greenhouse's nested ``location.name``.
+    """
+
+    source_type = "ashby_detail"
+    parser_version = "ashby-detail-v1"
+
+    def fetch_job(
+        self,
+        detail_response: object,
+        *,
+        source_url: str,
+        fetched_at: datetime,
+    ) -> RawJobRecord:
+        if not isinstance(detail_response, dict):
+            return RawJobRecord(external_id="", title="", url=source_url)
+        data: dict[str, Any] = detail_response  # pyright: ignore[reportAssignmentType]
+        ext_id = str(data.get("id", ""))
+        title = str(data.get("title", ""))
+        location = str(data.get("location", ""))
+        url = str(data.get("url", "")) or source_url
+        description = str(data.get("descriptionPlain", "")) or str(data.get("description", ""))
+        return RawJobRecord(
+            external_id=ext_id,
+            title=title,
+            location=location,
+            url=url,
+            description=description,
+            raw_data=data,
+        )
+
+
 class JsonLdAdapter:
     """Adapter for JSON-LD structured data in HTML pages."""
 

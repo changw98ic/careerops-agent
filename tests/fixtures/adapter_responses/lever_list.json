@@ -1,0 +1,26 @@
+[
+  {
+    "id": "lever-aaa",
+    "text": "Frontend Engineer",
+    "hostedUrl": "https://jobs.lever.co/acme/lever-aaa",
+    "categories": {
+      "location": "Remote (EU)",
+      "team": "Product",
+      "commitment": "Full-time"
+    },
+    "description": "<div><h3>About the team</h3><p>Build the candidate-facing frontend for CareerOps. You will own the component library and accessibility.</p></div>",
+    "descriptionPlain": "About the team\nBuild the candidate-facing frontend for CareerOps. You will own the component library and accessibility."
+  },
+  {
+    "id": "lever-bbb",
+    "text": "Data Engineer",
+    "hostedUrl": "https://jobs.lever.co/acme/lever-bbb",
+    "categories": {
+      "location": "London, UK",
+      "team": "Data",
+      "commitment": "Full-time"
+    },
+    "description": "<div><h3>About the team</h3><p>Own the data pipeline: ingestion, warehousing, and the matching-quality instrumentation that depends on JD body coverage.</p></div>",
+    "descriptionPlain": "About the team\nOwn the data pipeline: ingestion, warehousing, and the matching-quality instrumentation that depends on JD body coverage."
+  }
+]

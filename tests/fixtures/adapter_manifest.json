@@ -1,0 +1,61 @@
+{
+  "version": "1",
+  "generated_at": "2026-07-24T00:00:00Z",
+  "fixtures_dir": "tests/fixtures/adapter_responses",
+  "hash_algorithm": "sha256 over sorted (filename, file-bytes) pairs joined by NUL",
+  "fixtures_sha256": "061c4a10e63f3b6a0be62f335f177eb737c4a79997e5146a8a3ed6a485928d8a",
+  "total_sample_count": 9,
+  "total_description_covered": 5,
+  "sources": {
+    "greenhouse": {
+      "fixture_files": [
+        "greenhouse_list.json"
+      ],
+      "sample_count": 2,
+      "description_covered": 0,
+      "adapter": "GreenhouseAdapter",
+      "parser_version": "greenhouse-v1",
+      "note": "List endpoint omits JD body; description requires GreenhouseDetailAdapter."
+    },
+    "greenhouse_detail": {
+      "fixture_files": [
+        "greenhouse_detail.json"
+      ],
+      "sample_count": 1,
+      "description_covered": 1,
+      "adapter": "GreenhouseDetailAdapter",
+      "parser_version": "greenhouse-detail-v1",
+      "note": "Detail response carries JD body in 'content'."
+    },
+    "json_ld": {
+      "fixture_files": [
+        "jsonld_page.html"
+      ],
+      "sample_count": 2,
+      "description_covered": 2,
+      "adapter": "JsonLdAdapter",
+      "parser_version": "json-ld-v1",
+      "note": "JobPosting 'description' mapped to RawJobRecord.description."
+    },
+    "lever": {
+      "fixture_files": [
+        "lever_list.json"
+      ],
+      "sample_count": 2,
+      "description_covered": 2,
+      "adapter": "LeverAdapter",
+      "parser_version": "lever-v1",
+      "note": "Lever list carries 'description'; v1 list adapter surfaces list metadata only."
+    },
+    "ashby": {
+      "fixture_files": [
+        "ashby_list.json"
+      ],
+      "sample_count": 2,
+      "description_covered": 0,
+      "adapter": "AshbyAdapter",
+      "parser_version": "ashby-v1",
+      "note": "Ashby list omits JD body; description requires a detail fetch."
+    }
+  }
+}

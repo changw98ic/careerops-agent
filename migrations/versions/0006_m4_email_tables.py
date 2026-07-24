@@ -317,6 +317,15 @@ def upgrade() -> None:
         "careerops.reply_drafts, careerops.attachment_quarantine TO careerops_api"
     )
 
+    # --- Append-only guard ---
+    op.execute(
+        sa.text(
+            "CREATE TRIGGER trg_email_extractions_append_only "
+            "BEFORE UPDATE OR DELETE ON careerops.email_extractions "
+            "FOR EACH ROW EXECUTE FUNCTION careerops.reject_append_only_mutation()"
+        )
+    )
+
 
 def downgrade() -> None:
     _grant_for_api_role(

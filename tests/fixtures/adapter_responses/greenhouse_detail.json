@@ -1,0 +1,9 @@
+{
+  "id": 1001,
+  "title": "Backend Engineer",
+  "absolute_url": "https://boards.greenhouse.io/acme/jobs/1001",
+  "location": {
+    "name": "Remote (US)"
+  },
+  "content": "<h2>About the role</h2><p>We are hiring a backend engineer to own services powering the CareerOps platform. You will design durable workflows, harden APIs, and partner with the data team on matching quality.</p><h3>What you will do</h3><ul><li>Build and operate FastAPI services and Temporal workflows.</li><li>Own ingestion adapters and keep JD body coverage honest.</li></ul>"
+}

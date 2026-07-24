@@ -17,6 +17,7 @@ dependencies = [
     "argon2-cffi>=25.1,<26",
     "jinja2>=3.1,<4",
     "python-multipart>=0.0.20,<1",
+    "jsonschema>=4,<5",
 ]
 
 [project.scripts]

@@ -1,0 +1,24 @@
+{
+  "meta": {
+    "total": 2,
+    "board": "acme-synthetic"
+  },
+  "jobs": [
+    {
+      "id": 1001,
+      "title": "Backend Engineer",
+      "absolute_url": "https://boards.greenhouse.io/acme/jobs/1001",
+      "location": {
+        "name": "Remote (US)"
+      }
+    },
+    {
+      "id": 1002,
+      "title": "Platform Engineer",
+      "absolute_url": "https://boards.greenhouse.io/acme/jobs/1002",
+      "location": {
+        "name": "New York, NY"
+      }
+    }
+  ]
+}

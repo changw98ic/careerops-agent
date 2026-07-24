@@ -25,6 +25,7 @@ class RawJobRecord:
     title: str
     location: str = ""
     url: str = ""
+    description: str = ""
     raw_data: dict[str, Any] = field(default_factory=dict)
 
 
@@ -51,6 +52,32 @@ class JobSourceAdapter(Protocol):
     def detect(self, base_url: str) -> bool: ...
 
     def list_jobs(self, response_data: object) -> AdapterFetchResult: ...
+
+
+class DetailJobSourceAdapter(Protocol):
+    """Contract for adapters that parse a single job's detail response.
+
+    Only adapters backed by a per-job detail endpoint implement this. The
+    adapter parses the detail response only; it holds no HTTP client and does
+    not own provenance (``source_url``/``fetched_at``/``response_hash`` are
+    attached by the outer ``FetchedResponse`` layer). ``JobSourceAdapter``
+    remains list-only -- JsonLd/Sitemap/StaticHtml and the Greenhouse/Lever/
+    Ashby list adapters are not forced to implement ``fetch_job``.
+    """
+
+    @property
+    def source_type(self) -> str: ...
+
+    @property
+    def parser_version(self) -> str: ...
+
+    def fetch_job(
+        self,
+        detail_response: object,
+        *,
+        source_url: str,
+        fetched_at: datetime,
+    ) -> RawJobRecord: ...
 
 
 def _hash_response(data: object) -> str:
@@ -100,6 +127,47 @@ class GreenhouseAdapter:
             response_hash=_hash_response(response_data),
             source_url="",
             parser_version=self.parser_version,
+        )
+
+
+class GreenhouseDetailAdapter:
+    """Detail parser for a single Greenhouse job.
+
+    Parses the Greenhouse ``/boards/{board}/jobs/{id}`` response. The list
+    endpoint omits the JD body; the detail response carries it in ``content``
+    (HTML/text), which becomes ``RawJobRecord.description``. ``external_id``
+    and ``url`` are taken from the detail response, falling back to the
+    ``source_url`` that was fetched when the response omits ``absolute_url``.
+    """
+
+    source_type = "greenhouse_detail"
+    parser_version = "greenhouse-detail-v1"
+
+    def fetch_job(
+        self,
+        detail_response: object,
+        *,
+        source_url: str,
+        fetched_at: datetime,
+    ) -> RawJobRecord:
+        if not isinstance(detail_response, dict):
+            return RawJobRecord(external_id="", title="", url=source_url)
+        data: dict[str, Any] = detail_response  # pyright: ignore[reportAssignmentType]
+        ext_id = str(data.get("id", ""))
+        title = str(data.get("title", ""))
+        location_obj: Any = data.get("location", {})
+        location = ""
+        if isinstance(location_obj, dict):
+            location = str(location_obj.get("name", ""))
+        url = str(data.get("absolute_url", "")) or source_url
+        description = str(data.get("content", ""))
+        return RawJobRecord(
+            external_id=ext_id,
+            title=title,
+            location=location,
+            url=url,
+            description=description,
+            raw_data=data,
         )
 
 
@@ -221,12 +289,14 @@ class JsonLdAdapter:
                 if isinstance(address, dict):
                     location = str(address.get("addressLocality", ""))
             ext_id = hashlib.sha256(url.encode()).hexdigest()[:16] if url else ""
+            description = str(data.get("description", ""))
             records.append(
                 RawJobRecord(
                     external_id=ext_id,
                     title=title,
                     location=location,
                     url=url,
+                    description=description,
                     raw_data=data,
                 )
             )

@@ -10,7 +10,7 @@ Safety invariants:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 
 class ModelProviderDisabled(Exception):
@@ -23,6 +23,10 @@ class StructuredModelRequest:
 
     The prompt_envelope isolates untrusted content. The model has no tool binding;
     instructions within untrusted_content are treated as data only.
+
+    ``schema`` is an optional JSON Schema dict; when set, the adapter validates
+    the parsed output against it (one repair attempt, then ModelInvocationError).
+    When None, no schema validation is applied (backward-compatible).
     """
 
     task_type: str
@@ -30,6 +34,7 @@ class StructuredModelRequest:
     user_prompt: str = ""
     untrusted_content: str = ""
     schema_name: str = ""
+    schema: dict[str, object] | None = None
     timeout_seconds: float = 30.0
     max_tokens: int = 1024
     trace_id: str = ""
@@ -41,7 +46,7 @@ class StructuredModelResponse:
     """A validated response from the structured model client."""
 
     task_type: str
-    result: dict[str, object] = field(default_factory=lambda: {})
+    result: dict[str, Any] = field(default_factory=lambda: {})
     confidence: float = 0.0
     model_id: str = ""
     prompt_version: str = ""

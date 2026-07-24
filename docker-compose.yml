@@ -18,6 +18,9 @@ x-careerops-environment: &careerops-environment
   CAREEROPS_GOOGLE_OAUTH_ENABLED: "false"
   CAREEROPS_EXTERNAL_WRITES_ENABLED: "false"
   CAREEROPS_AUTO_SEND_ENABLED: "false"
+  CAREEROPS_CONSOLE_ALLOWED_HOSTS: '["127.0.0.1:${CAREEROPS_API_PORT:-8000}","localhost:${CAREEROPS_API_PORT:-8000}"]'
+  CAREEROPS_CONSOLE_ALLOWED_ORIGINS: '["http://127.0.0.1:${CAREEROPS_API_PORT:-8000}","http://localhost:${CAREEROPS_API_PORT:-8000}"]'
+  CAREEROPS_CONSOLE_COOKIE_SECURE: "false"
 
 x-app-service: &app-service
   build:

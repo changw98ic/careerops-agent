@@ -1,0 +1,16 @@
+{
+  "jobs": [
+    {
+      "id": "ashby-1",
+      "title": "Reliability Engineer",
+      "location": "Remote (Global)",
+      "url": "https://careers.ashbyhq.com/acme/ashby-1"
+    },
+    {
+      "id": "ashby-2",
+      "title": "Product Designer",
+      "location": "San Francisco, CA",
+      "url": "https://careers.ashbyhq.com/acme/ashby-2"
+    }
+  ]
+}

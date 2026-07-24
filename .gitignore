@@ -23,3 +23,7 @@ datasets/derived/
 data/
 secrets/
 *.log
+
+# Tool/runtime state (not project code)
+.omc/
+.qoder/

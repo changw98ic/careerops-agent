@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Synthetic Careers Page - JSON-LD JobPosting fixtures</title>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org/",
+    "@type": "JobPosting",
+    "title": "Staff Engineer",
+    "url": "https://example.com/careers/staff-engineer",
+    "description": "<p>Own the platform roadmap end to end: drive architecture decisions, mentor engineers, and set the bar for operational excellence.</p>",
+    "datePosted": "2026-07-01",
+    "employmentType": "FULL_TIME",
+    "hiringOrganization": {
+      "@type": "Organization",
+      "name": "Synthetic Corp"
+    },
+    "jobLocation": {
+      "@type": "Place",
+      "address": {
+        "@type": "PostalAddress",
+        "addressLocality": "Berlin",
+        "addressCountry": "DE"
+      }
+    }
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org/",
+    "@type": "JobPosting",
+    "title": "Security Engineer",
+    "url": "https://example.com/careers/security-engineer",
+    "description": "<p>Lead the security roadmap: threat model new features, run red-team exercises, and harden authentication and authorization across services.</p>",
+    "datePosted": "2026-07-15",
+    "employmentType": "FULL_TIME",
+    "hiringOrganization": {
+      "@type": "Organization",
+      "name": "Synthetic Corp"
+    },
+    "jobLocation": {
+      "@type": "Place",
+      "address": {
+        "@type": "PostalAddress",
+        "addressLocality": "Toronto",
+        "addressCountry": "CA"
+      }
+    }
+  }
+  </script>
+</head>
+<body>
+  <h1>Open Roles</h1>
+  <div class="job-title">Staff Engineer</div>
+  <div class="job-location">Berlin</div>
+  <div class="job-title">Security Engineer</div>
+  <div class="job-location">Toronto</div>
+</body>
+</html>

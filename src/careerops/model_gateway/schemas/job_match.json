@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://careerops.local/schemas/job_match.json",
+  "title": "job_match",
+  "description": "Advisory job-fit analysis output (review_only per ADR 0006). Field set mirrors application/llm_matching.py USER_PROMPT_TEMPLATE.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "match_score",
+    "tier",
+    "matched_requirements",
+    "gaps",
+    "transferable_skills",
+    "seniority_fit",
+    "remote_compatible",
+    "reasoning",
+    "recommendation",
+    "confidence"
+  ],
+  "properties": {
+    "match_score": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Overall fit, integer 0-100."
+    },
+    "tier": {
+      "type": "string",
+      "enum": ["strong", "partial", "weak", "mismatch"]
+    },
+    "matched_requirements": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Requirements the candidate clearly meets."
+    },
+    "gaps": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Requirements the candidate lacks."
+    },
+    "transferable_skills": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Skills that partially cover requirements."
+    },
+    "seniority_fit": {
+      "type": "string",
+      "enum": ["match", "stretch", "overqualified", "unclear"]
+    },
+    "remote_compatible": {
+      "type": ["boolean", "null"],
+      "description": "true|false|null based only on explicit JD evidence."
+    },
+    "reasoning": {
+      "type": "string",
+      "description": "2-3 sentence concise rationale."
+    },
+    "recommendation": {
+      "type": "string",
+      "enum": ["apply", "consider", "skip"]
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Model self-reported confidence, float 0-1."
+    }
+  }
+}

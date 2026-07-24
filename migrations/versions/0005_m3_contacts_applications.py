@@ -327,6 +327,15 @@ def upgrade() -> None:
         "GRANT UPDATE ON careerops.applications, careerops.follow_up_reminders TO careerops_api"
     )
 
+    # --- Append-only guard ---
+    op.execute(
+        sa.text(
+            "CREATE TRIGGER trg_application_lifecycle_events_append_only "
+            "BEFORE UPDATE OR DELETE ON careerops.application_lifecycle_events "
+            "FOR EACH ROW EXECUTE FUNCTION careerops.reject_append_only_mutation()"
+        )
+    )
+
 
 def downgrade() -> None:
     _grant_for_api_role(

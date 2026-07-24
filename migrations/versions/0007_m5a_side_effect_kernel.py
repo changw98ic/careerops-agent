@@ -65,13 +65,13 @@ def _apply(statement: str) -> None:
 def upgrade() -> None:
     # M5A.4: allow the outbox to carry provider-write work claimed by the worker.
     op.drop_constraint(
-        "ck_outbox_events_event_type_values",
+        "event_type_values",
         "outbox_events",
         schema="careerops",
         type_="check",
     )
     op.create_check_constraint(
-        "ck_outbox_events_event_type_values",
+        "event_type_values",
         "outbox_events",
         "event_type IN ('workflow_signal', 'internal_notification', 'provider_write')",
         schema="careerops",
@@ -115,13 +115,13 @@ def downgrade() -> None:
         op.execute(sa.text("REVOKE USAGE ON SCHEMA careerops FROM careerops_side_effect"))
 
     op.drop_constraint(
-        "ck_outbox_events_event_type_values",
+        "event_type_values",
         "outbox_events",
         schema="careerops",
         type_="check",
     )
     op.create_check_constraint(
-        "ck_outbox_events_event_type_values",
+        "event_type_values",
         "outbox_events",
         "event_type IN ('workflow_signal', 'internal_notification')",
         schema="careerops",

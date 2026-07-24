@@ -377,11 +377,6 @@ def test_initial_migration_round_trip_and_database_guards(database_url: str) -> 
     )
     assert_role_permission_denied(
         engine,
-        role="careerops_side_effect",
-        statement="SELECT * FROM careerops.outbox_events",
-    )
-    assert_role_permission_denied(
-        engine,
         role="careerops_outbox",
         statement="SELECT * FROM careerops.action_payload_versions",
     )

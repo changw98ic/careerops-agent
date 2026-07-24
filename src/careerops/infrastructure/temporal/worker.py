@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from temporalio.client import Client
@@ -26,6 +26,11 @@ from careerops.workflows.m1_workflows import (
     RawDocumentPurgeWorkflow,
 )
 from careerops.workflows.smoke import RecoverableSmokeWorkflow
+
+# Explicit callable type prevents pyright from inferring a broken union of
+# incompatible activity signatures (the @activity.defn decorators produce
+# heterogeneous coroutine types that confuse the Protocol conformance check).
+_TemporalActivity = Callable[..., object]
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,7 +93,10 @@ def build_worker(
         CrawlJobSourceWorkflow,
         RawDocumentPurgeWorkflow,
     ]
-    all_activities = [
+    # Explicit callable type prevents pyright from inferring a broken union of
+    # incompatible activity signatures (the @activity.defn decorators produce
+    # heterogeneous coroutine types that confuse the Protocol conformance check).
+    all_activities: list[_TemporalActivity] = [
         smoke.record_started,
         smoke.record_completed,
         discovery.discover_company_sources,

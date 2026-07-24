@@ -4,7 +4,6 @@ import asyncio
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -54,7 +53,7 @@ async def _exercise_recovery_and_replay() -> None:
     async with environment:
         task_queue = f"careerops-smoke-{uuid4()}"
         settings = TemporalWorkerSettings(task_queue=task_queue)
-        sink: Any = CountingSink()
+        sink = CountingSink()
         activities = SmokeActivities(sink)
 
         async with build_worker(

@@ -8,9 +8,13 @@ relies on (idempotency, immutability, approval binding, reconciliation).
 from __future__ import annotations
 
 import threading
-from datetime import datetime
-from uuid import UUID
+from datetime import datetime, timedelta
+from uuid import UUID, uuid4
 
+from careerops.application.outbox import (
+    ClaimedOutboxEvent,
+    PendingOutboxEvent,
+)
 from careerops.domain.side_effects import (
     ActionIntent,
     ActionPayloadVersion,
@@ -193,6 +197,40 @@ class InMemorySideEffectStore:
                 if approval.action_intent_id == intent_id
             )
 
+    def get_or_create_pending_approval(
+        self,
+        intent_id: UUID,
+        *,
+        payload_version_id: UUID,
+        policy_decision_id: UUID,
+        requested_for: str,
+        now: datetime,
+        expires_at: datetime,
+        decision_rule_reference: str | None = None,
+    ) -> ApprovalRequest:
+        """Atomic find-or-create under ``RLock`` (single-process safe)."""
+        with self._lock:
+            for approval in self._approvals.values():
+                if (
+                    approval.action_intent_id == intent_id
+                    and approval.decision is ApprovalDecision.PENDING
+                ):
+                    return approval
+            approval = ApprovalRequest(
+                id=uuid4(),
+                action_intent_id=intent_id,
+                payload_version_id=payload_version_id,
+                policy_decision_id=policy_decision_id,
+                requested_for=requested_for,
+                decision=ApprovalDecision.PENDING,
+                decision_rule_reference=decision_rule_reference,
+                expires_at=expires_at,
+                decided_at=None,
+                created_at=now,
+            )
+            self._approvals[approval.id] = approval
+        return approval
+
     # -- attempts --------------------------------------------------------
 
     def insert_attempt(self, attempt: SideEffectAttempt) -> SideEffectAttempt:
@@ -276,3 +314,104 @@ class InMemorySideEffectStore:
                 for receipt in self._receipts.values()
                 if receipt.side_effect_attempt_id in attempt_ids
             )
+
+    def expire_pending_approvals(self, *, now: datetime) -> tuple[ApprovalRequest, ...]:
+        with self._lock:
+            expired: list[ApprovalRequest] = []
+            for approval in list(self._approvals.values()):
+                if approval.decision is ApprovalDecision.PENDING and now >= approval.expires_at:
+                    updated = ApprovalRequest(
+                        id=approval.id,
+                        action_intent_id=approval.action_intent_id,
+                        payload_version_id=approval.payload_version_id,
+                        policy_decision_id=approval.policy_decision_id,
+                        requested_for=approval.requested_for,
+                        decision=ApprovalDecision.EXPIRED,
+                        decision_rule_reference=approval.decision_rule_reference,
+                        expires_at=approval.expires_at,
+                        decided_at=now,
+                        created_at=approval.created_at,
+                    )
+                    self._approvals[approval.id] = updated
+                    expired.append(updated)
+                    intent = self._intents.get(approval.action_intent_id)
+                    if intent is not None and intent.status is not IntentStatus.DENIED:
+                        self.update_intent_status(
+                            intent.id, IntentStatus.AWAITING_APPROVAL, now=now
+                        )
+            return tuple(expired)
+
+
+class InMemoryOutboxStore:
+    """Thread-safe in-memory outbox for tests."""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._events: dict[UUID, PendingOutboxEvent] = {}
+        self._claimed: dict[UUID, ClaimedOutboxEvent] = {}
+        self._published: list[UUID] = []
+        self._released: list[UUID] = []
+
+    def enqueue(self, event: PendingOutboxEvent) -> None:
+        with self._lock:
+            self._events[event.event_id] = event
+
+    def claim(
+        self,
+        *,
+        owner: str,
+        now: datetime,
+        lease_for: timedelta,
+        limit: int,
+    ) -> tuple[ClaimedOutboxEvent, ...]:
+        with self._lock:
+            claimable = [
+                e
+                for e in self._events.values()
+                if e.available_at <= now and e.event_id not in self._claimed
+            ]
+            claimed: list[ClaimedOutboxEvent] = []
+            for event in claimable[:limit]:
+                lease_token = uuid4()
+                ce = ClaimedOutboxEvent(
+                    event_id=event.event_id,
+                    event_key=event.event_key,
+                    action_intent_id=event.action_intent_id,
+                    payload_version_id=event.payload_version_id,
+                    event_type=event.event_type.value,
+                    available_at=event.available_at,
+                    attempt_count=1,
+                    lease_token=lease_token,
+                    lease_until=now + lease_for,
+                )
+                self._claimed[event.event_id] = ce
+                claimed.append(ce)
+            return tuple(claimed)
+
+    def mark_published(
+        self,
+        event_id: UUID,
+        *,
+        owner: str,
+        lease_token: UUID,
+        now: datetime,
+    ) -> None:
+        with self._lock:
+            self._claimed.pop(event_id, None)
+            self._published.append(event_id)
+
+    def release(
+        self,
+        event_id: UUID,
+        *,
+        owner: str,
+        lease_token: UUID,
+        now: datetime,
+        retry_at: datetime,
+        error_code: str,
+        terminal: bool,
+    ) -> None:
+        with self._lock:
+            self._claimed.pop(event_id, None)
+            if terminal:
+                self._released.append(event_id)

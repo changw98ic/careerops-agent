@@ -11,6 +11,7 @@ from uuid import UUID
 class OutboxEventType(StrEnum):
     WORKFLOW_SIGNAL = "workflow_signal"
     INTERNAL_NOTIFICATION = "internal_notification"
+    PROVIDER_WRITE = "provider_write"
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +39,8 @@ class ClaimedOutboxEvent:
 
 class OutboxStore(Protocol):
     """Every method is an independently committed database transaction."""
+
+    def enqueue(self, event: PendingOutboxEvent) -> None: ...
 
     def claim(
         self,

@@ -40,6 +40,7 @@ EXPECTED_TABLES = {
     "evidence_items",
     "evidence_records",
     "follow_up_reminders",
+    "gmail_send_receipts",
     "interview_records",
     "job_aliases",
     "job_merge_decisions",

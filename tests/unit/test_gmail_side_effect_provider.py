@@ -2,7 +2,8 @@
 
 Verifies the ``SideEffectProvider`` protocol contract using a mocked
 ``GmailSender``: execute -> send -> receipt, idempotent duplicate, reconcile,
-validation failure, and revoke (unsupported).
+validation failure, and revoke (unsupported).  Also covers the
+``GmailReceiptStore`` injection path.
 """
 
 from __future__ import annotations
@@ -17,6 +18,11 @@ from careerops.domain.side_effects import (
     ProviderFailureClass,
     ProviderResultKind,
     ReceiptFinalState,
+)
+from careerops.integrations.gmail_receipt_store import (
+    GmailReceipt,
+    GmailReceiptStore,
+    InMemoryGmailReceiptStore,
 )
 from careerops.integrations.gmail_sender import GmailSendError, SendResult
 from careerops.integrations.gmail_side_effect_provider import GmailSideEffectProvider
@@ -196,3 +202,79 @@ class TestRevoke:
 class TestProviderName:
     def test_name(self, provider: GmailSideEffectProvider) -> None:
         assert provider.provider_name == "gmail"
+
+
+class TestReceiptStoreInjection:
+    """Verify that ``GmailSideEffectProvider`` delegates to the injected store."""
+
+    def test_custom_store_receives_put(
+        self,
+        mock_sender: MagicMock,
+        now: datetime,
+    ) -> None:
+        store = MagicMock(spec=GmailReceiptStore)
+        store.get_by_reconciliation_key.return_value = None
+        provider = GmailSideEffectProvider(mock_sender, receipt_store=store)
+
+        mock_sender.send.return_value = SendResult(
+            provider_message_id="msg-999",
+            thread_id="thread-888",
+            label_ids=("SENT",),
+        )
+        result = _exec(provider, now=now, key="k:h")
+
+        assert result.kind is ProviderResultKind.SUCCESS
+        store.put.assert_called_once()
+        stored = store.put.call_args[0][0]
+        assert isinstance(stored, GmailReceipt)
+        assert stored.reconciliation_key == "k:h"
+        assert stored.provider_message_id == "msg-999"
+        assert stored.thread_id == "thread-888"
+        assert stored.sent_at is now
+
+    def test_custom_store_idempotent(
+        self,
+        mock_sender: MagicMock,
+        now: datetime,
+    ) -> None:
+        existing = GmailReceipt(
+            reconciliation_key="k:h",
+            provider_message_id="msg-existing",
+            thread_id="thread-existing",
+            sent_at=now,
+        )
+        store = MagicMock(spec=GmailReceiptStore)
+        store.get_by_reconciliation_key.return_value = existing
+        provider = GmailSideEffectProvider(mock_sender, receipt_store=store)
+
+        result = _exec(provider, now=now, key="k:h")
+
+        assert result.kind is ProviderResultKind.SUCCESS
+        assert result.provider_resource_id == "msg-existing"
+        assert result.metadata.get("duplicate") is True
+        mock_sender.send.assert_not_called()
+
+    def test_custom_store_reconcile(
+        self,
+        mock_sender: MagicMock,
+        now: datetime,
+    ) -> None:
+        existing = GmailReceipt(
+            reconciliation_key="k:h",
+            provider_message_id="msg-found",
+            thread_id="thread-found",
+            sent_at=now,
+        )
+        store = MagicMock(spec=GmailReceiptStore)
+        store.get_by_reconciliation_key.return_value = existing
+        provider = GmailSideEffectProvider(mock_sender, receipt_store=store)
+
+        result = provider.reconcile(reconciliation_key="k:h", now=now)
+
+        assert result.found is True
+        assert result.final_state is ReceiptFinalState.SUCCEEDED
+        assert result.provider_resource_id == "msg-found"
+
+    def test_default_store_is_in_memory(self, mock_sender: MagicMock) -> None:
+        provider = GmailSideEffectProvider(mock_sender)
+        assert isinstance(provider._receipt_store, InMemoryGmailReceiptStore)

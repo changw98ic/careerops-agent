@@ -17,7 +17,7 @@ from careerops.infrastructure.database.schema import outbox_events
 _OWNER = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _ERROR_CODE = re.compile(r"^[A-Z0-9_]{1,64}$")
 _EVENT_KEY = re.compile(r"^[A-Za-z0-9._:/-]{1,255}$")
-_M0_EVENT_TYPES = ("workflow_signal", "internal_notification")
+_M0_EVENT_TYPES = ("workflow_signal", "internal_notification", "provider_write")
 
 
 class OutboxLeaseLostError(RuntimeError):
@@ -227,6 +227,10 @@ class PostgresOutboxStore:
 
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
+
+    def enqueue(self, event: PendingOutboxEvent) -> None:
+        with self._engine.begin() as connection:
+            PostgresOutboxRepository(connection).enqueue(event)
 
     def claim(
         self,

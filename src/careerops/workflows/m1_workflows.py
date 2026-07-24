@@ -73,7 +73,7 @@ class CrawlJobSourceWorkflow:
                 ingest_result = await workflow.execute_activity(
                     INGEST_POSTING_ACTIVITY,
                     record,
-                    result_type=dict[str, object],
+                    result_type=dict[str, bool],
                     start_to_close_timeout=_ACTIVITY_TIMEOUT,
                     retry_policy=_RETRY_POLICY,
                 )

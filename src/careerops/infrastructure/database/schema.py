@@ -2016,6 +2016,22 @@ sa.Index(
     postgresql_where=reconciliation_records.c.resolved_at.is_(None),
 )
 
+# ---------------------------------------------------------------------------
+# M6B: Gmail send receipt store (provider-level, durable across restarts)
+# ---------------------------------------------------------------------------
+
+gmail_send_receipts = sa.Table(
+    "gmail_send_receipts",
+    metadata,
+    sa.Column("reconciliation_key", sa.Text(), primary_key=True),
+    sa.Column("provider_message_id", sa.Text(), nullable=False),
+    sa.Column("thread_id", sa.Text(), nullable=False),
+    sa.Column("sent_at", sa.DateTime(timezone=True), nullable=False),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+)
+
 APPEND_ONLY_TABLES = (
     "action_payload_versions",
     "application_events",

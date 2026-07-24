@@ -24,6 +24,7 @@ from typing import Protocol
 from uuid import UUID, uuid4
 
 from careerops.application.audit import AuditActorType, AuditEventDraft
+from careerops.application.outbox import OutboxEventType, OutboxStore, PendingOutboxEvent
 from careerops.domain.side_effects import (
     ActionIntent,
     ActionPayloadVersion,
@@ -203,6 +204,18 @@ class SideEffectStore(Protocol):
 
     def list_approvals(self, intent_id: UUID) -> tuple[ApprovalRequest, ...]: ...
 
+    def get_or_create_pending_approval(
+        self,
+        intent_id: UUID,
+        *,
+        payload_version_id: UUID,
+        policy_decision_id: UUID,
+        requested_for: str,
+        now: datetime,
+        expires_at: datetime,
+        decision_rule_reference: str | None = None,
+    ) -> ApprovalRequest: ...
+
     def insert_attempt(self, attempt: SideEffectAttempt) -> SideEffectAttempt: ...
 
     def get_attempt(self, attempt_id: UUID) -> SideEffectAttempt: ...
@@ -229,6 +242,13 @@ class SideEffectStore(Protocol):
 
     def list_receipts(self, intent_id: UUID) -> tuple[ProviderReceipt, ...]: ...
 
+    def expire_pending_approvals(self, *, now: datetime) -> tuple[ApprovalRequest, ...]:
+        """Expire PENDING approvals past their deadline and revert intents to AWAITING_APPROVAL.
+
+        Returns the approvals that were newly expired.
+        """
+        ...
+
 
 class SideEffectKernel:
     """Coordinates proposal, policy, approval, execution, and reconciliation."""
@@ -240,6 +260,7 @@ class SideEffectKernel:
         *,
         policy_decider: SideEffectPolicyDecider | None = None,
         audit_writer: InMemoryAuditWriter | None = None,
+        outbox_store: OutboxStore | None = None,
         max_attempts: int = 5,
         approval_ttl_seconds: int = 600,
     ) -> None:
@@ -247,6 +268,7 @@ class SideEffectKernel:
         self._provider = provider
         self._policy = policy_decider or SideEffectPolicyDecider()
         self._audit = audit_writer or InMemoryAuditWriter()
+        self._outbox_store = outbox_store
         self._max_attempts = max_attempts
         self._approval_ttl_seconds = approval_ttl_seconds
         self._lock = RLock()
@@ -428,18 +450,31 @@ class SideEffectKernel:
 
         Policy rules are unchanged: the underlying ``request_approval`` still
         rejects intents without a non-DENY policy decision.
+
+        For Postgres backends, atomicity is provided by ``SELECT ... FOR UPDATE``
+        at the store level (DB row-lock). For in-memory backends, atomicity is
+        provided by the store's own ``RLock``.
         """
-        with self._lock:
-            store = self._store
-            for approval in store.list_approvals(intent_id):
-                if approval.decision is ApprovalDecision.PENDING:
-                    return approval
-            return self.request_approval(
-                intent_id,
-                requested_for=requested_for,
-                now=now,
-                decision_rule_reference=decision_rule_reference,
-            )
+        # Business validation stays in the kernel.
+        intent = self._require_intent(intent_id)
+        if intent.current_payload_version_id is None:
+            raise ApprovalInvalidError("intent has no payload version to approve")
+        policy_decision = self._latest_policy_decision(intent_id)
+        if policy_decision is None:
+            raise ApprovalInvalidError("intent has no policy decision to approve")
+        if policy_decision.decision is PolicyDecisionValue.DENY:
+            raise PolicyDeniedError(policy_decision.reason_codes)
+
+        # Delegate atomic find-or-create to the store.
+        return self._store.get_or_create_pending_approval(
+            intent_id,
+            payload_version_id=intent.current_payload_version_id,
+            policy_decision_id=policy_decision.id,
+            requested_for=requested_for,
+            now=now,
+            expires_at=now + timedelta(seconds=self._approval_ttl_seconds),
+            decision_rule_reference=decision_rule_reference,
+        )
 
     def decide_approval(
         self,
@@ -650,6 +685,7 @@ class SideEffectKernel:
                     self._provider.provider_name, reconciliation_key
                 )
                 store.update_intent_status(intent_id, IntentStatus.CONFIRMED, now=now)
+                self._enqueue_outbox_event(intent_id, payload_version, now)
                 return ExecutionOutcome(
                     intent_id=intent_id,
                     status=IntentStatus.CONFIRMED,
@@ -717,6 +753,7 @@ class SideEffectKernel:
 
         return self._settle_result(
             intent_id=intent_id,
+            payload_version=payload_version,
             attempt=attempt,
             result=result,
             reconciliation_key=reconciliation_key,
@@ -727,6 +764,7 @@ class SideEffectKernel:
         self,
         *,
         intent_id: UUID,
+        payload_version: ActionPayloadVersion,
         attempt: SideEffectAttempt,
         result: ProviderCallResult,
         reconciliation_key: str,
@@ -764,6 +802,7 @@ class SideEffectKernel:
                     },
                 )
             )
+            self._enqueue_outbox_event(intent_id, payload_version, now)
             return ExecutionOutcome(
                 intent_id=intent_id,
                 status=IntentStatus.CONFIRMED,
@@ -792,6 +831,7 @@ class SideEffectKernel:
                     metadata=dict(reconciliation.metadata),
                 )
                 store.update_intent_status(intent_id, IntentStatus.CONFIRMED, now=now)
+                self._enqueue_outbox_event(intent_id, payload_version, now)
                 return ExecutionOutcome(
                     intent_id=intent_id,
                     status=IntentStatus.CONFIRMED,
@@ -980,6 +1020,57 @@ class SideEffectKernel:
             ):
                 return approval
         return None
+
+    # -- outbox -----------------------------------------------------------
+
+    def _enqueue_outbox_event(
+        self,
+        intent_id: UUID,
+        payload_version: ActionPayloadVersion,
+        now: datetime,
+    ) -> None:
+        """Write a ``PendingOutboxEvent`` to the outbox store if available."""
+        store = self._outbox_store
+        if store is None:
+            return
+        event = PendingOutboxEvent(
+            event_id=uuid4(),
+            event_key=f"kernel/{intent_id}/{payload_version.id}",
+            action_intent_id=intent_id,
+            payload_version_id=payload_version.id,
+            event_type=OutboxEventType.PROVIDER_WRITE,
+            available_at=now,
+        )
+        store.enqueue(event)
+
+    # -- sweeper ----------------------------------------------------------
+
+    def expire_pending_approvals(self, *, now: datetime) -> tuple[ApprovalRequest, ...]:
+        """Expire PENDING approvals past their deadline and revert intents to AWAITING_APPROVAL.
+
+        Delegates to the store for efficient querying.  Safe to call from a
+        Temporal timer activity or cron.
+        """
+        with self._lock:
+            expired = self._store.expire_pending_approvals(now=now)
+            for approval in expired:
+                self._audit.append(
+                    AuditEventDraft(
+                        event_type="approval_expired",
+                        actor_type=AuditActorType.POLICY,
+                        actor_id="sweeper",
+                        resource_type="action_intent",
+                        resource_id=approval.action_intent_id,
+                        trace_id=str(approval.id),
+                        event_data={
+                            "approval_id": str(approval.id),
+                            "expires_at": approval.expires_at.isoformat(),
+                        },
+                    )
+                )
+            return expired
+
+    # -- helpers ----------------------------------------------------------
 
     def _audit_chain_complete(self, intent_id: UUID, policy_decision: PolicyDecisionRecord) -> bool:
         events = self._audit.list_for_resource("action_intent", intent_id)

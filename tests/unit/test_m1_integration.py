@@ -867,6 +867,7 @@ class TestWorkflowContracts:
         from careerops.workflows.m1_contracts import CrawledPostingRecord
 
         record = CrawledPostingRecord(
+            source_id="src-1",
             external_id="ext-1",
             canonical_url="https://example.com/jobs/1",
             source_url="https://example.com/jobs/1",
@@ -950,6 +951,7 @@ class TestM1Activities:
         assert result == []
 
         record = CrawledPostingRecord(
+            source_id="src-1",
             external_id="ext-1",
             canonical_url="https://example.com/jobs/1",
             source_url="https://example.com/jobs/1",

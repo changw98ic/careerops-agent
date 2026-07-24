@@ -17,7 +17,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import Engine, select
+from sqlalchemy import Engine, select, update
 from sqlalchemy.exc import IntegrityError
 
 from careerops.domain.side_effects import (
@@ -392,11 +392,15 @@ class PostgresSideEffectStore:
             ).scalar()
             if exists is None:
                 # Look up the intent's current payload version for the FK.
-                intent_row = conn.execute(
-                    select(action_intents).where(
-                        action_intents.c.id == attempt.action_intent_id
+                intent_row = (
+                    conn.execute(
+                        select(action_intents).where(
+                            action_intents.c.id == attempt.action_intent_id
+                        )
                     )
-                ).mappings().fetchone()
+                    .mappings()
+                    .fetchone()
+                )
                 if intent_row is None:
                     raise KeyError(
                         f"intent {attempt.action_intent_id} not found; "
@@ -408,8 +412,7 @@ class PostgresSideEffectStore:
                     pv_row = conn.execute(
                         select(action_payload_versions.c.id)
                         .where(
-                            action_payload_versions.c.action_intent_id
-                            == attempt.action_intent_id
+                            action_payload_versions.c.action_intent_id == attempt.action_intent_id
                         )
                         .order_by(action_payload_versions.c.version)
                         .limit(1)
@@ -584,6 +587,57 @@ class PostgresSideEffectStore:
                 .fetchall()
             )
         return tuple(self._row_to_receipt(r) for r in rows)
+
+    def expire_pending_approvals(self, *, now: datetime) -> tuple[ApprovalRequest, ...]:
+        """Expire PENDING approvals past their deadline and revert intents to AWAITING_APPROVAL."""
+        with self._engine.begin() as conn:
+            rows = (
+                conn.execute(
+                    select(approval_requests)
+                    .where(
+                        approval_requests.c.decision == ApprovalDecision.PENDING.value,
+                        approval_requests.c.expires_at < now,
+                    )
+                    .with_for_update(skip_locked=True)
+                )
+                .mappings()
+                .fetchall()
+            )
+            expired: list[ApprovalRequest] = []
+            for row in rows:
+                approval = self._row_to_approval(row)
+                conn.execute(
+                    update(approval_requests)
+                    .where(approval_requests.c.id == approval.id)
+                    .values(
+                        decision=ApprovalDecision.EXPIRED.value,
+                        decided_at=now,
+                    )
+                )
+                # Revert intent to AWAITING_APPROVAL (skip DENIED intents).
+                conn.execute(
+                    update(action_intents)
+                    .where(
+                        action_intents.c.id == approval.action_intent_id,
+                        action_intents.c.status != IntentStatus.DENIED.value,
+                    )
+                    .values(status=IntentStatus.AWAITING_APPROVAL.value, updated_at=now)
+                )
+                expired.append(
+                    ApprovalRequest(
+                        id=approval.id,
+                        action_intent_id=approval.action_intent_id,
+                        payload_version_id=approval.payload_version_id,
+                        policy_decision_id=approval.policy_decision_id,
+                        requested_for=approval.requested_for,
+                        decision=ApprovalDecision.EXPIRED,
+                        decision_rule_reference=approval.decision_rule_reference,
+                        expires_at=approval.expires_at,
+                        decided_at=now,
+                        created_at=approval.created_at,
+                    )
+                )
+        return tuple(expired)
 
     # -- row mappers -----------------------------------------------------
 

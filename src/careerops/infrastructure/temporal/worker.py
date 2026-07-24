@@ -9,7 +9,11 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 from careerops.adapters.http_fetcher import fetch
-from careerops.infrastructure.temporal.activities import SmokeActivities
+from careerops.infrastructure.temporal.activities import (
+    ApprovalSweeperActivities,
+    OutboxDrainActivities,
+    SmokeActivities,
+)
 from careerops.infrastructure.temporal.m1_activities import (
     CrawlActivitySink,
     M1CrawlActivities,
@@ -58,6 +62,8 @@ class M1ActivityBundles:
     discovery: M1DiscoveryActivities | None = None
     crawl: M1CrawlActivities | None = None
     purge: M1PurgeActivities | None = None
+    outbox_drain: OutboxDrainActivities | None = None
+    approval_sweeper: ApprovalSweeperActivities | None = None
 
 
 def build_worker(
@@ -90,6 +96,11 @@ def build_worker(
         crawl.ingest_posting,
         purge.purge_raw_documents,
     ]
+
+    if m1.outbox_drain is not None:
+        all_activities.append(m1.outbox_drain.drain_outbox)
+    if m1.approval_sweeper is not None:
+        all_activities.append(m1.approval_sweeper.sweep_expired_approvals)
 
     return Worker(
         client,

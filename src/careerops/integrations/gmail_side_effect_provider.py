@@ -20,6 +20,11 @@ from careerops.domain.side_effects import (
     ReceiptFinalState,
     ReconciliationResult,
 )
+from careerops.integrations.gmail_receipt_store import (
+    GmailReceipt,
+    GmailReceiptStore,
+    InMemoryGmailReceiptStore,
+)
 from careerops.integrations.gmail_sender import (
     GmailSender,
     GmailSendError,
@@ -34,19 +39,24 @@ class GmailSideEffectProvider:
     is the kernel-provided key (``idempotency_key:payload_hash``); the provider
     resource ID is the Gmail ``messageId``.
 
-    ``reconcile`` checks an in-memory receipt map populated by prior successful
-    ``execute`` calls. This is a v1 simplification; a durable store would query
-    the Gmail API for sent messages by ID.
+    ``reconcile`` checks a durable receipt store populated by prior successful
+    ``execute`` calls.  The default ``InMemoryGmailReceiptStore`` is replaced
+    by ``PostgresGmailReceiptStore`` in production so receipts survive restarts.
 
     ``revoke`` is not supported for email (Gmail does not support unsending).
     """
 
     provider_name = "gmail"
 
-    def __init__(self, sender: GmailSender) -> None:
+    def __init__(
+        self,
+        sender: GmailSender,
+        receipt_store: GmailReceiptStore | None = None,
+    ) -> None:
         self._sender = sender
-        self._sent: dict[str, tuple[str, str, datetime]] = {}
-        # reconciliation_key -> (message_id, thread_id, sent_at)
+        self._receipt_store: GmailReceiptStore = (
+            receipt_store if receipt_store is not None else InMemoryGmailReceiptStore()
+        )
 
     def execute(
         self,
@@ -58,14 +68,13 @@ class GmailSideEffectProvider:
         now: datetime,
     ) -> ProviderCallResult:
         # Idempotent: if we already sent for this key, return SUCCESS.
-        existing = self._sent.get(reconciliation_key)
+        existing = self._receipt_store.get_by_reconciliation_key(reconciliation_key)
         if existing is not None:
-            message_id, thread_id, _ = existing
             return ProviderCallResult(
                 kind=ProviderResultKind.SUCCESS,
-                provider_resource_id=message_id,
+                provider_resource_id=existing.provider_message_id,
                 reconciliation_key=reconciliation_key,
-                metadata={"thread_id": thread_id, "duplicate": True},
+                metadata={"thread_id": existing.thread_id, "duplicate": True},
             )
 
         to = str(target.get("to", ""))
@@ -97,7 +106,14 @@ class GmailSideEffectProvider:
                 failure_class=failure_class,
             )
 
-        self._sent[reconciliation_key] = (result.provider_message_id, result.thread_id, now)
+        self._receipt_store.put(
+            GmailReceipt(
+                reconciliation_key=reconciliation_key,
+                provider_message_id=result.provider_message_id,
+                thread_id=result.thread_id,
+                sent_at=now,
+            )
+        )
         return ProviderCallResult(
             kind=ProviderResultKind.SUCCESS,
             provider_resource_id=result.provider_message_id,
@@ -107,23 +123,25 @@ class GmailSideEffectProvider:
 
     def reconcile(self, *, reconciliation_key: str, now: datetime) -> ReconciliationResult:
         del now
-        existing = self._sent.get(reconciliation_key)
+        existing = self._receipt_store.get_by_reconciliation_key(reconciliation_key)
         if existing is None:
             return ReconciliationResult(found=False)
-        message_id, thread_id, sent_at = existing
         return ReconciliationResult(
             found=True,
             final_state=ReceiptFinalState.SUCCEEDED,
-            provider_resource_id=message_id,
-            metadata={"thread_id": thread_id, "sent_at": sent_at.isoformat()},
+            provider_resource_id=existing.provider_message_id,
+            metadata={
+                "thread_id": existing.thread_id,
+                "sent_at": existing.sent_at.isoformat(),
+            },
         )
 
     def revoke(
         self, *, reconciliation_key: str, provider_resource_id: str, now: datetime
     ) -> ReconciliationResult:
         del now
-        existing = self._sent.get(reconciliation_key)
-        if existing is None or existing[0] != provider_resource_id:
+        existing = self._receipt_store.get_by_reconciliation_key(reconciliation_key)
+        if existing is None or existing.provider_message_id != provider_resource_id:
             return ReconciliationResult(found=False)
         # Gmail does not support unsending; report not-found so the kernel
         # records a RECONCILIATION_REQUIRED status.

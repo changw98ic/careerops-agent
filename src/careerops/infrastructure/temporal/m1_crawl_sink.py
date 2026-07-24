@@ -5,15 +5,23 @@ fetching the source URL via ``http_fetcher.fetch`` and running the matching
 ``JobSourceAdapter.list_jobs`` parser. Each ``RawJobRecord`` is mapped to a
 ``CrawledPostingRecord`` with the fetch provenance attached.
 
-``ingest_posting`` is a v1 stub (returns ``is_new_posting=True``); real
-ingestion writes to ``job_postings`` + ``job_posting_versions`` which is
-handled by the LangGraph crawl node path in v1.
+``ingest_posting`` writes to ``job_postings`` + ``job_posting_versions``
+with dedup by ``source_id + external_id`` (posting) and
+``job_posting_id + content_hash`` (version).
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable
+from datetime import UTC, datetime
 from json import JSONDecodeError, loads
+from uuid import UUID, uuid4
+
+import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.engine import Engine
 
 from careerops.adapters.http_fetcher import FetchedResponse, fetch
 from careerops.adapters.job_sources import (
@@ -25,6 +33,7 @@ from careerops.adapters.job_sources import (
     SitemapAdapter,
     StaticHtmlAdapter,
 )
+from careerops.infrastructure.database.schema import job_posting_versions, job_postings
 from careerops.workflows.m1_contracts import (
     CrawledPostingRecord,
     CrawlJobSourceInput,
@@ -53,11 +62,20 @@ def _parse_body(body: str) -> object:
     return body
 
 
+def _content_hash(structured_data: dict[str, str]) -> str:
+    """Deterministic SHA-256 hex digest of the structured data payload."""
+    canonical = json.dumps(structured_data, sort_keys=True, ensure_ascii=True).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
 class RealCrawlActivitySink:
     """Activity-side crawl adapter backed by http_fetcher + adapters.
 
     For each ``CrawlJobSourceInput``, fetches the ``base_url``, runs the
     list adapter matching ``source_type``, and returns the crawled postings.
+
+    ``ingest_posting`` writes rows to ``job_postings`` and
+    ``job_posting_versions`` with idempotent upserts (ON CONFLICT DO NOTHING).
     """
 
     def __init__(
@@ -65,10 +83,12 @@ class RealCrawlActivitySink:
         adapters: dict[str, JobSourceAdapter] | None = None,
         *,
         fetcher: FetcherFn | None = None,
+        engine: Engine | None = None,
     ) -> None:
         self._adapters = adapters or dict(_ADAPTER_REGISTRY)
         # Allow injecting a fake fetcher for tests.
         self._fetch: FetcherFn = fetcher or fetch
+        self._engine = engine
 
     async def crawl_source(self, request: CrawlJobSourceInput) -> list[CrawledPostingRecord]:
         adapter = self._adapters.get(request.source_type)
@@ -78,25 +98,113 @@ class RealCrawlActivitySink:
         resp: FetchedResponse = self._fetch(request.base_url)
         result = adapter.list_jobs(_parse_body(resp.body))
 
+        fetched_at = resp.fetched_at.isoformat()
         postings: list[CrawledPostingRecord] = []
         for record in result.jobs:
+            # Flatten to dict[str, str] — Temporal JSON converter rejects
+            # ``object`` values; stringify non-string scalars.
+            raw: dict[str, str] = {}
+            for k, v in record.raw_data.items():
+                raw[k] = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
             postings.append(
                 CrawledPostingRecord(
+                    source_id=request.source_id,
                     external_id=record.external_id,
                     canonical_url=record.url or request.base_url,
                     source_url=resp.final_url or request.base_url,
                     structured_data={
-                        "title": record.title,
-                        "location": record.location,
-                        "description": record.description,
-                        **record.raw_data,
+                        "title": record.title or "",
+                        "location": record.location or "",
+                        "description": record.description or "",
+                        **raw,
                     },
                     parser_version=adapter.parser_version,
+                    fetched_at=fetched_at,
                 )
             )
         return postings
 
-    async def ingest_posting(self, record: CrawledPostingRecord) -> dict[str, object]:
-        # v1 stub: the real ingestion path is the LangGraph crawl node.
-        del record
-        return {"is_new_posting": True, "is_new_version": True}
+    async def ingest_posting(self, record: CrawledPostingRecord) -> dict[str, bool]:
+        """Insert into job_postings + job_posting_versions with idempotent dedup.
+
+        Dedup rules:
+        - Posting: unique on (source_id, external_id).
+        - Version: unique on (job_posting_id, content_hash).
+
+        Returns ``is_new_posting`` / ``is_new_version`` flags matching the
+        workflow contract.
+        """
+        if self._engine is None:
+            raise RuntimeError("ingest_posting requires an Engine")
+
+        now = datetime.now(tz=UTC)
+        content_hash = _content_hash(record.structured_data)
+        fetched_at = datetime.fromisoformat(record.fetched_at) if record.fetched_at else now
+        source_id = UUID(record.source_id)
+
+        with self._engine.begin() as conn:
+            # --- Upsert job_postings ---
+            insert_posting = (
+                pg_insert(job_postings)
+                .values(
+                    id=uuid4(),
+                    source_id=source_id,
+                    external_id=record.external_id,
+                    canonical_url=record.canonical_url,
+                    source_state="active",
+                    first_seen_at=fetched_at,
+                    last_seen_at=fetched_at,
+                )
+                .on_conflict_do_nothing(
+                    index_elements=[
+                        job_postings.c.source_id,
+                        job_postings.c.external_id,
+                    ],
+                )
+                .returning(job_postings.c.id)
+            )
+            row = conn.execute(insert_posting).first()
+            if row is not None:
+                is_new_posting = True
+                posting_id: UUID = row[0]
+            else:
+                is_new_posting = False
+                posting_id = conn.execute(
+                    sa.select(job_postings.c.id).where(
+                        job_postings.c.source_id == source_id,
+                        job_postings.c.external_id == record.external_id,
+                    )
+                ).scalar_one()
+
+            # --- Upsert job_posting_versions ---
+            insert_version = (
+                pg_insert(job_posting_versions)
+                .values(
+                    id=uuid4(),
+                    job_posting_id=posting_id,
+                    content_hash=content_hash,
+                    source_url=record.source_url,
+                    parser_version=record.parser_version,
+                    structured_data=record.structured_data,
+                    captured_at=fetched_at,
+                )
+                .on_conflict_do_nothing(
+                    index_elements=[
+                        job_posting_versions.c.job_posting_id,
+                        job_posting_versions.c.content_hash,
+                    ],
+                )
+                .returning(job_posting_versions.c.id)
+            )
+            version_row = conn.execute(insert_version).first()
+            is_new_version = version_row is not None
+
+            # Touch last_seen_at on every visit.
+            if not is_new_posting:
+                conn.execute(
+                    sa.update(job_postings)
+                    .where(job_postings.c.id == posting_id)
+                    .values(last_seen_at=fetched_at)
+                )
+
+        return {"is_new_posting": is_new_posting, "is_new_version": is_new_version}

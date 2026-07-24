@@ -54,11 +54,13 @@ class CrawlJobSourceInput:
 
 @dataclass(frozen=True, slots=True)
 class CrawledPostingRecord:
+    source_id: str
     external_id: str
     canonical_url: str
     source_url: str
-    structured_data: dict[str, object]
+    structured_data: dict[str, str]
     parser_version: str
+    fetched_at: str = ""
 
 
 @dataclass(frozen=True, slots=True)

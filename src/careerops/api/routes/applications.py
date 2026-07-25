@@ -6,8 +6,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Query, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, Field
+
+from careerops.api.auth_dependency import require_api_auth
+from careerops.auth.contracts import AuthenticatedPrincipal
 
 router = APIRouter(prefix="/api/v1", tags=["applications"])
 
@@ -68,11 +71,11 @@ class ApplicationResponse(BaseModel):
 class ApplicationListResponse(BaseModel):
     items: list[ApplicationResponse] = Field(default_factory=list)
     total: int = 0
-    cursor: str | None = None
+    next_cursor: str | None = None
+    has_more: bool = False
 
 
 class ApplicationCreateRequest(BaseModel):
-    candidate_id: str
     canonical_job_id: str
     apply_url: str = ""
 
@@ -80,6 +83,20 @@ class ApplicationCreateRequest(BaseModel):
 class StateTransitionRequest(BaseModel):
     to_state: str
     note: str = ""
+
+
+class EmailDraftResponse(BaseModel):
+    subject: str
+    body: str
+    to: str = ""
+    company: str = ""
+    title: str = ""
+
+
+class SendEmailRequest(BaseModel):
+    to: str
+    subject: str
+    body: str
 
 
 class ApplicationEventResponse(BaseModel):
@@ -289,7 +306,7 @@ async def list_applications(
     repo = _get_application_repository(request)
     if repo is None:
         return ApplicationListResponse(items=[], total=0)
-    apps = repo.list_applications(
+    result = repo.list_applications(
         candidate_id=candidate_id, state=state, cursor=cursor, limit=limit
     )
     items = [
@@ -303,39 +320,55 @@ async def list_applications(
             follow_up_due_at=a.get("follow_up_due_at"),
             version=a.get("version", 1),
         )
-        for a in apps
+        for a in result["items"]
     ]
-    return ApplicationListResponse(items=items, total=len(items))
+    return ApplicationListResponse(
+        items=items,
+        total=result["total"],
+        next_cursor=result.get("next_cursor"),
+        has_more=result.get("next_cursor") is not None,
+    )
 
 
 @router.post(
     "/applications",
     response_model=ApplicationResponse,
-    status_code=201,
-    summary="Create an application",
+    summary="Create an application (idempotent)",
 )
 async def create_application(
     body: ApplicationCreateRequest,
     request: Request,
     response: Response,
-) -> ApplicationResponse:
+    principal: AuthenticatedPrincipal | None = Depends(require_api_auth),
+) -> ApplicationResponse | dict[str, str]:
     response.headers["Cache-Control"] = "no-store"
     service = _get_application_service(request)
     if service is None:
         response.status_code = 503
-        return ApplicationResponse(
-            id="",
-            candidate_id=body.candidate_id,
-            canonical_job_id=body.canonical_job_id,
-            state="favorited",
-        )
+        return {"error": "service_unavailable"}
+
+    # Resolve candidate_id from authenticated session.
+    if principal is None or not principal.candidate_id:
+        response.status_code = 409
+        return {"error": "CANDIDATE_PROFILE_REQUIRED"}
+
+    candidate_id = principal.candidate_id
+    canonical_job_id = _parse_uuid(body.canonical_job_id)
+
+    # Idempotency: return existing application if (candidate, job) already tracked.
+    repo = _get_application_repository(request)
+    if repo is not None:
+        existing = repo.find_by_candidate_and_job(candidate_id, canonical_job_id)
+        if existing is not None:
+            response.status_code = 200
+            return _app_to_response(existing)
 
     from careerops.application.applications import ApplicationCreateRequest as ServiceRequest
 
     result = service.create_application(
         ServiceRequest(
-            candidate_id=_parse_uuid(body.candidate_id),
-            canonical_job_id=_parse_uuid(body.canonical_job_id),
+            candidate_id=candidate_id,
+            canonical_job_id=canonical_job_id,
             apply_url=body.apply_url,
         ),
         now=_now(),
@@ -412,6 +445,168 @@ async def record_submission(
         response.status_code = 422
         return {"error": f"illegal_transition: {e}"}
     return _app_to_response(result)
+
+
+@router.get(
+    "/applications/{application_id}/email-draft",
+    response_model=EmailDraftResponse,
+    summary="Generate email draft for application",
+)
+async def get_email_draft(
+    application_id: str,
+    request: Request,
+    response: Response,
+) -> EmailDraftResponse | dict[str, str]:
+    response.headers["Cache-Control"] = "no-store"
+
+    app_repo = _get_application_repository(request)
+    if app_repo is None:
+        response.status_code = 503
+        return {"error": "service_unavailable"}
+
+    app = app_repo.find_by_id(_parse_uuid(application_id))
+    if app is None:
+        response.status_code = 404
+        return {"error": "NOT_FOUND"}
+
+    # Get job detail for email generation
+    job_repo = getattr(request.app.state, "job_read_repository", None)
+    if job_repo is None:
+        response.status_code = 503
+        return {"error": "service_unavailable"}
+
+    job_detail = job_repo.get_job_detail(str(app.canonical_job_id))
+    if job_detail is None:
+        response.status_code = 404
+        return {"error": "JOB_NOT_FOUND"}
+
+    # Build job dict for email_drafting.generate_body
+    version_data = {}
+    if job_detail.get("versions"):
+        version_data = job_detail["versions"][0].get("structured_data", {})
+
+    job_dict = {
+        "title": job_detail.get("canonical_title", ""),
+        "company": "",
+        "raw_data": version_data,
+    }
+    # Get company name from postings
+    postings = job_detail.get("postings", [])
+    if postings and postings[0].get("source"):
+        job_dict["company"] = postings[0]["source"].get("identifier", "")
+
+    # Generate email draft
+    from careerops.application.email_drafting import generate_body
+
+    resume_text = ""  # TODO: load from candidate's resume version
+    subject, body = generate_body(job_dict, resume_text)
+
+    # Look up recruiting contact from contacts table
+    to_email = ""
+    company_id = job_detail.get("company_id")
+    if company_id:
+        contact_repo = _get_contact_repository(request)
+        if contact_repo:
+            contacts = contact_repo.find_by_company(company_id)
+            if contacts:
+                contact = contacts[0]
+                to_email = contact.email if hasattr(contact, "email") else contact.get("email", "")
+
+    return EmailDraftResponse(
+        subject=subject,
+        body=body,
+        to=to_email,
+        company=job_dict["company"],
+        title=job_dict["title"],
+    )
+
+
+@router.post(
+    "/applications/{application_id}/send-email",
+    response_model=ApplicationResponse,
+    summary="Send application email via Gmail",
+)
+async def send_application_email(
+    application_id: str,
+    body: SendEmailRequest,
+    request: Request,
+    response: Response,
+) -> ApplicationResponse | dict[str, str]:
+    response.headers["Cache-Control"] = "no-store"
+
+    app_repo = _get_application_repository(request)
+    if app_repo is None:
+        response.status_code = 503
+        return {"error": "service_unavailable"}
+
+    app = app_repo.find_by_id(_parse_uuid(application_id))
+    if app is None:
+        response.status_code = 404
+        return {"error": "NOT_FOUND"}
+
+    if not body.to or "@" not in body.to:
+        response.status_code = 422
+        return {"error": "INVALID_RECIPIENT"}
+
+    # Send email via GmailSender
+    import json
+    from pathlib import Path
+
+    from careerops.integrations.gmail_sender import (
+        GmailSender,
+        OutgoingEmail,
+        refresh_access_token,
+    )
+
+    token_file = Path(__file__).resolve().parent.parent.parent.parent / "secrets" / "gmail_send_token.json"
+    if not token_file.exists():
+        response.status_code = 503
+        return {"error": "GMAIL_NOT_CONFIGURED"}
+
+    tok = json.loads(token_file.read_text())
+    if "gmail.send" not in tok.get("scope", ""):
+        response.status_code = 503
+        return {"error": "GMAIL_SEND_SCOPE_MISSING"}
+
+    access_token = tok["access_token"]
+    if tok.get("refresh_token"):
+        try:
+            access_token = refresh_access_token(
+                client_id=tok["client_id"],
+                client_secret=tok["client_secret"],
+                refresh_token=tok["refresh_token"],
+            )
+        except Exception:
+            pass  # use stored token
+
+    sender = GmailSender(access_token)
+    email = OutgoingEmail(
+        to=body.to,
+        subject=body.subject,
+        body=body.body,
+    )
+
+    try:
+        send_result = sender.send(email)
+    except Exception as e:
+        response.status_code = 502
+        return {"error": f"SEND_FAILED: {e}"}
+
+    # Record submission
+    from careerops.domain.applications import IllegalTransitionError
+
+    app_service = _get_application_service(request)
+    if app_service is not None:
+        try:
+            app_service.record_manual_submission(
+                application_id=_parse_uuid(application_id),
+                actor_id="email_send",
+                now=_now(),
+            )
+        except IllegalTransitionError:
+            pass
+
+    return _app_to_response(app)
 
 
 @router.get(

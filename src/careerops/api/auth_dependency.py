@@ -20,9 +20,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, Request
 from fastapi.security import APIKeyCookie
 
+from careerops.api.errors import CSRFRejectedError, UnauthorizedError
 from careerops.auth.contracts import AuthenticatedPrincipal, AuthError
 
 _COOKIE_NAME = "careerops_session"
@@ -51,21 +52,23 @@ async def require_api_auth(
     if auth_service is None or web_settings is None:
         if auth_service is None and web_settings is None:
             return None
-        raise HTTPException(status_code=401, detail="authentication required")
+        raise UnauthorizedError()
 
     if not session_token:
-        raise HTTPException(status_code=401, detail="authentication required")
+        raise UnauthorizedError()
 
     try:
         principal = auth_service.authenticate(session_token, now=_now())
     except (AuthError, ValueError):
-        raise HTTPException(status_code=401, detail="authentication required") from None
+        raise UnauthorizedError() from None
 
-    csrf_token = request.headers.get(_csrf_header, "")
-    try:
-        auth_service.validate_csrf(principal, csrf_token)
-    except (AuthError, ValueError):
-        raise HTTPException(status_code=403, detail="csrf token rejected") from None
+    # Per spec §4: GET/HEAD only check session cookie; mutating methods also check CSRF.
+    if request.method not in ("GET", "HEAD"):
+        csrf_token = request.headers.get(_csrf_header, "")
+        try:
+            auth_service.validate_csrf(principal, csrf_token)
+        except (AuthError, ValueError):
+            raise CSRFRejectedError() from None
 
     return principal
 
@@ -87,15 +90,15 @@ async def require_web_auth(
     if auth_service is None or web_settings is None:
         if auth_service is None and web_settings is None:
             return None
-        raise HTTPException(status_code=401, detail="authentication required")
+        raise UnauthorizedError()
 
     if not session_token:
-        raise HTTPException(status_code=401, detail="authentication required")
+        raise UnauthorizedError()
 
     try:
         return auth_service.authenticate(session_token, now=_now())
     except (AuthError, ValueError):
-        raise HTTPException(status_code=401, detail="authentication required") from None
+        raise UnauthorizedError() from None
 
 
 def _now() -> datetime:

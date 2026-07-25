@@ -2,7 +2,7 @@ UV_PROJECT_ENVIRONMENT := venv
 export UV_PROJECT_ENVIRONMENT
 
 .PHONY: audit bootstrap coverage format migrate migration-check run security setup verify \
-	verify-compose verify-db verify-m0 verify-m1 verify-m1-contracts verify-m1-full \
+	verify-compose verify-db verify-frontend verify-m0 verify-m1 verify-m1-contracts verify-m1-full \
 	verify-temporal
 
 audit:
@@ -63,6 +63,15 @@ verify-m1-full:
 
 # Compatibility alias: the historical target has always meant contract validation only.
 verify-m1: verify-m1-contracts
+
+verify-frontend:
+	cd frontend && npm ci && npm run build
+	@INITIAL_JS=$$(find frontend/dist/assets -name '*.js' | head -1); \
+	if [ -z "$$INITIAL_JS" ]; then echo "::error::No JS bundle found"; exit 1; fi; \
+	SIZE=$$(gzip -c "$$INITIAL_JS" | wc -c); \
+	LIMIT=$$((250 * 1024)); \
+	echo "Initial JS gzip size: $$SIZE bytes (limit: $$LIMIT)"; \
+	if [ "$$SIZE" -gt "$$LIMIT" ]; then echo "::error::Bundle too large"; exit 1; fi
 
 verify: verify-m1-contracts
 	uv lock --check

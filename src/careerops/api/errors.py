@@ -10,23 +10,172 @@ from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from careerops.api.contracts import ErrorBody, ErrorResponse
+from careerops.api.contracts import ErrorCode, ErrorBody, ErrorResponse
 
-_HTTP_ERROR_CODES: dict[int, str] = {
-    HTTPStatus.BAD_REQUEST.value: "BAD_REQUEST",
-    HTTPStatus.UNAUTHORIZED.value: "UNAUTHORIZED",
-    HTTPStatus.FORBIDDEN.value: "FORBIDDEN",
-    HTTPStatus.NOT_FOUND.value: "NOT_FOUND",
-    HTTPStatus.METHOD_NOT_ALLOWED.value: "METHOD_NOT_ALLOWED",
-    HTTPStatus.CONFLICT.value: "CONFLICT",
-    HTTPStatus.UNPROCESSABLE_ENTITY.value: "VALIDATION_ERROR",
-    HTTPStatus.TOO_MANY_REQUESTS.value: "RATE_LIMITED",
+
+# ---------------------------------------------------------------------------
+# Domain exceptions — raise these in route handlers / dependencies
+# ---------------------------------------------------------------------------
+
+
+class CareerOpsHTTPException(HTTPException):
+    """Base class for all CareerOps domain HTTP exceptions."""
+
+    error_code: ErrorCode = ErrorCode.INTERNAL_ERROR
+    retryable: bool = False
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        details: JsonValue = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(status_code=self._status_code(), detail=message, headers=headers)
+        self.message = message
+        self.details = details
+
+    @classmethod
+    def _status_code(cls) -> int:
+        raise NotImplementedError
+
+
+class UnauthorizedError(CareerOpsHTTPException):
+    error_code = ErrorCode.UNAUTHORIZED
+    message_default = "Authentication required"
+
+    @classmethod
+    def _status_code(cls) -> int:
+        return HTTPStatus.UNAUTHORIZED
+
+    def __init__(self, message: str = "", **kwargs: object) -> None:
+        super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
+
+
+class CSRFRejectedError(CareerOpsHTTPException):
+    error_code = ErrorCode.CSRF_REJECTED
+    message_default = "CSRF token rejected"
+
+    @classmethod
+    def _status_code(cls) -> int:
+        return HTTPStatus.FORBIDDEN
+
+    def __init__(self, message: str = "", **kwargs: object) -> None:
+        super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
+
+
+class InvalidCredentialsError(CareerOpsHTTPException):
+    error_code = ErrorCode.INVALID_CREDENTIALS
+    message_default = "Invalid credentials"
+
+    @classmethod
+    def _status_code(cls) -> int:
+        return HTTPStatus.UNAUTHORIZED
+
+    def __init__(self, message: str = "", **kwargs: object) -> None:
+        super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
+
+
+class RateLimitedError(CareerOpsHTTPException):
+    error_code = ErrorCode.RATE_LIMITED
+    retryable = True
+    message_default = "Too many requests"
+
+    @classmethod
+    def _status_code(cls) -> int:
+        return HTTPStatus.TOO_MANY_REQUESTS
+
+    def __init__(self, message: str = "", **kwargs: object) -> None:
+        super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
+
+
+class BootstrapClosedError(CareerOpsHTTPException):
+    error_code = ErrorCode.BOOTSTRAP_CLOSED
+    message_default = "Bootstrap is no longer available"
+
+    @classmethod
+    def _status_code(cls) -> int:
+        return HTTPStatus.FORBIDDEN
+
+    def __init__(self, message: str = "", **kwargs: object) -> None:
+        super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
+
+
+class CandidateProfileRequiredError(CareerOpsHTTPException):
+    error_code = ErrorCode.CANDIDATE_PROFILE_REQUIRED
+    message_default = "Candidate profile is required"
+
+    @classmethod
+    def _status_code(cls) -> int:
+        return HTTPStatus.FORBIDDEN
+
+    def __init__(self, message: str = "", **kwargs: object) -> None:
+        super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
+
+
+class NotFoundError(CareerOpsHTTPException):
+    error_code = ErrorCode.NOT_FOUND
+    message_default = "Resource not found"
+
+    @classmethod
+    def _status_code(cls) -> int:
+        return HTTPStatus.NOT_FOUND
+
+    def __init__(self, message: str = "", **kwargs: object) -> None:
+        super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
+
+
+class ConflictError(CareerOpsHTTPException):
+    error_code = ErrorCode.CONFLICT
+    message_default = "Resource conflict"
+
+    @classmethod
+    def _status_code(cls) -> int:
+        return HTTPStatus.CONFLICT
+
+    def __init__(self, message: str = "", **kwargs: object) -> None:
+        super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
+
+
+class DependencyNotReadyError(CareerOpsHTTPException):
+    error_code = ErrorCode.DEPENDENCY_NOT_READY
+    retryable = True
+    message_default = "Service dependency is not ready"
+
+    @classmethod
+    def _status_code(cls) -> int:
+        return HTTPStatus.SERVICE_UNAVAILABLE
+
+    def __init__(self, message: str = "", **kwargs: object) -> None:
+        super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Internal mapping for generic HTTPException fallback
+# ---------------------------------------------------------------------------
+
+_HTTP_ERROR_CODES: dict[int, ErrorCode] = {
+    HTTPStatus.BAD_REQUEST.value: ErrorCode.BAD_REQUEST,
+    HTTPStatus.UNAUTHORIZED.value: ErrorCode.UNAUTHORIZED,
+    HTTPStatus.FORBIDDEN.value: ErrorCode.FORBIDDEN,
+    HTTPStatus.NOT_FOUND.value: ErrorCode.NOT_FOUND,
+    HTTPStatus.METHOD_NOT_ALLOWED.value: ErrorCode.METHOD_NOT_ALLOWED,
+    HTTPStatus.CONFLICT.value: ErrorCode.CONFLICT,
+    HTTPStatus.UNPROCESSABLE_ENTITY.value: ErrorCode.VALIDATION_ERROR,
+    HTTPStatus.TOO_MANY_REQUESTS.value: ErrorCode.RATE_LIMITED,
+    HTTPStatus.SERVICE_UNAVAILABLE.value: ErrorCode.DEPENDENCY_NOT_READY,
 }
 
 _HTTP_ERROR_MESSAGES: dict[int, str] = {
     HTTPStatus.NOT_FOUND.value: "Resource not found",
     HTTPStatus.METHOD_NOT_ALLOWED.value: "Method not allowed",
+    HTTPStatus.SERVICE_UNAVAILABLE.value: "Service dependency is not ready",
 }
+
+
+# ---------------------------------------------------------------------------
+# Response builders
+# ---------------------------------------------------------------------------
 
 
 def _trace_id(request: Request) -> str:
@@ -34,18 +183,20 @@ def _trace_id(request: Request) -> str:
     return value if isinstance(value, str) else "unavailable"
 
 
-def _response(
+def error_response(
     request: Request,
     *,
     status_code: int,
-    code: str,
+    code: ErrorCode,
     message: str,
+    retryable: bool = False,
     details: JsonValue = None,
 ) -> JSONResponse:
     body = ErrorResponse(
         error=ErrorBody(
             code=code,
             message=message,
+            retryable=retryable,
             details=details,
             trace_id=_trace_id(request),
         )
@@ -53,12 +204,39 @@ def _response(
     return JSONResponse(status_code=status_code, content=body.model_dump(mode="json"))
 
 
+# ---------------------------------------------------------------------------
+# Exception handlers
+# ---------------------------------------------------------------------------
+
+
+async def handle_careerops_exception(request: Request, error: Exception) -> JSONResponse:
+    exc = cast("CareerOpsHTTPException", error)
+    return error_response(
+        request,
+        status_code=exc.status_code,
+        code=exc.error_code,
+        message=exc.message or str(exc.detail),
+        retryable=exc.retryable,
+        details=exc.details,
+    )
+
+
 async def handle_http_exception(request: Request, error: Exception) -> JSONResponse:
     exception = cast("HTTPException", error)
     status_code = exception.status_code
-    code = _HTTP_ERROR_CODES.get(status_code, "HTTP_ERROR")
+    code = _HTTP_ERROR_CODES.get(status_code, ErrorCode.INTERNAL_ERROR)
     message = _HTTP_ERROR_MESSAGES.get(status_code, "Request could not be processed")
-    return _response(request, status_code=status_code, code=code, message=message)
+    retryable = status_code in (
+        HTTPStatus.TOO_MANY_REQUESTS,
+        HTTPStatus.SERVICE_UNAVAILABLE,
+    )
+    return error_response(
+        request,
+        status_code=status_code,
+        code=code,
+        message=message,
+        retryable=retryable,
+    )
 
 
 async def handle_validation_error(request: Request, error: Exception) -> JSONResponse:
@@ -71,25 +249,31 @@ async def handle_validation_error(request: Request, error: Exception) -> JSONRes
         }
         for item in exception.errors()
     ]
-    return _response(
+    return error_response(
         request,
         status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
-        code="VALIDATION_ERROR",
+        code=ErrorCode.VALIDATION_ERROR,
         message="Request validation failed",
         details=cast("JsonValue", {"issues": issues}),
     )
 
 
 async def handle_unexpected_error(request: Request, _error: Exception) -> JSONResponse:
-    return _response(
+    return error_response(
         request,
         status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-        code="INTERNAL_ERROR",
+        code=ErrorCode.INTERNAL_ERROR,
         message="An internal error occurred",
     )
 
 
+# ---------------------------------------------------------------------------
+# Installer
+# ---------------------------------------------------------------------------
+
+
 def install_error_handlers(app: FastAPI) -> None:
+    app.add_exception_handler(CareerOpsHTTPException, handle_careerops_exception)
     app.add_exception_handler(HTTPException, handle_http_exception)
     app.add_exception_handler(RequestValidationError, handle_validation_error)
     app.add_exception_handler(Exception, handle_unexpected_error)

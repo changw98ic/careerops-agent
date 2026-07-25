@@ -1,73 +1,91 @@
 <template>
   <div class="login-page">
-    <form class="login-card" @submit.prevent="doLogin">
-      <h1>CareerOps</h1>
-      <p class="subtitle">Login to your account</p>
-      <div v-if="error" class="error">{{ error }}</div>
-      <label>Username
-        <input v-model="username" type="text" autocomplete="username" required />
-      </label>
-      <label>Password
-        <input v-model="password" type="password" autocomplete="current-password" required />
-      </label>
-      <button type="submit" class="btn-primary" :disabled="loading">
-        {{ loading ? 'Logging in...' : 'Login' }}
-      </button>
-    </form>
+    <div class="login-shell">
+      <div class="login-brand">
+        <div class="brand-mark">CO</div>
+        <span>CareerOps</span>
+      </div>
+
+      <a-card class="login-card" :bordered="false">
+        <h1>Welcome back</h1>
+        <p class="subtitle">Sign in to review your job search workspace.</p>
+
+        <a-alert v-if="error" class="login-error" type="error" show-icon :message="error" />
+
+        <a-form layout="vertical" :model="formData" @finish="doLogin">
+          <a-form-item
+            label="Username"
+            name="username"
+            :rules="[{ required: true, message: 'Enter your username.' }]"
+          >
+            <a-input
+              v-model:value="formData.username"
+              size="large"
+              autocomplete="username"
+              placeholder="Enter your username"
+              :disabled="loading"
+            >
+              <template #prefix><UserOutlined /></template>
+            </a-input>
+          </a-form-item>
+
+          <a-form-item
+            label="Password"
+            name="password"
+            :rules="[{ required: true, message: 'Enter your password.' }]"
+          >
+            <a-input-password
+              v-model:value="formData.password"
+              size="large"
+              autocomplete="current-password"
+              placeholder="Enter your password"
+              :disabled="loading"
+            >
+              <template #prefix><LockOutlined /></template>
+            </a-input-password>
+          </a-form-item>
+
+          <a-button html-type="submit" type="primary" size="large" block :loading="loading">
+            Sign in
+          </a-button>
+        </a-form>
+      </a-card>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
-import { setCsrfToken } from '../api/client.js'
-import { setLoggedIn } from '../router.js'
+import { LockOutlined, UserOutlined } from '@ant-design/icons-vue'
+import { login } from '../stores/session.js'
+
+const ERROR_MAP = {
+  'Username or password is invalid': '用户名或密码错误',
+  'Too many attempts; try again later': '登录尝试过于频繁，请稍后再试',
+  'Authentication service is not available': '认证服务未配置',
+  'Session is invalid or expired': '登录会话已过期，请重试',
+  'Missing preauth session; load the login page first': '登录会话已过期，请重试',
+  'Preauth failed': '登录会话初始化失败，请重试',
+}
 
 const router = useRouter()
 const username = ref('')
 const password = ref('')
+const formData = reactive({ username: '', password: '' })
 const error = ref('')
 const loading = ref(false)
-
-onMounted(() => {
-  if (document.cookie.includes('careerops_session=')) {
-    router.push('/jobs')
-  }
-})
 
 async function doLogin() {
   loading.value = true
   error.value = ''
   try {
-    const res = await fetch('/api/v1/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: username.value, password: password.value }),
-      credentials: 'same-origin',
-    })
-    const data = await res.json()
-    if (data.ok) {
-      setCsrfToken(data.csrf_token)
-      setLoggedIn(true)
-      router.push('/jobs')
-    } else {
-      error.value = data.error || 'Login failed'
-    }
+    await login(formData.username, formData.password)
+    await router.push({ name: 'dashboard' })
   } catch (e) {
-    error.value = 'Network error'
+    error.value = ERROR_MAP[e.message] || '登录失败，请重试'
   } finally {
     loading.value = false
   }
 }
 </script>
-
-<style scoped>
-.login-page { display: flex; justify-content: center; align-items: center; min-height: 80vh; }
-.login-card { background: #fff; padding: 40px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); width: 360px; }
-.login-card h1 { margin-bottom: 4px; }
-.subtitle { color: #666; margin-bottom: 24px; font-size: 14px; }
-.login-card label { display: block; margin-bottom: 16px; font-size: 14px; font-weight: 500; }
-.login-card input { display: block; width: 100%; margin-top: 4px; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
-.login-card button { width: 100%; padding: 10px; margin-top: 8px; font-size: 15px; }
-.error { background: #f8d7da; color: #721c24; padding: 8px 12px; border-radius: 4px; margin-bottom: 16px; font-size: 13px; }
-</style>

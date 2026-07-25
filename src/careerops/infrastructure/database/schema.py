@@ -998,6 +998,11 @@ console_users = sa.Table(
     "console_users",
     metadata,
     sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "candidate_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.candidates.id", ondelete="RESTRICT"),
+    ),
     sa.Column("singleton_key", sa.SmallInteger(), server_default="1", nullable=False, unique=True),
     sa.Column("username", sa.String(64), nullable=False, unique=True),
     sa.Column("password_hash", sa.Text(), nullable=False),

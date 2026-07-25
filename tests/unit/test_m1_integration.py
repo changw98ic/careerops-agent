@@ -1079,17 +1079,21 @@ class TestJobsApiRoutes:
         from careerops.api.routes.jobs import router
 
         class MockRepo:
-            def list_companies(self, cursor: str | None, limit: int) -> list[dict[str, object]]:
-                return [
-                    {
-                        "id": "c1",
-                        "name": "Acme",
-                        "normalized_name": "acme",
-                        "official_domains": ["acme.com"],
-                        "terms_status": "allowed",
-                        "created_at": "2026-01-01T00:00:00Z",
-                    }
-                ]
+            def list_companies(self, cursor: str | None, limit: int) -> dict[str, object]:
+                return {
+                    "items": [
+                        {
+                            "id": "c1",
+                            "name": "Acme",
+                            "normalized_name": "acme",
+                            "official_domains": ["acme.com"],
+                            "terms_status": "allowed",
+                            "created_at": "2026-01-01T00:00:00Z",
+                        }
+                    ],
+                    "total": 1,
+                    "next_cursor": None,
+                }
 
         app = FastAPI()
         app.include_router(router)
@@ -1109,16 +1113,20 @@ class TestJobsApiRoutes:
 
         class MockRepo:
             def list_canonical_jobs(
-                self, cursor: str | None, limit: int, state: str | None
-            ) -> list[dict[str, object]]:
-                return [
-                    {
-                        "id": "j1",
-                        "company_id": "c1",
-                        "canonical_title": "Engineer",
-                        "aggregate_state": "active",
-                    }
-                ]
+                self, cursor: str | None, limit: int, state: str | None, q: str | None = None
+            ) -> dict[str, object]:
+                return {
+                    "items": [
+                        {
+                            "id": "j1",
+                            "company_id": "c1",
+                            "canonical_title": "Engineer",
+                            "aggregate_state": "active",
+                        }
+                    ],
+                    "total": 1,
+                    "next_cursor": None,
+                }
 
         app = FastAPI()
         app.include_router(router)
@@ -1171,18 +1179,22 @@ class TestJobsApiRoutes:
 
         class MockRepo:
             def list_canonical_jobs(
-                self, cursor: str | None, limit: int, state: str | None
-            ) -> list[dict[str, object]]:
+                self, cursor: str | None, limit: int, state: str | None, q: str | None = None
+            ) -> dict[str, object]:
                 if state == "closed":
-                    return []
-                return [
-                    {
-                        "id": "j1",
-                        "company_id": "c1",
-                        "canonical_title": "Engineer",
-                        "aggregate_state": "active",
-                    }
-                ]
+                    return {"items": [], "total": 0, "next_cursor": None}
+                return {
+                    "items": [
+                        {
+                            "id": "j1",
+                            "company_id": "c1",
+                            "canonical_title": "Engineer",
+                            "aggregate_state": "active",
+                        }
+                    ],
+                    "total": 1,
+                    "next_cursor": None,
+                }
 
         app = FastAPI()
         app.include_router(router)
@@ -1248,8 +1260,12 @@ class TestJobsUi:
         from careerops.web.jobs_ui import web_router
 
         class MockRepo:
-            def list_companies(self, cursor: str | None, limit: int) -> list[dict[str, object]]:
-                return [{"id": "c1", "name": "Acme", "normalized_name": "acme"}]
+            def list_companies(self, cursor: str | None, limit: int) -> dict[str, object]:
+                return {
+                    "items": [{"id": "c1", "name": "Acme", "normalized_name": "acme"}],
+                    "total": 1,
+                    "next_cursor": None,
+                }
 
         app = FastAPI()
         app.include_router(web_router)
@@ -1268,15 +1284,19 @@ class TestJobsUi:
         class MockRepo:
             def list_canonical_jobs(
                 self, cursor: str | None, limit: int, state: str | None
-            ) -> list[dict[str, object]]:
-                return [
-                    {
-                        "id": "j1",
-                        "company_id": "c1",
-                        "canonical_title": "Engineer",
-                        "aggregate_state": "active",
-                    }
-                ]
+            ) -> dict[str, object]:
+                return {
+                    "items": [
+                        {
+                            "id": "j1",
+                            "company_id": "c1",
+                            "canonical_title": "Engineer",
+                            "aggregate_state": "active",
+                        }
+                    ],
+                    "total": 1,
+                    "next_cursor": None,
+                }
 
         app = FastAPI()
         app.include_router(web_router)

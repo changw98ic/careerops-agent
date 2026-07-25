@@ -9,6 +9,7 @@ saving raw response hash, fetched_at, source URL and parser version.
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import re
 from dataclasses import dataclass, field
@@ -112,6 +113,7 @@ class GreenhouseAdapter:
             location = ""
             if isinstance(location_obj, dict):
                 location = str(location_obj.get("name", ""))
+            # absolute_url is the apply URL from Greenhouse
             url = str(job.get("absolute_url", ""))
             records.append(
                 RawJobRecord(
@@ -160,7 +162,7 @@ class GreenhouseDetailAdapter:
         if isinstance(location_obj, dict):
             location = str(location_obj.get("name", ""))
         url = str(data.get("absolute_url", "")) or source_url
-        description = str(data.get("content", ""))
+        description = html.unescape(str(data.get("content", "")))
         return RawJobRecord(
             external_id=ext_id,
             title=title,
@@ -194,13 +196,16 @@ class LeverAdapter:
             location = ""
             if isinstance(categories, dict):
                 location = str(categories.get("location", ""))
-            url = str(job.get("hostedUrl", ""))
+            # applyUrl is the direct application link
+            url = str(job.get("applyUrl", "") or job.get("hostedUrl", ""))
+            description = html.unescape(str(job.get("descriptionPlain", "") or job.get("description", "")))
             records.append(
                 RawJobRecord(
                     external_id=ext_id,
                     title=title,
                     location=location,
                     url=url,
+                    description=description,
                     raw_data=job,
                 )
             )
@@ -235,13 +240,20 @@ class AshbyAdapter:
             ext_id = str(job.get("id", ""))
             title = str(job.get("title", ""))
             location = str(job.get("location", ""))
-            url = str(job.get("url", ""))
+            # applyUrl is the direct application link; jobUrl is the board page
+            url = str(job.get("applyUrl", "") or job.get("jobUrl", "") or job.get("url", ""))
+            description = html.unescape(str(
+                job.get("descriptionPlain", "")
+                or job.get("descriptionHtml", "")
+                or job.get("description", "")
+            ))
             records.append(
                 RawJobRecord(
                     external_id=ext_id,
                     title=title,
                     location=location,
                     url=url,
+                    description=description,
                     raw_data=job,
                 )
             )

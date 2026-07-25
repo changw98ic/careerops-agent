@@ -100,12 +100,24 @@ class RealCrawlActivitySink:
 
         fetched_at = resp.fetched_at.isoformat()
         postings: list[CrawledPostingRecord] = []
+
+        # For Greenhouse: fetch detail endpoint for each job to get description (content).
+        # Greenhouse list API does not include the JD body.
+        detail_cache: dict[str, str] = {}
+        if request.source_type == "greenhouse":
+            detail_cache = self._fetch_greenhouse_details(
+                request.base_url, result.jobs
+            )
+
         for record in result.jobs:
             # Flatten to dict[str, str] — Temporal JSON converter rejects
             # ``object`` values; stringify non-string scalars.
             raw: dict[str, str] = {}
             for k, v in record.raw_data.items():
                 raw[k] = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
+
+            description = record.description or detail_cache.get(record.external_id, "")
+
             postings.append(
                 CrawledPostingRecord(
                     source_id=request.source_id,
@@ -115,7 +127,8 @@ class RealCrawlActivitySink:
                     structured_data={
                         "title": record.title or "",
                         "location": record.location or "",
-                        "description": record.description or "",
+                        "description": description,
+                        "apply_url": record.url or "",
                         **raw,
                     },
                     parser_version=adapter.parser_version,
@@ -123,6 +136,46 @@ class RealCrawlActivitySink:
                 )
             )
         return postings
+
+    def _fetch_greenhouse_details(
+        self,
+        base_url: str,
+        jobs: tuple[Any, ...],
+        *,
+        batch_size: int = 10,
+    ) -> dict[str, str]:
+        """Fetch Greenhouse detail endpoint for each job to get description.
+
+        Constructs detail URL by appending /{id} to the list URL.
+        Returns a map of external_id -> description (HTML content).
+        """
+        from careerops.adapters.job_sources import GreenhouseDetailAdapter
+
+        detail_adapter = GreenhouseDetailAdapter()
+        descriptions: dict[str, str] = {}
+
+        # Process in batches to stay within timeout
+        job_list = list(jobs)
+        for i in range(0, len(job_list), batch_size):
+            batch = job_list[i : i + batch_size]
+            for record in batch:
+                ext_id = record.external_id
+                if not ext_id:
+                    continue
+                detail_url = f"{base_url.rstrip('/')}/{ext_id}"
+                try:
+                    detail_resp = self._fetch(detail_url)
+                    detail_data = _parse_body(detail_resp.body)
+                    detail_record = detail_adapter.fetch_job(
+                        detail_data,
+                        source_url=detail_url,
+                        fetched_at=detail_resp.fetched_at,
+                    )
+                    if detail_record.description:
+                        descriptions[ext_id] = detail_record.description
+                except Exception:
+                    pass  # Skip failed detail fetches; list data is still useful
+        return descriptions
 
     async def ingest_posting(self, record: CrawledPostingRecord) -> dict[str, bool]:
         """Insert into job_postings + job_posting_versions with idempotent dedup.

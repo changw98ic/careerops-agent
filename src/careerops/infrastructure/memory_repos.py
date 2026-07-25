@@ -225,9 +225,42 @@ class InMemoryJobReadRepository:
 
     def list_companies(
         self, *, cursor: str | None = None, limit: int = 50
-    ) -> list[dict[str, object]]:
-        items = list(self._companies.values())
-        return items[:limit]
+    ) -> dict[str, object]:
+        from datetime import datetime, timezone
+        _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
+
+        def _sort_key(c: dict[str, object]) -> tuple[datetime, UUID]:
+            ca = c.get("created_at")
+            if ca is None:
+                return (_EPOCH, c["id"])
+            if isinstance(ca, str):
+                return (datetime.fromisoformat(ca), c["id"])
+            return (ca, c["id"])
+
+        items = sorted(self._companies.values(), key=_sort_key)
+        total = len(items)
+        # Apply cursor filter.
+        if cursor is not None:
+            import base64
+            decoded = base64.urlsafe_b64decode(cursor.encode()).decode()
+            ts_str, id_str = decoded.rsplit("|", 1)
+            cur_created = datetime.fromisoformat(ts_str)
+            cur_id = UUID(id_str)
+            items = [
+                c for c in items
+                if _sort_key(c) > (cur_created, cur_id)
+            ]
+        has_more = len(items) > limit
+        page = items[:limit]
+        next_cursor = None
+        if has_more and page:
+            import base64
+            last = page[-1]
+            last_key = _sort_key(last)
+            next_cursor = base64.urlsafe_b64encode(
+                f"{last_key[0].isoformat()}|{last_key[1]}".encode()
+            ).decode()
+        return {"items": page, "total": total, "next_cursor": next_cursor}
 
     # -- Canonical jobs (read) ----------------------------------------------
 
@@ -237,19 +270,56 @@ class InMemoryJobReadRepository:
         cursor: str | None = None,
         limit: int = 50,
         state: str | None = None,
-    ) -> list[dict[str, object]]:
+        q: str | None = None,
+    ) -> dict[str, object]:
+        from datetime import datetime, timezone
+        _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
+
+        def _sort_key(j: CanonicalJob) -> tuple[datetime, UUID]:
+            return (j.created_at or _EPOCH, j.id)
+
         jobs = list(self._canonical_jobs.values())
         if state is not None:
             jobs = [j for j in jobs if j.aggregate_state.value == state]
-        return [
-            {
-                "id": j.id,
-                "company_id": j.company_id,
-                "canonical_title": j.canonical_title,
-                "aggregate_state": j.aggregate_state.value,
-            }
-            for j in jobs[:limit]
-        ]
+        if q is not None and q.strip():
+            pattern = q.strip().lower()
+            jobs = [j for j in jobs if pattern in j.canonical_title.lower()]
+        jobs.sort(key=_sort_key)
+        total = len(jobs)
+        # Apply cursor filter.
+        if cursor is not None:
+            import base64
+            decoded = base64.urlsafe_b64decode(cursor.encode()).decode()
+            ts_str, id_str = decoded.rsplit("|", 1)
+            cur_created = datetime.fromisoformat(ts_str)
+            cur_id = UUID(id_str)
+            jobs = [
+                j for j in jobs
+                if _sort_key(j) > (cur_created, cur_id)
+            ]
+        has_more = len(jobs) > limit
+        page = jobs[:limit]
+        next_cursor = None
+        if has_more and page:
+            import base64
+            last = page[-1]
+            last_key = _sort_key(last)
+            next_cursor = base64.urlsafe_b64encode(
+                f"{last_key[0].isoformat()}|{last_key[1]}".encode()
+            ).decode()
+        return {
+            "items": [
+                {
+                    "id": j.id,
+                    "company_id": j.company_id,
+                    "canonical_title": j.canonical_title,
+                    "aggregate_state": j.aggregate_state.value,
+                }
+                for j in page
+            ],
+            "total": total,
+            "next_cursor": next_cursor,
+        }
 
     def get_job_detail(self, job_id: str) -> dict[str, object] | None:
         jid = UUID(job_id)
@@ -552,28 +622,62 @@ class InMemoryApplicationRepository:
         state: str | None = None,
         cursor: str | None = None,
         limit: int = 50,
-    ) -> list[dict[str, object]]:
+    ) -> dict[str, object]:
+        from datetime import datetime, timezone
+        _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
+
+        def _sort_key(a: Application) -> tuple[datetime, UUID]:
+            return (a.created_at or _EPOCH, a.id)
+
         apps = list(self._applications.values())
         if candidate_id is not None:
             cid = UUID(candidate_id)
             apps = [a for a in apps if a.candidate_id == cid]
         if state is not None:
             apps = [a for a in apps if a.state.value == state]
-        return [
-            {
-                "id": a.id,
-                "candidate_id": a.candidate_id,
-                "canonical_job_id": a.canonical_job_id,
-                "state": a.state.value,
-                "apply_url": a.apply_url,
-                "submitted_at": a.submitted_at.isoformat() if a.submitted_at else None,
-                "follow_up_due_at": (
-                    a.follow_up_due_at.isoformat() if a.follow_up_due_at else None
-                ),
-                "version": a.version,
-            }
-            for a in apps[:limit]
-        ]
+        # Sort descending by created_at, id (matches Postgres ordering).
+        apps.sort(key=_sort_key, reverse=True)
+        total = len(apps)
+        # Apply cursor filter (descending: cursor < items).
+        if cursor is not None:
+            import base64
+            decoded = base64.urlsafe_b64decode(cursor.encode()).decode()
+            ts_str, id_str = decoded.rsplit("|", 1)
+            cur_created = datetime.fromisoformat(ts_str)
+            cur_id = UUID(id_str)
+            apps = [
+                a for a in apps
+                if _sort_key(a) < (cur_created, cur_id)
+            ]
+        has_more = len(apps) > limit
+        page = apps[:limit]
+        next_cursor = None
+        if has_more and page:
+            import base64
+            last = page[-1]
+            last_key = _sort_key(last)
+            next_cursor = base64.urlsafe_b64encode(
+                f"{last_key[0].isoformat()}|{last_key[1]}".encode()
+            ).decode()
+        return {
+            "items": [
+                {
+                    "id": a.id,
+                    "candidate_id": a.candidate_id,
+                    "canonical_job_id": a.canonical_job_id,
+                    "state": a.state.value,
+                    "apply_url": a.apply_url,
+                    "submitted_at": a.submitted_at.isoformat() if a.submitted_at else None,
+                    "follow_up_due_at": (
+                        a.follow_up_due_at.isoformat() if a.follow_up_due_at else None
+                    ),
+                    "version": a.version,
+                }
+                for a in page
+            ],
+            "total": total,
+            "next_cursor": next_cursor,
+        }
 
 
 # ---------------------------------------------------------------------------

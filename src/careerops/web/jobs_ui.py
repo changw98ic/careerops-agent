@@ -20,7 +20,8 @@ async def companies_page(request: Request) -> Response:
     repo = _get_repo(request)
     companies: list[dict[str, Any]] = []
     if repo is not None:
-        companies = repo.list_companies(cursor=None, limit=100)
+        result = repo.list_companies(cursor=None, limit=100)
+        companies = result["items"] if isinstance(result, dict) else result
     principal = _get_principal(request)
     response = _TEMPLATES.TemplateResponse(
         request=request,
@@ -40,7 +41,8 @@ async def jobs_inbox_page(request: Request) -> Response:
     repo = _get_repo(request)
     jobs: list[dict[str, Any]] = []
     if repo is not None:
-        jobs = repo.list_canonical_jobs(cursor=None, limit=100, state=None)
+        result = repo.list_canonical_jobs(cursor=None, limit=100, state=None)
+        jobs = result["items"] if isinstance(result, dict) else result
     principal = _get_principal(request)
     response = _TEMPLATES.TemplateResponse(
         request=request,

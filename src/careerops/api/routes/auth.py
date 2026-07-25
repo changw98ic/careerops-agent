@@ -7,6 +7,13 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel
 
+from careerops.api.errors import (
+    DependencyNotReadyError,
+    InvalidCredentialsError,
+    error_response,
+)
+from careerops.api.contracts import ErrorCode
+
 router = APIRouter(tags=["auth"])
 
 
@@ -21,12 +28,18 @@ class LoginResponse(BaseModel):
     csrf_token: str = ""
 
 
-@router.post("/api/v1/auth/login", response_model=LoginResponse)
+@router.post(
+    "/api/v1/auth/login",
+    response_model=LoginResponse,
+    responses={
+        401: {"description": "Invalid credentials"},
+        503: {"description": "Auth service not configured"},
+    },
+)
 async def login(body: LoginRequest, request: Request, response: Response) -> LoginResponse:
     auth_service = getattr(request.app.state, "auth_service", None)
     if auth_service is None:
-        response.status_code = 503
-        return LoginResponse(ok=False, error="auth not configured")
+        raise DependencyNotReadyError("Auth service not configured")
 
     from careerops.auth.contracts import AuthError, AuthRequestContext
 
@@ -46,11 +59,9 @@ async def login(body: LoginRequest, request: Request, response: Response) -> Log
             context=ctx,
         )
     except AuthError as e:
-        response.status_code = 401
-        return LoginResponse(ok=False, error=str(e))
+        raise InvalidCredentialsError(str(e)) from None
     except Exception:
-        response.status_code = 401
-        return LoginResponse(ok=False, error="invalid credentials")
+        raise InvalidCredentialsError() from None
 
     # Set session cookies
     web_settings = getattr(request.app.state, "web_settings", None)

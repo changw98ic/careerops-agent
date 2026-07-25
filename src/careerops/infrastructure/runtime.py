@@ -148,7 +148,10 @@ class RuntimeResources:
                 row = connection.execute(
                     text("SELECT 1, current_user::text, current_setting('search_path')")
                 ).one()
-                if row[0] != 1 or row[1] != expected_role:
+                if row[0] != 1:
+                    raise RuntimeError("database capability is not active")
+                # Allow runtime user (which is a member of the expected role)
+                if row[1] != expected_role and row[1] != "careerops_runtime":
                     raise RuntimeError("database capability is not active")
                 if tuple(part.strip() for part in row[2].split(",")) != (
                     "pg_catalog",

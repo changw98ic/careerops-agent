@@ -120,6 +120,7 @@ def test_not_found_uses_stable_error_envelope_without_framework_detail() -> None
         "error": {
             "code": "NOT_FOUND",
             "message": "Resource not found",
+            "retryable": False,
             "details": None,
             "trace_id": "known-trace",
         }
@@ -144,7 +145,7 @@ def test_nonstandard_http_status_keeps_stable_fallback_error() -> None:
     response = TestClient(app).get("/api/v1/test/nonstandard")
 
     assert response.status_code == 499
-    assert response.json()["error"]["code"] == "HTTP_ERROR"
+    assert response.json()["error"]["code"] == "INTERNAL_ERROR"
     assert response.json()["error"]["message"] == "Request could not be processed"
 
 

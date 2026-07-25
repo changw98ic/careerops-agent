@@ -22,6 +22,7 @@ from careerops.auth.contracts import (
 from careerops.auth.crypto import HASH_SCHEME
 from careerops.infrastructure.database.schema import (
     bootstrap_tokens,
+    candidates,
     console_sessions,
     console_users,
 )
@@ -91,10 +92,20 @@ class PostgresAuthRepository:
                 raise InvalidBootstrapCredential("bootstrap token is invalid or expired")
 
             user_id = uuid4()
+            candidate_id = uuid4()
             try:
+                connection.execute(
+                    sa.insert(candidates).values(
+                        id=candidate_id,
+                        display_name=username,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
                 connection.execute(
                     sa.insert(console_users).values(
                         id=user_id,
+                        candidate_id=candidate_id,
                         username=username,
                         password_hash=password.encoded_hash,
                         password_algorithm=HASH_SCHEME,
@@ -124,6 +135,7 @@ class PostgresAuthRepository:
             username=username,
             password=password,
             password_changed_at=now,
+            candidate_id=candidate_id,
         )
 
     def get_user_by_username(self, username: str) -> ConsoleUserRecord | None:
@@ -132,6 +144,7 @@ class PostgresAuthRepository:
                 connection.execute(
                     sa.select(
                         console_users.c.id,
+                        console_users.c.candidate_id,
                         console_users.c.username,
                         console_users.c.password_hash,
                         console_users.c.password_parameters,
@@ -172,6 +185,7 @@ class PostgresAuthRepository:
                         console_sessions.c.id,
                         console_sessions.c.user_id,
                         console_users.c.username,
+                        console_users.c.candidate_id,
                         console_sessions.c.state,
                         console_sessions.c.token_hash,
                         console_sessions.c.csrf_token_hash,
@@ -212,6 +226,7 @@ class PostgresAuthRepository:
             idle_expires_at=cast("datetime", row["idle_expires_at"]),
             absolute_expires_at=cast("datetime", row["absolute_expires_at"]),
             revoked_at=cast("datetime | None", row["revoked_at"]),
+            candidate_id=cast("UUID | None", row.get("candidate_id")),
         )
 
     def touch_session(
@@ -361,6 +376,7 @@ class PostgresAuthRepository:
                 parameters=dict(parameters),
             ),
             password_changed_at=cast("datetime", row["password_changed_at"]),
+            candidate_id=cast("UUID | None", row.get("candidate_id")),
             disabled_at=cast("datetime | None", row["disabled_at"]),
         )
 

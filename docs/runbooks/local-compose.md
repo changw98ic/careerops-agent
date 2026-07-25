@@ -50,13 +50,64 @@ for a non-disposable database.
 docker compose config --quiet
 docker compose up --build --wait
 docker compose ps
-curl --fail --silent http://127.0.0.1:${CAREEROPS_API_PORT:-8000}/api/v1/health/ready
-curl --fail --silent http://127.0.0.1:${CAREEROPS_API_PORT:-8000}/login | grep -q 'CareerOps</title>'
 ```
 
-`/api/v1/health/ready` reports database, Redis, Temporal, and storage readiness. A green
-Compose health state is not a substitute for checking this endpoint because the API has
-dependencies outside its process.
+After `docker compose ps` shows all services healthy, run the verification sequence below.
+
+### Database readiness check
+
+PostgreSQL readiness has two layers: the container healthcheck (`pg_isready`) and the
+application-level Alembic migration.
+
+**Container healthcheck.** The `postgres` service passes `pg_isready -U $POSTGRES_USER -d $POSTGRES_DB`
+every 5 seconds with a 10-second start period and 20 retries. A green `healthy` state in
+`docker compose ps` means PostgreSQL is accepting connections on the internal network.
+
+**Migration service.** The `migration` service runs `alembic upgrade head` with the owner
+credential and exits. Its `depends_on` uses `condition: service_completed_successfully`, so
+the API will not start until migrations finish. Check migration outcome:
+
+```bash
+docker compose ps migration          # status should be "exited (0)"
+docker compose logs migration        # look for "Running upgrade" lines ending at the head revision
+```
+
+A non-zero exit means a migration failed. See Troubleshooting below.
+
+**Application-level readiness.** The `/api/v1/health/ready` endpoint verifies all runtime
+dependencies, not just PostgreSQL connectivity. It confirms the database connection pool is
+live, Redis responds, Temporal is reachable, and the storage directory exists. A green Compose
+health state is not a substitute for this check because the API has dependencies outside its
+process.
+
+```bash
+curl --fail --silent http://127.0.0.1:${CAREEROPS_API_PORT:-8000}/api/v1/health/ready
+```
+
+A successful response confirms all subsystems are ready.
+
+### Full verification sequence
+
+```bash
+# 1. Confirm all containers report healthy
+docker compose ps
+
+# 2. Check migration completed
+docker compose ps migration
+docker compose logs migration --tail=5
+
+# 3. Check database readiness via application endpoint
+curl --fail --silent http://127.0.0.1:${CAREEROPS_API_PORT:-8000}/api/v1/health/ready
+
+# 4. Verify the SPA is served at the login route
+curl --fail --silent http://127.0.0.1:${CAREEROPS_API_PORT:-8000}/login | grep -q 'CareerOps</title>'
+
+# 5. Verify Temporal UI is reachable
+curl --fail --silent http://127.0.0.1:${CAREEROPS_TEMPORAL_UI_PORT:-8233}/
+
+# 6. Check workflow worker is polling (optional, for worker verification)
+docker compose logs workflow-worker --tail=10 | grep -i 'poll\|task'
+```
 
 The Temporal container healthcheck uses the current CLI form:
 
@@ -77,9 +128,10 @@ For a clean, self-contained validation that starts and tears down the stack auto
 make verify-compose
 ```
 
-`make verify-compose` uses the currently exported disposable values and deletes its volumes on
-exit. `make verify-m0` additionally requires `CAREEROPS_TEST_DATABASE_URL` for a separate
-disposable PostgreSQL integration database.
+`make verify-compose` runs `docker compose config --quiet`, brings up the stack with
+`--build --wait`, checks `/api/v1/health/ready`, checks `/login` serves the SPA, and tears
+down volumes on exit. `make verify-m0` additionally requires `CAREEROPS_TEST_DATABASE_URL` for
+a separate disposable PostgreSQL integration database.
 
 ## First-owner bootstrap and normal sign-in
 
@@ -115,6 +167,139 @@ does not trust `X-Forwarded-For` or related client-supplied forwarding headers.
 The latest local acceptance run verified that the first five invalid login attempts were
 accepted by the limiter, the sixth returned `429`, and an API restart remained limited by the
 shared Redis state.
+
+## Troubleshooting
+
+### Migration service fails with exit code 1
+
+**Symptom.** `docker compose ps migration` shows `exited (1)` and the API never starts.
+
+**Common causes:**
+- Missing or incorrect `CAREEROPS_DB_OWNER_USER` / `CAREEROPS_DB_OWNER_PASSWORD` -- the
+  migration runs with the owner credential, not the runtime credential.
+- PostgreSQL not yet accepting connections when migration starts. The `depends_on` with
+  `service_healthy` should prevent this, but if the healthcheck start period was reduced,
+  the first connection attempt may race.
+- Schema conflict from a prior non-clean run.
+
+**Fix:**
+
+```bash
+docker compose logs migration --tail=30
+# Read the specific Alembic or psycopg error, then:
+docker compose down --volumes --remove-orphans
+docker compose up --build --wait
+```
+
+### API healthcheck keeps restarting
+
+**Symptom.** `docker compose ps` shows the `api` service cycling through `unhealthy` / `restarting`.
+
+**Common causes:**
+- Migration did not complete successfully (check `migration` service logs).
+- Redis is not healthy -- the API healthcheck pings Redis; a password mismatch or stale
+  volume will block it.
+- Temporal not yet ready. The `depends_on` block waits for `service_healthy`, but the
+  healthcheck retries may be exhausted if Temporal startup is slow on your machine.
+
+**Fix:**
+
+```bash
+docker compose logs api --tail=30
+docker compose ps redis temporal
+```
+
+If Temporal keeps timing out, increase its `healthcheck.retries` temporarily (the default
+is 30 retries at 10-second intervals = 5 minutes max wait).
+
+### Port conflict: `bind: address already in use`
+
+**Symptom.** `docker compose up` fails with a port-binding error for 8000 or 8233.
+
+**Fix:**
+
+```bash
+# Find the occupying process
+lsof -i :8000
+lsof -i :8233
+
+# Override the port
+export CAREEROPS_API_PORT=8001
+export CAREEROPS_TEMPORAL_UI_PORT=8234
+docker compose up --build --wait
+```
+
+Both ports remain bound to `127.0.0.1`; they are never exposed to the network.
+
+### `docker compose down -v` leaves residual volumes
+
+**Symptom.** After teardown, `docker volume ls` still shows `careerops_*` volumes.
+
+**Cause.** Docker Desktop sometimes retains volumes if a container was force-removed outside
+Compose.
+
+**Fix:**
+
+```bash
+docker compose down --volumes --remove-orphans
+docker volume prune -f
+```
+
+The second command removes all unused volumes system-wide. Use with caution if you run other
+Compose projects.
+
+### Redis authentication error in API logs
+
+**Symptom.** API logs show `NOAUTH Authentication required` or `WRONGPASS`.
+
+**Cause.** The `CAREEROPS_REDIS_PASSWORD` value differs between the Redis service (started
+from the environment) and the API service (read from the shared environment block). This
+happens when the env file was changed after the Redis container was created.
+
+**Fix:**
+
+```bash
+docker compose down --volumes --remove-orphans
+docker compose up --build --wait
+```
+
+A full volume teardown ensures Redis restarts with the current password.
+
+### Temporal UI shows "Namespace not found"
+
+**Symptom.** The Temporal UI loads but displays a namespace error.
+
+**Cause.** Temporal auto-setup registered the `default` namespace before the Temporal database
+was fully migrated, or the Temporal database user lacks permissions.
+
+**Fix:**
+
+```bash
+docker compose logs temporal --tail=30 | grep -i 'namespace\|error'
+docker compose restart temporal
+```
+
+If the error persists, check that `CAREEROPS_TEMPORAL_DB_USER` has `CREATEDB` privileges
+(the Compose init grants them) and that `SKIP_DB_CREATE` is `true` (the CareerOps
+PostgreSQL init creates the Temporal databases).
+
+### Workflow worker unhealthy
+
+**Symptom.** `docker compose ps workflow-worker` shows `unhealthy`.
+
+**Cause.** The worker depends on both `migration` and `temporal`. If either is not healthy,
+the worker cannot start. The `careerops-worker-health` binary checks that the configured
+worker identity is polling tasks.
+
+**Fix:**
+
+```bash
+docker compose logs workflow-worker --tail=20
+# Verify temporal is healthy:
+docker compose ps temporal
+# If temporal just restarted, wait for healthcheck to pass:
+docker compose ps -w temporal=healthy
+```
 
 ## Cleanup
 

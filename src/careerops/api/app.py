@@ -177,11 +177,11 @@ def create_app(
         )
         app.state.web_settings = web_settings
 
-    # Auth API (login/logout for Vue SPA).
+    # Auth API for Vue SPA (session/login/bootstrap/logout).
     import os
     from pathlib import Path
 
-    from careerops.api.routes.auth import router as auth_router
+    from careerops.web.api_auth import router as auth_router
 
     serve_spa = os.environ.get("CAREEROPS_SERVE_SPA", "").lower() in ("1", "true", "yes")
     frontend_dist = Path(__file__).resolve().parent.parent.parent.parent / "frontend" / "dist"
@@ -234,13 +234,264 @@ def create_app(
 
         @app.get("/{full_path:path}", include_in_schema=False)
         async def spa_fallback(full_path: str) -> FileResponse:  # pyright: ignore[reportUnusedFunction]
+            # API routes should not be caught by SPA fallback
+            if full_path.startswith("api/"):
+                from fastapi import HTTPException
+                raise HTTPException(status_code=404, detail="Not found")
             # Serve the file if it exists, otherwise serve index.html for SPA routing.
             file_path = frontend_dist / full_path
             if file_path.is_file():
                 return FileResponse(file_path)
             return FileResponse(frontend_dist / "index.html")
 
+    # -----------------------------------------------------------------------
+    # OpenAPI: declare standard error responses on every path
+    # -----------------------------------------------------------------------
+    _install_openapi_error_responses(app)
+
     return app
+
+
+# ---------------------------------------------------------------------------
+# OpenAPI customisation
+# ---------------------------------------------------------------------------
+
+_ERROR_RESPONSE_SCHEMAS: dict[str, dict[str, object]] = {
+    "401": {
+        "description": "Unauthorized — missing or invalid credentials",
+        "content": {
+            "application/json": {
+                "schema": {"$ref": "#/components/schemas/ErrorResponse"},
+                "examples": {
+                    "unauthorized": {
+                        "summary": "UNAUTHORIZED",
+                        "value": {
+                            "error": {
+                                "code": "UNAUTHORIZED",
+                                "message": "Authentication required",
+                                "retryable": False,
+                                "details": None,
+                                "trace_id": "abc123",
+                            }
+                        },
+                    },
+                    "invalid_credentials": {
+                        "summary": "INVALID_CREDENTIALS",
+                        "value": {
+                            "error": {
+                                "code": "INVALID_CREDENTIALS",
+                                "message": "Invalid credentials",
+                                "retryable": False,
+                                "details": None,
+                                "trace_id": "abc123",
+                            }
+                        },
+                    },
+                },
+            }
+        },
+    },
+    "403": {
+        "description": "Forbidden — CSRF rejected, bootstrap closed, or profile required",
+        "content": {
+            "application/json": {
+                "schema": {"$ref": "#/components/schemas/ErrorResponse"},
+                "examples": {
+                    "csrf_rejected": {
+                        "summary": "CSRF_REJECTED",
+                        "value": {
+                            "error": {
+                                "code": "CSRF_REJECTED",
+                                "message": "CSRF token rejected",
+                                "retryable": False,
+                                "details": None,
+                                "trace_id": "abc123",
+                            }
+                        },
+                    },
+                    "bootstrap_closed": {
+                        "summary": "BOOTSTRAP_CLOSED",
+                        "value": {
+                            "error": {
+                                "code": "BOOTSTRAP_CLOSED",
+                                "message": "Bootstrap is no longer available",
+                                "retryable": False,
+                                "details": None,
+                                "trace_id": "abc123",
+                            }
+                        },
+                    },
+                    "candidate_profile_required": {
+                        "summary": "CANDIDATE_PROFILE_REQUIRED",
+                        "value": {
+                            "error": {
+                                "code": "CANDIDATE_PROFILE_REQUIRED",
+                                "message": "Candidate profile is required",
+                                "retryable": False,
+                                "details": None,
+                                "trace_id": "abc123",
+                            }
+                        },
+                    },
+                },
+            }
+        },
+    },
+    "404": {
+        "description": "Resource not found",
+        "content": {
+            "application/json": {
+                "schema": {"$ref": "#/components/schemas/ErrorResponse"},
+                "example": {
+                    "error": {
+                        "code": "NOT_FOUND",
+                        "message": "Resource not found",
+                        "retryable": False,
+                        "details": None,
+                        "trace_id": "abc123",
+                    }
+                },
+            }
+        },
+    },
+    "409": {
+        "description": "Conflict — resource already exists or state conflict",
+        "content": {
+            "application/json": {
+                "schema": {"$ref": "#/components/schemas/ErrorResponse"},
+                "example": {
+                    "error": {
+                        "code": "CONFLICT",
+                        "message": "Resource conflict",
+                        "retryable": False,
+                        "details": None,
+                        "trace_id": "abc123",
+                    }
+                },
+            }
+        },
+    },
+    "422": {
+        "description": "Validation error — request body failed schema validation",
+        "content": {
+            "application/json": {
+                "schema": {"$ref": "#/components/schemas/ErrorResponse"},
+                "example": {
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": "Request validation failed",
+                        "retryable": False,
+                        "details": {"issues": []},
+                        "trace_id": "abc123",
+                    }
+                },
+            }
+        },
+    },
+    "429": {
+        "description": "Rate limited — too many requests (retryable)",
+        "content": {
+            "application/json": {
+                "schema": {"$ref": "#/components/schemas/ErrorResponse"},
+                "example": {
+                    "error": {
+                        "code": "RATE_LIMITED",
+                        "message": "Too many requests",
+                        "retryable": True,
+                        "details": None,
+                        "trace_id": "abc123",
+                    }
+                },
+            }
+        },
+    },
+    "503": {
+        "description": "Service unavailable — dependency not ready (retryable)",
+        "content": {
+            "application/json": {
+                "schema": {"$ref": "#/components/schemas/ErrorResponse"},
+                "example": {
+                    "error": {
+                        "code": "DEPENDENCY_NOT_READY",
+                        "message": "Service dependency is not ready",
+                        "retryable": True,
+                        "details": None,
+                        "trace_id": "abc123",
+                    }
+                },
+            }
+        },
+    },
+}
+
+
+def _install_openapi_error_responses(app: FastAPI) -> None:
+    """Inject standard error response declarations into every OpenAPI path."""
+    original_openapi = app.openapi
+
+    def custom_openapi() -> dict[str, object]:
+        schema = original_openapi()
+        if "openapi_error_responses_installed" in schema:
+            return schema
+
+        # Ensure ErrorResponse schema exists in components
+        components = schema.setdefault("components", {})  # type: ignore[arg-type]
+        schemas = components.setdefault("schemas", {})  # type: ignore[arg-type]
+        if "ErrorResponse" not in schemas:
+            schemas["ErrorResponse"] = {
+                "type": "object",
+                "required": ["error"],
+                "properties": {
+                    "error": {
+                        "type": "object",
+                        "required": ["code", "message", "retryable", "trace_id"],
+                        "properties": {
+                            "code": {
+                                "type": "string",
+                                "enum": [
+                                    "UNAUTHORIZED",
+                                    "CSRF_REJECTED",
+                                    "INVALID_CREDENTIALS",
+                                    "RATE_LIMITED",
+                                    "BOOTSTRAP_CLOSED",
+                                    "CANDIDATE_PROFILE_REQUIRED",
+                                    "NOT_FOUND",
+                                    "CONFLICT",
+                                    "DEPENDENCY_NOT_READY",
+                                    "VALIDATION_ERROR",
+                                    "BAD_REQUEST",
+                                    "FORBIDDEN",
+                                    "METHOD_NOT_ALLOWED",
+                                    "INTERNAL_ERROR",
+                                ],
+                            },
+                            "message": {"type": "string"},
+                            "retryable": {"type": "boolean", "default": False},
+                            "details": {},
+                            "trace_id": {"type": "string"},
+                        },
+                    }
+                },
+            }
+
+        # Inject error responses into every path/operation
+        for _path, methods in schema.get("paths", {}).items():  # type: ignore[union-attr]
+            if not isinstance(methods, dict):
+                continue
+            for method, operation in methods.items():
+                if method in ("parameters", "summary", "description", "servers"):
+                    continue
+                if not isinstance(operation, dict):
+                    continue
+                responses = operation.setdefault("responses", {})
+                for status, response_def in _ERROR_RESPONSE_SCHEMAS.items():
+                    if status not in responses:
+                        responses[status] = response_def  # type: ignore[assignment]
+
+        schema["openapi_error_responses_installed"] = True  # type: ignore[assignment]
+        return schema
+
+    app.openapi = custom_openapi  # type: ignore[method-assign]
 
 
 app = create_app()

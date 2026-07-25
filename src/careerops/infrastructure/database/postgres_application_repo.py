@@ -7,12 +7,30 @@ Satisfies ``ApplicationRepository``, ``ResumeRepository``,
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
 import sqlalchemy as sa
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
+
+
+def _encode_cursor(created_at: datetime, row_id: UUID) -> str:
+    """Encode (created_at, id) into an opaque cursor string."""
+    import base64
+    return base64.urlsafe_b64encode(
+        f"{created_at.isoformat()}|{row_id}".encode()
+    ).decode()
+
+
+def _decode_cursor(cursor: str) -> tuple[datetime, UUID]:
+    """Decode an opaque cursor back to (created_at, id)."""
+    import base64
+    decoded = base64.urlsafe_b64decode(cursor.encode()).decode()
+    ts_str, id_str = decoded.rsplit("|", 1)
+    return datetime.fromisoformat(ts_str), UUID(id_str)
 
 from careerops.domain.applications import (
     Application,
@@ -348,29 +366,67 @@ class PostgresApplicationRepository:
         state: str | None = None,
         cursor: str | None = None,
         limit: int = 50,
-    ) -> list[dict[str, object]]:
-        stmt = sa.select(applications)
+    ) -> dict[str, object]:
+        # Build filter conditions.
+        filters = []
         if candidate_id is not None:
-            stmt = stmt.where(applications.c.candidate_id == UUID(candidate_id))
+            filters.append(applications.c.candidate_id == UUID(candidate_id))
         if state is not None:
-            stmt = stmt.where(applications.c.state == state)
-        stmt = stmt.order_by(applications.c.created_at.desc()).limit(limit)
+            filters.append(applications.c.state == state)
 
         with self._engine.begin() as conn:
+            # Total count with filters.
+            count_stmt = select(func.count()).select_from(applications)
+            if filters:
+                count_stmt = count_stmt.where(*filters)
+            total = conn.execute(count_stmt).scalar_one()
+
+            # Fetch limit+1 for has_more detection.
+            # Descending order: created_at DESC, id DESC.  Cursor encodes
+            # (created_at, id) of the last row; next page is rows strictly
+            # "less than" the cursor in the same ordering.
+            stmt = (
+                select(applications)
+                .order_by(applications.c.created_at.desc(), applications.c.id.desc())
+                .limit(limit + 1)
+            )
+            if filters:
+                stmt = stmt.where(*filters)
+            if cursor is not None:
+                cur_created, cur_id = _decode_cursor(cursor)
+                stmt = stmt.where(
+                    or_(
+                        applications.c.created_at < cur_created,
+                        and_(
+                            applications.c.created_at == cur_created,
+                            applications.c.id < cur_id,
+                        ),
+                    )
+                )
             rows = conn.execute(stmt).mappings().all()
 
-        return [
-            {
-                "id": r["id"],
-                "candidate_id": r["candidate_id"],
-                "canonical_job_id": r["canonical_job_id"],
-                "state": r["state"],
-                "apply_url": r["apply_url"],
-                "submitted_at": r["submitted_at"].isoformat() if r["submitted_at"] else None,
-                "follow_up_due_at": (
-                    r["follow_up_due_at"].isoformat() if r["follow_up_due_at"] else None
-                ),
-                "version": r["version"],
-            }
-            for r in rows
-        ]
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+        next_cursor = (
+            _encode_cursor(rows[-1]["created_at"], rows[-1]["id"]) if has_more else None
+        )
+
+        return {
+            "items": [
+                {
+                    "id": r["id"],
+                    "candidate_id": r["candidate_id"],
+                    "canonical_job_id": r["canonical_job_id"],
+                    "state": r["state"],
+                    "apply_url": r["apply_url"],
+                    "submitted_at": r["submitted_at"].isoformat() if r["submitted_at"] else None,
+                    "follow_up_due_at": (
+                        r["follow_up_due_at"].isoformat() if r["follow_up_due_at"] else None
+                    ),
+                    "version": r["version"],
+                }
+                for r in rows
+            ],
+            "total": total,
+            "next_cursor": next_cursor,
+        }

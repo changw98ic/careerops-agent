@@ -1,0 +1,7 @@
+{
+  "scan_date": "2026-07-25",
+  "tool": "scripts/verify_no_secrets.py",
+  "result": "passed",
+  "files_scanned": 2984,
+  "findings": []
+}

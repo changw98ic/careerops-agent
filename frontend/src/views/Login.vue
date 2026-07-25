@@ -21,6 +21,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { setCsrfToken } from '../api/client.js'
+import { setLoggedIn } from '../router.js'
 
 const router = useRouter()
 const username = ref('')
@@ -47,6 +48,7 @@ async function doLogin() {
     const data = await res.json()
     if (data.ok) {
       setCsrfToken(data.csrf_token)
+      setLoggedIn(true)
       router.push('/jobs')
     } else {
       error.value = data.error || 'Login failed'

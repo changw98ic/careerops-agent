@@ -1,5 +1,5 @@
 <template>
-  <nav v-if="isLoggedIn" class="nav">
+  <nav v-if="loggedIn" class="nav">
     <router-link to="/jobs">Jobs</router-link>
     <router-link to="/companies">Companies</router-link>
     <router-link to="/applications">Applications</router-link>
@@ -11,15 +11,14 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
 import { useRouter } from 'vue-router'
+import { loggedIn, setLoggedIn } from './router.js'
 
 const router = useRouter()
-const isLoggedIn = computed(() => document.cookie.includes('careerops_session='))
 
-function logout() {
-  document.cookie = 'careerops_session=; Max-Age=0; Path=/'
-  document.cookie = 'careerops_csrf=; Max-Age=0; Path=/'
+async function logout() {
+  try { await fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'same-origin' }) } catch {}
+  setLoggedIn(false)
   router.push('/login')
 }
 </script>

@@ -1,9 +1,17 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { ref } from 'vue'
 import Login from './views/Login.vue'
 import Jobs from './views/Jobs.vue'
 import JobDetail from './views/JobDetail.vue'
 import Companies from './views/Companies.vue'
 import Applications from './views/Applications.vue'
+
+// Track login state in memory (HttpOnly cookies can't be read by JS).
+export const loggedIn = ref(false)
+
+export function setLoggedIn(val) {
+  loggedIn.value = val
+}
 
 const routes = [
   { path: '/login', name: 'login', component: Login },
@@ -20,7 +28,7 @@ const router = createRouter({
 })
 
 router.beforeEach((to) => {
-  if (to.meta.auth && !document.cookie.includes('careerops_session=')) {
+  if (to.meta.auth && !loggedIn.value) {
     return { name: 'login' }
   }
 })

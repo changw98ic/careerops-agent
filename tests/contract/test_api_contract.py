@@ -154,6 +154,8 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
     assert response.status_code == 200
     assert response.json()["info"]["title"] == "CareerOps API"
     assert set(response.json()["paths"]) == {
+        "/api/v1/auth/login",
+        "/api/v1/auth/logout",
         "/api/v1/health/live",
         "/api/v1/health/ready",
         "/api/v1/companies",

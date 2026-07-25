@@ -177,15 +177,28 @@ def create_app(
         )
         app.state.web_settings = web_settings
 
+    # Auth API (login/logout for Vue SPA).
+    import os
+    from pathlib import Path
+
+    from careerops.api.routes.auth import router as auth_router
+
+    serve_spa = os.environ.get("CAREEROPS_SERVE_SPA", "").lower() in ("1", "true", "yes")
+    frontend_dist = Path(__file__).resolve().parent.parent.parent.parent / "frontend" / "dist"
+
+    app.include_router(auth_router)
+
     # Protected API routers — require session cookie + CSRF header.
     app.include_router(jobs_router, dependencies=[Depends(require_api_auth)])
     app.include_router(matching_router, dependencies=[Depends(require_api_auth)])
     app.include_router(applications_router, dependencies=[Depends(require_api_auth)])
-    # UI routers — session cookie only, no CSRF header (browser GET loads).
-    app.include_router(jobs_ui_router, dependencies=[Depends(require_web_auth)])
-    app.include_router(matching_ui_router, dependencies=[Depends(require_web_auth)])
 
-    if auth_service is not None:
+    # Check if Vue SPA is enabled; if so, skip old Jinja2 UI routes.
+    if not serve_spa:
+        app.include_router(jobs_ui_router, dependencies=[Depends(require_web_auth)])
+        app.include_router(matching_ui_router, dependencies=[Depends(require_web_auth)])
+
+    if auth_service is not None and not serve_spa:
         if web_settings is None:
             raise ValueError("web_settings is required when console authentication is installed")
         if resolved_dashboard_provider is None:
@@ -212,6 +225,21 @@ def create_app(
                 side_effect_kernel=probe.side_effect_kernel,
                 web_settings=web_settings,
             )
+    # Vue SPA: serve static assets and fallback to index.html for client routing.
+    from fastapi.responses import FileResponse
+    from starlette.staticfiles import StaticFiles
+
+    if serve_spa and frontend_dist.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="static")
+
+        @app.get("/{full_path:path}", include_in_schema=False)
+        async def spa_fallback(full_path: str) -> FileResponse:  # pyright: ignore[reportUnusedFunction]
+            # Serve the file if it exists, otherwise serve index.html for SPA routing.
+            file_path = frontend_dist / full_path
+            if file_path.is_file():
+                return FileResponse(file_path)
+            return FileResponse(frontend_dist / "index.html")
+
     return app
 
 

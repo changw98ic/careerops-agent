@@ -393,7 +393,11 @@ def crawl_all(dry_run: bool = False) -> None:
 
     if not dry_run:
         settings = Settings()
-        engine = create_database_engine(settings)
+        from careerops.config import RuntimeEnvironment
+
+        engine = create_database_engine(
+            settings, enforce_role=settings.environment is RuntimeEnvironment.PRODUCTION
+        )
         sink = RealCrawlActivitySink(engine=engine)
         job_repo = PostgresJobReadRepository(engine)
         print("Ensuring companies and job_sources rows exist...")

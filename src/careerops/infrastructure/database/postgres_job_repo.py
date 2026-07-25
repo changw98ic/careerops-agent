@@ -486,6 +486,14 @@ class PostgresJobReadRepository:
                 .values(aggregate_state=state.value, updated_at=now)
             )
 
+    def update_canonical_primary_posting(self, canonical_job_id: UUID, posting_id: UUID) -> None:
+        with self._engine.begin() as conn:
+            conn.execute(
+                canonical_jobs.update()
+                .where(canonical_jobs.c.id == canonical_job_id)
+                .values(primary_posting_id=posting_id)
+            )
+
     def update_posting_last_seen(self, posting_id: UUID, now: datetime) -> None:
         with self._engine.begin() as conn:
             conn.execute(

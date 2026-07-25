@@ -226,13 +226,15 @@ def _company_slug(name: str) -> str:
 def _ensure_source_rows(
     engine: Engine,
     seed: list[dict[str, str]],
-) -> dict[str, str]:
+) -> tuple[dict[str, str], dict[str, str]]:
     """Upsert companies + job_sources for every seed entry.
 
-    Returns ``{board_slug: job_source_id}`` so callers can resolve the FK
-    before building ``CrawledPostingRecord``.
+    Returns ``(source_map, company_map)`` where:
+    - ``source_map[board_slug]`` = job_source UUID
+    - ``company_map[board_slug]`` = company UUID
     """
     source_map: dict[str, str] = {}
+    company_map: dict[str, str] = {}
     with engine.begin() as conn:
         for entry in seed:
             company_name = entry["company"]
@@ -276,7 +278,8 @@ def _ensure_source_rows(
                 )
             )
             source_map[board] = str(source_uuid)
-    return source_map
+            company_map[board] = str(company_id)
+    return source_map, company_map
 
 
 def _base_url_for(source_type: str, board: str) -> str:
@@ -323,6 +326,7 @@ def _ingest_jobs(
     jobs: list[CrawledJob],
     source_id: str,
     company_name: str,
+    company_id: str,
     job_repo: object | None = None,
 ) -> tuple[int, int, list[str]]:
     """Ingest a batch of CrawledJobs into the database.
@@ -360,6 +364,7 @@ def _ingest_jobs(
                         parser_version=record.parser_version,
                         company_name=company_name,
                         now=datetime.now(UTC),
+                        company_id=UUID(company_id),
                     )
             except Exception as exc:
                 errors.append(f"{job.external_id}: {exc}")
@@ -392,7 +397,7 @@ def crawl_all(dry_run: bool = False) -> None:
         sink = RealCrawlActivitySink(engine=engine)
         job_repo = PostgresJobReadRepository(engine)
         print("Ensuring companies and job_sources rows exist...")
-        source_map = _ensure_source_rows(engine, SEED_SOURCES)
+        source_map, company_map = _ensure_source_rows(engine, SEED_SOURCES)
         print(f"  Resolved {len(source_map)} source IDs.")
 
     for source in SEED_SOURCES:
@@ -422,7 +427,8 @@ def crawl_all(dry_run: bool = False) -> None:
                 if sid is None:
                     all_errors.append(f"{company}: no source_id for board '{board}'")
                 else:
-                    np, nv, errs = _ingest_jobs(sink, jobs, sid, company, job_repo)
+                    cid = company_map.get(board, "")
+                    np, nv, errs = _ingest_jobs(sink, jobs, sid, company, cid, job_repo)
                     total_new_postings += np
                     total_new_versions += nv
                     all_errors.extend(errs)

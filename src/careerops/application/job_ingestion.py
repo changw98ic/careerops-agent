@@ -103,6 +103,10 @@ class JobRepository(Protocol):
 
     def update_posting_last_seen(self, posting_id: UUID, now: datetime) -> None: ...
 
+    def update_canonical_primary_posting(
+        self, canonical_job_id: UUID, posting_id: UUID
+    ) -> None: ...
+
 
 class JobIngestionService:
     """Handles ingestion of crawled job postings with dedup and versioning."""
@@ -121,7 +125,11 @@ class JobIngestionService:
         parser_version: str,
         company_name: str,
         now: datetime,
+        company_id: UUID | None = None,
     ) -> IngestResult:
+        # company_id defaults to source_id for backward compatibility, but
+        # callers should pass the actual companies.id when available.
+        effective_company_id = company_id if company_id is not None else source_id
         content_hash = compute_content_hash(structured_data)
         title = str(structured_data.get("title", ""))
         location = str(structured_data.get("location", ""))
@@ -133,7 +141,17 @@ class JobIngestionService:
 
         if existing_posting is not None:
             return self._handle_existing_posting(
-                existing_posting, content_hash, structured_data, source_url, parser_version, now
+                existing_posting,
+                content_hash,
+                structured_data,
+                source_url,
+                parser_version,
+                now,
+                title=title,
+                location=location,
+                company_name=company_name,
+                fingerprint=fingerprint,
+                effective_company_id=effective_company_id,
             )
 
         return self._handle_new_posting(
@@ -148,6 +166,7 @@ class JobIngestionService:
             location=location,
             fingerprint=fingerprint,
             now=now,
+            effective_company_id=effective_company_id,
         )
 
     def _handle_existing_posting(
@@ -158,16 +177,32 @@ class JobIngestionService:
         source_url: str,
         parser_version: str,
         now: datetime,
+        *,
+        title: str,
+        location: str,
+        company_name: str,
+        fingerprint: str,
+        effective_company_id: UUID,
     ) -> IngestResult:
         self._repository.update_posting_last_seen(posting.id, now)
 
         latest_version = self._repository.find_latest_version(posting.id)
         if latest_version is not None and latest_version.content_hash == content_hash:
             canonical_id = self._find_canonical_for_posting(posting.id)
+            if canonical_id is None:
+                canonical_id = self._create_canonical_for_posting(
+                    posting.id,
+                    title,
+                    location,
+                    company_name,
+                    fingerprint,
+                    effective_company_id,
+                    now,
+                )
             return IngestResult(
                 posting_id=posting.id,
                 version_id=latest_version.id,
-                canonical_job_id=canonical_id if canonical_id is not None else uuid4(),
+                canonical_job_id=canonical_id,
                 is_new_posting=False,
                 is_new_version=False,
                 is_new_canonical=False,
@@ -194,10 +229,14 @@ class JobIngestionService:
                 self._recompute_canonical_state(canonical_id, now)
 
         canonical_id_result = self._find_canonical_for_posting(posting.id)
+        if canonical_id_result is None:
+            canonical_id_result = self._create_canonical_for_posting(
+                posting.id, title, location, company_name, fingerprint, effective_company_id, now
+            )
         return IngestResult(
             posting_id=posting.id,
             version_id=version_id,
-            canonical_job_id=canonical_id_result if canonical_id_result is not None else uuid4(),
+            canonical_job_id=canonical_id_result,
             is_new_posting=False,
             is_new_version=True,
             is_new_canonical=False,
@@ -217,6 +256,7 @@ class JobIngestionService:
         location: str,
         fingerprint: str,
         now: datetime,
+        effective_company_id: UUID,
     ) -> IngestResult:
         posting_id = uuid4()
         posting = JobPosting(
@@ -272,7 +312,7 @@ class JobIngestionService:
         normalized = normalize_title(title)
         canonical_job = CanonicalJob(
             id=canonical_id,
-            company_id=source_id,
+            company_id=effective_company_id,
             canonical_title=title,
             normalized_title=normalized,
             aggregate_state=AggregateState.ACTIVE,
@@ -303,6 +343,67 @@ class JobIngestionService:
             is_new_version=True,
             is_new_canonical=True,
         )
+
+    def _create_canonical_for_posting(
+        self,
+        posting_id: UUID,
+        title: str,
+        location: str,
+        company_name: str,
+        fingerprint: str,
+        company_id: UUID,
+        now: datetime,
+    ) -> UUID:
+        """Create a canonical job for a posting that has no assignment yet.
+
+        FK chain requires careful ordering:
+        - job_merge_decisions.to_canonical_job_id FK -> canonical_jobs.id
+        - canonical_jobs.(id, primary_posting_id) FK -> job_posting_assignments
+        So: create canonical (primary=NULL) -> merge_decision -> assignment -> update canonical.
+        """
+        from careerops.domain.jobs import (
+            ActorType,
+            AggregateState,
+            CanonicalJob,
+            JobMergeDecision,
+            MergeDecisionKind,
+        )
+
+        canonical_id = uuid4()
+
+        # 1. Create canonical with primary_posting_id=NULL (satisfies merge_decision FK)
+        normalized = normalize_title(title)
+        canonical_job = CanonicalJob(
+            id=canonical_id,
+            company_id=company_id,
+            canonical_title=title,
+            normalized_title=normalized,
+            aggregate_state=AggregateState.ACTIVE,
+            primary_posting_id=None,  # type: ignore[arg-type]
+        )
+        self._repository.save_canonical_job(canonical_job)
+
+        # 2. Create merge_decision (FK to canonical_jobs now satisfied)
+        decision_id = uuid4()
+        decision = JobMergeDecision(
+            id=decision_id,
+            job_posting_id=posting_id,
+            to_canonical_job_id=canonical_id,
+            decision_kind=MergeDecisionKind.MERGE,
+            rule="fingerprint_exact",
+            reason=f"Fingerprint match: {fingerprint[:16]}",
+            score=1.0,
+            actor_type=ActorType.RULE,
+            algorithm_version="dedup-v1",
+        )
+        self._repository.save_merge_decision(decision)
+
+        # 3. Create assignment (FK target for canonical_jobs.primary_posting_id)
+        self._repository.save_posting_assignment(posting_id, canonical_id, decision_id)
+
+        # 4. Update canonical with primary_posting_id (FK now satisfied)
+        self._repository.update_canonical_primary_posting(canonical_id, posting_id)
+        return canonical_id
 
     def close_posting(self, posting_id: UUID, *, now: datetime) -> None:
         """Mark a posting as closed and recompute canonical state."""

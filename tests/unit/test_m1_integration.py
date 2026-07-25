@@ -618,6 +618,20 @@ class InMemoryJobRepository:
                 last_seen_at=now,
             )
 
+    def update_canonical_primary_posting(
+        self, canonical_job_id: object, posting_id: object
+    ) -> None:
+        job = self.canonical_jobs.get(canonical_job_id)
+        if job:
+            self.canonical_jobs[canonical_job_id] = CanonicalJob(
+                id=job.id,
+                company_id=job.company_id,
+                canonical_title=job.canonical_title,
+                normalized_title=job.normalized_title,
+                aggregate_state=job.aggregate_state,
+                primary_posting_id=UUID(str(posting_id)),
+            )
+
 
 class TestJobIngestionService:
     def _make_service(self) -> tuple[JobIngestionService, InMemoryJobRepository]:

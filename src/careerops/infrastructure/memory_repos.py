@@ -398,6 +398,18 @@ class InMemoryJobReadRepository:
                 updated_at=now,
             )
 
+    def update_canonical_primary_posting(self, canonical_job_id: UUID, posting_id: UUID) -> None:
+        job = self._canonical_jobs.get(canonical_job_id)
+        if job is not None:
+            self._canonical_jobs[canonical_job_id] = CanonicalJob(
+                id=job.id,
+                company_id=job.company_id,
+                canonical_title=job.canonical_title,
+                normalized_title=job.normalized_title,
+                aggregate_state=job.aggregate_state,
+                primary_posting_id=posting_id,
+            )
+
 
 # ---------------------------------------------------------------------------
 # Contact repository

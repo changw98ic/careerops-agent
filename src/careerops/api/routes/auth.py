@@ -18,6 +18,7 @@ class LoginRequest(BaseModel):
 class LoginResponse(BaseModel):
     ok: bool
     error: str = ""
+    csrf_token: str = ""
 
 
 @router.post("/api/v1/auth/login", response_model=LoginResponse)
@@ -72,7 +73,7 @@ async def login(body: LoginRequest, request: Request, response: Response) -> Log
         max_age=604800,
         path="/",
     )
-    return LoginResponse(ok=True)
+    return LoginResponse(ok=True, csrf_token=secrets.csrf_token)
 
 
 @router.post("/api/v1/auth/logout")

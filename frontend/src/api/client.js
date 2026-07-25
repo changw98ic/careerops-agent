@@ -1,8 +1,13 @@
 const CSRF_HEADER = 'X-CSRF-Token'
 
+let csrfToken = ''
+
+export function setCsrfToken(token) {
+  csrfToken = token
+}
+
 function getCsrfToken() {
-  const m = document.cookie.match(/(?:^|;\s*)careerops_csrf=([^;]*)/)
-  return m ? decodeURIComponent(m[1]) : ''
+  return csrfToken
 }
 
 async function request(path, options = {}) {
@@ -28,20 +33,13 @@ async function request(path, options = {}) {
 }
 
 export const api = {
-  // Companies
   listCompanies: (params) => request('/api/v1/companies?' + new URLSearchParams(params || {})),
-
-  // Jobs
   listJobs: (params) => request('/api/v1/jobs?' + new URLSearchParams(params || {})),
   getJob: (id) => request(`/api/v1/jobs/${id}`),
-
-  // Applications
   listApplications: (params) => request('/api/v1/applications?' + new URLSearchParams(params || {})),
   createApplication: (data) => request('/api/v1/applications', { method: 'POST', body: data }),
   submitApplication: (id) => request(`/api/v1/applications/${id}/submit`, { method: 'POST' }),
   transitionApplication: (id, data) => request(`/api/v1/applications/${id}/transition`, { method: 'POST', body: data }),
-
-  // Contacts
   listContacts: (companyId) => request(`/api/v1/companies/${companyId}/contacts`),
   createContact: (data) => request('/api/v1/contacts', { method: 'POST', body: data }),
 }

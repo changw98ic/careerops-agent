@@ -7,7 +7,7 @@ from uuid import UUID
 from fastapi import Depends, FastAPI
 
 from careerops import __version__
-from careerops.api.auth_dependency import require_api_auth
+from careerops.api.auth_dependency import require_api_auth, require_web_auth
 from careerops.api.errors import install_error_handlers
 from careerops.api.metrics_middleware import MetricsMiddleware
 from careerops.api.middleware import RequestIdMiddleware
@@ -181,8 +181,9 @@ def create_app(
     app.include_router(jobs_router, dependencies=[Depends(require_api_auth)])
     app.include_router(matching_router, dependencies=[Depends(require_api_auth)])
     app.include_router(applications_router, dependencies=[Depends(require_api_auth)])
-    app.include_router(jobs_ui_router, dependencies=[Depends(require_api_auth)])
-    app.include_router(matching_ui_router, dependencies=[Depends(require_api_auth)])
+    # UI routers — session cookie only, no CSRF header (browser GET loads).
+    app.include_router(jobs_ui_router, dependencies=[Depends(require_web_auth)])
+    app.include_router(matching_ui_router, dependencies=[Depends(require_web_auth)])
 
     if auth_service is not None:
         if web_settings is None:

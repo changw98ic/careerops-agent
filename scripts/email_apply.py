@@ -268,6 +268,16 @@ def _draft_resource_id(draft: dict) -> UUID:
 
 
 def cmd_send(args: argparse.Namespace) -> None:
+    from careerops.config import get_settings
+
+    settings = get_settings()
+    if not settings.external_writes_enabled:
+        print(
+            "Error: external_writes_enabled is False. "
+            "Set CAREEROPS_EXTERNAL_WRITES_ENABLED=true to send emails."
+        )
+        sys.exit(1)
+
     from sqlalchemy import create_engine
 
     from careerops.application.side_effect_kernel import (

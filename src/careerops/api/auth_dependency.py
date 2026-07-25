@@ -1,11 +1,19 @@
 """FastAPI dependency for API route authentication.
 
-Reads the ``careerops_session`` cookie and the ``X-CSRF-Token`` header,
-validates both through ``ConsoleAuthService.authenticate`` and
-``validate_csrf``, and injects the resulting ``AuthenticatedPrincipal``.
+Two dependencies are provided:
 
-Routes that must remain public (health, metrics) simply do not include
-this dependency.
+* ``require_api_auth`` - reads the ``careerops_session`` cookie **and** the
+  ``X-CSRF-Token`` header, validates both through
+  ``ConsoleAuthService.authenticate`` and ``validate_csrf``, and injects the
+  resulting ``AuthenticatedPrincipal``.  Use for state-changing API routers
+  (POST / PUT / DELETE).
+
+* ``require_web_auth`` - reads only the ``careerops_session`` cookie, validates
+  it, and returns the principal.  No CSRF header check.  Use for UI routers
+  that serve GET page loads where the browser does not send custom headers.
+
+Routes that must remain public (health, metrics) simply do not include either
+dependency.
 """
 
 from __future__ import annotations
@@ -60,6 +68,34 @@ async def require_api_auth(
         raise HTTPException(status_code=403, detail="csrf token rejected") from None
 
     return principal
+
+
+async def require_web_auth(
+    request: Request,
+    session_token: str | None = Depends(_COOKIE_SCHEME),
+) -> AuthenticatedPrincipal | None:
+    """Reject unauthenticated web requests with 401.
+
+    Like ``require_api_auth`` but **without** CSRF header validation.
+    Intended for UI routers that serve GET page loads — the browser sends the
+    session cookie but does not attach custom headers on navigation.
+    """
+    auth_service = getattr(request.app.state, "auth_service", None)
+    web_settings = getattr(request.app.state, "web_settings", None)
+
+    # Auth not configured — allow through for backward-compatible deployments.
+    if auth_service is None or web_settings is None:
+        if auth_service is None and web_settings is None:
+            return None
+        raise HTTPException(status_code=401, detail="authentication required")
+
+    if not session_token:
+        raise HTTPException(status_code=401, detail="authentication required")
+
+    try:
+        return auth_service.authenticate(session_token, now=_now())
+    except (AuthError, ValueError):
+        raise HTTPException(status_code=401, detail="authentication required") from None
 
 
 def _now() -> datetime:

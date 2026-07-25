@@ -16,7 +16,7 @@ import urllib.error
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
-from uuid import NAMESPACE_DNS, uuid5
+from uuid import NAMESPACE_DNS, UUID, uuid5
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
@@ -36,6 +36,7 @@ from careerops.adapters.http_fetcher import (
 )
 from careerops.config import Settings
 from careerops.infrastructure.database.engine import create_database_engine
+from careerops.infrastructure.database.postgres_job_repo import PostgresJobReadRepository
 from careerops.infrastructure.database.schema import companies, job_sources
 from careerops.infrastructure.temporal.m1_crawl_sink import RealCrawlActivitySink
 from careerops.workflows.m1_contracts import CrawledPostingRecord
@@ -321,13 +322,20 @@ def _ingest_jobs(
     sink: RealCrawlActivitySink,
     jobs: list[CrawledJob],
     source_id: str,
+    company_name: str,
+    job_repo: object | None = None,
 ) -> tuple[int, int, list[str]]:
     """Ingest a batch of CrawledJobs into the database.
 
-    Runs the async ingest_posting in a dedicated event loop.
+    Runs the async ingest_posting in a dedicated event loop, then calls
+    JobIngestionService to create canonical_jobs + job_posting_assignments.
     Returns (new_postings, new_versions, errors).
     """
     import asyncio
+
+    from careerops.application.job_ingestion import JobIngestionService
+
+    service = JobIngestionService(job_repo) if job_repo is not None else None
 
     async def _run() -> tuple[int, int, list[str]]:
         new_postings = 0
@@ -341,6 +349,18 @@ def _ingest_jobs(
                     new_postings += 1
                 if result.get("is_new_version"):
                     new_versions += 1
+
+                if service is not None:
+                    service.ingest_posting(
+                        source_id=UUID(source_id),
+                        external_id=record.external_id,
+                        canonical_url=record.canonical_url,
+                        structured_data=record.structured_data,
+                        source_url=record.source_url,
+                        parser_version=record.parser_version,
+                        company_name=company_name,
+                        now=datetime.now(UTC),
+                    )
             except Exception as exc:
                 errors.append(f"{job.external_id}: {exc}")
         return new_postings, new_versions, errors
@@ -363,12 +383,14 @@ def crawl_all(dry_run: bool = False) -> None:
 
     engine: Engine | None = None
     sink: RealCrawlActivitySink | None = None
+    job_repo: PostgresJobReadRepository | None = None
     source_map: dict[str, str] = {}
 
     if not dry_run:
         settings = Settings()
         engine = create_database_engine(settings)
         sink = RealCrawlActivitySink(engine=engine)
+        job_repo = PostgresJobReadRepository(engine)
         print("Ensuring companies and job_sources rows exist...")
         source_map = _ensure_source_rows(engine, SEED_SOURCES)
         print(f"  Resolved {len(source_map)} source IDs.")
@@ -400,7 +422,7 @@ def crawl_all(dry_run: bool = False) -> None:
                 if sid is None:
                     all_errors.append(f"{company}: no source_id for board '{board}'")
                 else:
-                    np, nv, errs = _ingest_jobs(sink, jobs, sid)
+                    np, nv, errs = _ingest_jobs(sink, jobs, sid, company, job_repo)
                     total_new_postings += np
                     total_new_versions += nv
                     all_errors.extend(errs)

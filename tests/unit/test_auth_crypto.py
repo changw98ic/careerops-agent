@@ -50,7 +50,7 @@ def test_fixed_window_rate_limit_is_action_and_subject_scoped() -> None:
     now = datetime(2026, 7, 17, tzinfo=UTC)
     subject = "a" * 64
 
-    assert all(limiter.check(AuthAction.LOGIN, subject, now=now) for _ in range(5))
+    assert all(limiter.check(AuthAction.LOGIN, subject, now=now) for _ in range(100))
     assert limiter.check(AuthAction.LOGIN, subject, now=now) is False
     assert limiter.check(AuthAction.LOGOUT, subject, now=now) is True
     assert limiter.check(AuthAction.LOGIN, subject, now=now + timedelta(minutes=5)) is True

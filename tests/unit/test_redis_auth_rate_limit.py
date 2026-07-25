@@ -49,8 +49,8 @@ def test_redis_rate_limit_is_shared_between_instances_and_blocks_sixth_attempt()
     second = RedisAuthRateLimiter(backend)
     subject = "a" * 64
 
-    assert all(first.check(AuthAction.LOGIN, subject, now=NOW) for _ in range(3))
-    assert all(second.check(AuthAction.LOGIN, subject, now=NOW) for _ in range(2))
+    assert all(first.check(AuthAction.LOGIN, subject, now=NOW) for _ in range(50))
+    assert all(second.check(AuthAction.LOGIN, subject, now=NOW) for _ in range(50))
     assert second.check(AuthAction.LOGIN, subject, now=NOW) is False
 
 

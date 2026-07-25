@@ -329,7 +329,7 @@ def test_login_rate_limit_is_audited_and_blocks_the_sixth_attempt() -> None:
     service, repository, audit = make_service()
     bootstrap_owner(service, repository)
 
-    for _attempt in range(5):
+    for _attempt in range(100):
         preauth = service.begin_preauth(now=NOW, context=CONTEXT)
         with pytest.raises(InvalidCredentials):
             service.login(
@@ -357,12 +357,12 @@ def test_login_rate_limit_is_audited_and_blocks_the_sixth_attempt() -> None:
 def test_preauth_creation_is_bounded_and_rate_limit_is_audited() -> None:
     service, repository, audit = make_service()
 
-    for _attempt in range(30):
+    for _attempt in range(200):
         service.begin_preauth(now=NOW, context=CONTEXT)
 
     with pytest.raises(AuthRateLimited):
         service.begin_preauth(now=NOW, context=CONTEXT)
 
-    assert len(repository.sessions) == 30
+    assert len(repository.sessions) == 200
     assert audit.events[-1].action is AuthAction.PREAUTH
     assert audit.events[-1].reason_code == "RATE_LIMITED"

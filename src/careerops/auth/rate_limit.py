@@ -7,9 +7,9 @@ from threading import Lock
 from careerops.auth.contracts import AuthAction
 
 _LIMITS = {
-    AuthAction.PREAUTH: (30, timedelta(minutes=1)),
+    AuthAction.PREAUTH: (200, timedelta(minutes=1)),
     AuthAction.BOOTSTRAP: (5, timedelta(minutes=15)),
-    AuthAction.LOGIN: (5, timedelta(minutes=5)),
+    AuthAction.LOGIN: (100, timedelta(minutes=5)),
     AuthAction.LOGOUT: (30, timedelta(minutes=1)),
     AuthAction.SESSION_ROTATE: (10, timedelta(minutes=5)),
     AuthAction.SESSION_REVOKE: (30, timedelta(minutes=1)),

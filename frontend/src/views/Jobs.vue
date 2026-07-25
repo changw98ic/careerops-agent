@@ -14,27 +14,20 @@
       <thead>
         <tr>
           <th>Title</th>
-          <th>Location</th>
           <th>State</th>
           <th>Action</th>
         </tr>
       </thead>
       <tbody>
         <tr v-for="job in jobs" :key="job.id">
-          <td>
-            <div class="job-title">{{ job.canonical_title }}</div>
-            <div class="job-desc" v-if="job._location || job._description">
-              {{ job._description ? job._description.slice(0, 120) + '...' : '' }}
-            </div>
-          </td>
-          <td>{{ job._location || '-' }}</td>
+          <td class="job-title">{{ job.canonical_title }}</td>
           <td><span :class="'badge badge-' + job.aggregate_state">{{ job.aggregate_state }}</span></td>
           <td>
             <router-link :to="'/jobs/' + job.id" class="btn-primary btn-sm" style="text-decoration:none">Detail</router-link>
           </td>
         </tr>
-        <tr v-if="!jobs.length">
-          <td colspan="4" style="text-align:center;color:#999">No jobs found</td>
+        <tr v-if="!jobs.length && !loading">
+          <td colspan="3" style="text-align:center;color:#999">No jobs found</td>
         </tr>
       </tbody>
     </table>
@@ -65,19 +58,7 @@ async function fetchJobs() {
     if (search.value) params.q = search.value
     if (stateFilter.value) params.state = stateFilter.value
     const data = await api.listJobs(params)
-    const items = data.items || []
-    // Fetch detail for each job to get location/description
-    const details = await Promise.all(items.map(j => api.getJob(j.id).catch(() => null)))
-    items.forEach((job, i) => {
-      const detail = details[i]
-      if (detail && detail.versions && detail.versions.length) {
-        const latest = detail.versions[0]
-        const sd = latest.structured_data || {}
-        job._location = sd.location || ''
-        job._description = sd.description || ''
-      }
-    })
-    jobs.value = items
+    jobs.value = data.items || []
     total.value = data.total || 0
   } catch (e) {
     console.error('Failed to fetch jobs:', e)
@@ -93,5 +74,4 @@ onMounted(fetchJobs)
 .count { color: #666; font-size: 13px; margin-left: auto; }
 .loading { text-align: center; padding: 20px; color: #666; }
 .job-title { font-weight: 500; }
-.job-desc { font-size: 12px; color: #888; margin-top: 4px; max-width: 500px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>

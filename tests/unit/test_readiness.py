@@ -42,7 +42,7 @@ async def test_runtime_readiness_isolates_component_failures(
     fake_engine = FakeEngine()
     fake_async_redis = FakeAsyncRedis()
     fake_sync_redis = FakeSyncRedis()
-    monkeypatch.setattr(runtime, "create_database_engine", lambda _settings: fake_engine)
+    monkeypatch.setattr(runtime, "create_database_engine", lambda _settings, **_kw: fake_engine)
     monkeypatch.setattr(runtime.AsyncRedis, "from_url", lambda *_args, **_kwargs: fake_async_redis)
     monkeypatch.setattr(runtime.SyncRedis, "from_url", lambda *_args, **_kwargs: fake_sync_redis)
     resources = RuntimeResources(

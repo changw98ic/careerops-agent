@@ -106,13 +106,18 @@ def _runtime_session_initializer(
     return initialize
 
 
-def create_database_engine(settings: Settings) -> Engine:
-    """Create an engine that revalidates one fixed capability on every pool checkout."""
+def create_database_engine(settings: Settings, *, enforce_role: bool = True) -> Engine:
+    """Create an engine that revalidates one fixed capability on every pool checkout.
+
+    When ``enforce_role`` is False (development), the NOINHERIT + SET ROLE
+    checkout hook is skipped — the login user owns the schema directly.
+    """
 
     engine = create_engine(
         settings.database_url.get_secret_value(),
         pool_pre_ping=True,
         pool_recycle=300,
     )
-    event.listen(engine, "checkout", _runtime_session_initializer(settings.database_role))
+    if enforce_role:
+        event.listen(engine, "checkout", _runtime_session_initializer(settings.database_role))
     return engine

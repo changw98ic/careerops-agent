@@ -47,7 +47,8 @@ class RuntimeResources:
     def __init__(self, settings: Settings, *, metrics: Metrics | None = None) -> None:
         self._settings = settings
         self._metrics = metrics
-        self.database: Engine = create_database_engine(settings)
+        is_prod = settings.environment is RuntimeEnvironment.PRODUCTION
+        self.database: Engine = create_database_engine(settings, enforce_role=is_prod)
         self.redis = cast(
             "AsyncRedisClient",
             AsyncRedis.from_url(  # pyright: ignore[reportUnknownMemberType]

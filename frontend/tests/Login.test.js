@@ -72,10 +72,10 @@ describe('Login.vue', () => {
     mockLogin.mockResolvedValueOnce()
     const wrapper = mountLogin()
 
-    // Set values via the refs
+    // Set values via the formData reactive object (what doLogin actually reads)
     const vm = wrapper.vm
-    vm.username = 'alice'
-    vm.password = 'secret123'
+    vm.formData.username = 'alice'
+    vm.formData.password = 'secret123'
 
     await vm.doLogin()
 
@@ -88,8 +88,8 @@ describe('Login.vue', () => {
     const wrapper = mountLogin()
 
     const vm = wrapper.vm
-    vm.username = 'alice'
-    vm.password = 'wrong'
+    vm.formData.username = 'alice'
+    vm.formData.password = 'wrong'
 
     await vm.doLogin()
 
@@ -99,8 +99,8 @@ describe('Login.vue', () => {
   it('maps rate limit error correctly', async () => {
     mockLogin.mockRejectedValueOnce(new Error('Too many attempts; try again later'))
     const wrapper = mountLogin()
-    wrapper.vm.username = 'alice'
-    wrapper.vm.password = 'pass'
+    wrapper.vm.formData.username = 'alice'
+    wrapper.vm.formData.password = 'pass'
 
     await wrapper.vm.doLogin()
 
@@ -126,8 +126,8 @@ describe('Login.vue', () => {
   it('shows fallback error for unknown errors', async () => {
     mockLogin.mockRejectedValueOnce(new Error('something weird'))
     const wrapper = mountLogin()
-    wrapper.vm.username = 'a'
-    wrapper.vm.password = 'b'
+    wrapper.vm.formData.username = 'a'
+    wrapper.vm.formData.password = 'b'
 
     await wrapper.vm.doLogin()
 

@@ -4,10 +4,12 @@ import { ref } from 'vue'
 
 const mockGetJob = vi.fn()
 const mockCreateApplication = vi.fn()
+const mockGetEmailDraft = vi.fn()
 vi.mock('../src/api/client.js', () => ({
   api: {
     getJob: (...args) => mockGetJob(...args),
     createApplication: (...args) => mockCreateApplication(...args),
+    getEmailDraft: (...args) => mockGetEmailDraft(...args),
   },
   setCsrfToken: vi.fn(),
 }))
@@ -21,7 +23,7 @@ vi.mock('vue-router', () => ({
 }))
 
 vi.mock('ant-design-vue/es/message', () => ({
-  default: { success: vi.fn(), error: vi.fn() },
+  default: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
 }))
 
 const stubs = {
@@ -74,6 +76,7 @@ const MOCK_JOB = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mockGetEmailDraft.mockResolvedValue({ to: '', subject: '', body: '' })
 })
 
 describe('JobDetail.vue', () => {
@@ -88,13 +91,13 @@ describe('JobDetail.vue', () => {
 
     expect(mockGetJob).toHaveBeenCalledWith('job-123')
     expect(wrapper.text()).toContain('Frontend Engineer')
-    expect(wrapper.text()).toContain('active')
+    expect(wrapper.text()).toContain('进行中')
   })
 
   it('shows loading state initially', () => {
     mockGetJob.mockReturnValue(new Promise(() => {})) // never resolves
     const wrapper = mount(JobDetail, { global: { stubs } })
-    expect(wrapper.text()).toContain('加载职位详情中...')
+    expect(wrapper.text()).toContain('加载中...')
   })
 
   it('shows error state when fetch fails', async () => {
@@ -116,11 +119,12 @@ describe('JobDetail.vue', () => {
     expect(wrapper.vm.job).toBeTruthy()
   })
 
-  it('displays version timeline', async () => {
+  it('displays structured data from version', async () => {
     const wrapper = mountDetail()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('v2.0')
+    // The timeline UI was simplified away; the latest version's
+    // structured_data (e.g. location) is what the component renders.
     expect(wrapper.text()).toContain('Remote')
   })
 
@@ -139,7 +143,7 @@ describe('JobDetail.vue', () => {
     const vm = wrapper.vm
     expect(vm.applied).toBe(false)
 
-    await vm.apply()
+    await vm.onApplyClick()
     await flushPromises()
 
     expect(mockCreateApplication).toHaveBeenCalledWith({
@@ -154,10 +158,10 @@ describe('JobDetail.vue', () => {
     const wrapper = mountDetail()
     await flushPromises()
 
-    await wrapper.vm.apply()
+    await wrapper.vm.onApplyClick()
     await flushPromises()
 
-    expect(wrapper.vm.error).toBe('该职位已投递，请勿重复操作。')
+    expect(wrapper.vm.error).toBe('该职位已投递。')
   })
 
   it('sets error on apply failure (401 unauthorized)', async () => {
@@ -165,7 +169,7 @@ describe('JobDetail.vue', () => {
     const wrapper = mountDetail()
     await flushPromises()
 
-    await wrapper.vm.apply()
+    await wrapper.vm.onApplyClick()
     await flushPromises()
 
     expect(wrapper.vm.error).toBe('登录已过期，请重新登录。')

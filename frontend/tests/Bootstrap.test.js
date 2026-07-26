@@ -69,8 +69,8 @@ describe('Bootstrap.vue', () => {
     const vm = wrapper.vm
     vm.formData.bootstrap_token = 'tok123'
     vm.formData.username = 'admin'
-    vm.formData.password = 'password123'
-    vm.formData.confirm_password = 'password123'
+    vm.formData.password = 'password1234' // 12+ chars (passwordRules min length)
+    vm.formData.confirm_password = 'password1234'
     expect(vm.formValid).toBe(true)
   })
 

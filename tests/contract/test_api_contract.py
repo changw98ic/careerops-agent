@@ -225,6 +225,15 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
         "/api/v1/inbox/{job_id}/favorite",
         "/api/v1/inbox/{job_id}/ignore",
         "/api/v1/inbox/{job_id}/snooze",
+        # Section-7 application-workspace router (application-workspace spec).
+        "/api/v1/applications/{application_id}",
+        "/api/v1/applications/{application_id}/prepare",
+        "/api/v1/applications/{application_id}/channels",
+        "/api/v1/applications/{application_id}/channel",
+        "/api/v1/applications/{application_id}/package",
+        "/api/v1/applications/{application_id}/timeline",
+        "/api/v1/applications/{application_id}/confirm-external-submission",
+        "/api/v1/applications/{application_id}/state",
     }
 
 

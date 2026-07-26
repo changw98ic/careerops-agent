@@ -7,6 +7,7 @@ const Jobs = () => import('./views/Jobs.vue')
 const JobDetail = () => import('./views/JobDetail.vue')
 const Companies = () => import('./views/Companies.vue')
 const Applications = () => import('./views/Applications.vue')
+const ApplicationWorkspace = () => import('./views/ApplicationWorkspace.vue')
 const Profile = () => import('./views/Profile.vue')
 const Resumes = () => import('./views/Resumes.vue')
 const Evidence = () => import('./views/Evidence.vue')
@@ -25,6 +26,7 @@ const routes = [
   { path: '/jobs/:id', name: 'job-detail', component: JobDetail, meta: { auth: true } },
   { path: '/companies', name: 'companies', component: Companies, meta: { auth: true } },
   { path: '/applications', name: 'applications', component: Applications, meta: { auth: true } },
+  { path: '/applications/:id', name: 'application-workspace', component: ApplicationWorkspace, meta: { auth: true } },
   { path: '/profile', name: 'profile', component: Profile, meta: { auth: true } },
   { path: '/resumes', name: 'resumes', component: Resumes, meta: { auth: true } },
   { path: '/evidence', name: 'evidence', component: Evidence, meta: { auth: true } },

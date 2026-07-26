@@ -182,4 +182,18 @@ export const api = {
   favoriteInboxJob: (jobId) => request(`/api/v1/inbox/${jobId}/favorite`, { method: 'POST' }),
   ignoreInboxJob: (jobId) => request(`/api/v1/inbox/${jobId}/ignore`, { method: 'POST' }),
   snoozeInboxJob: (jobId, data) => request(`/api/v1/inbox/${jobId}/snooze`, { method: 'POST', body: data }),
+
+  // -- Application workspace (Section 7) --
+  getApplication: (id) => request(`/api/v1/applications/${id}`),
+  prepareApplication: (id) => request(`/api/v1/applications/${id}/prepare`, { method: 'POST' }),
+  getApplicationChannels: (id) => request(`/api/v1/applications/${id}/channels`),
+  selectApplicationChannel: (id, channel) =>
+    request(`/api/v1/applications/${id}/channel`, { method: 'POST', body: { channel } }),
+  bindApplicationPackage: (id, data) =>
+    request(`/api/v1/applications/${id}/package`, { method: 'POST', body: data }),
+  getApplicationTimeline: (id) => request(`/api/v1/applications/${id}/timeline`),
+  confirmExternalSubmission: (id, data) =>
+    request(`/api/v1/applications/${id}/confirm-external-submission`, { method: 'POST', body: data }),
+  changeApplicationState: (id, data) =>
+    request(`/api/v1/applications/${id}/state`, { method: 'POST', body: data }),
 }

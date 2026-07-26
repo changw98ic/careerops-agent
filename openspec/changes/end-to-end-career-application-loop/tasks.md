@@ -75,17 +75,17 @@
 
 ## 7. Application workspace and lifecycle
 
-- [ ] 7.1 Refine the application domain state machine so `FAVORITED`, `PREPARING`, `SUBMITTED`, `INTERVIEWING`, `OFFER`, `REJECTED`, `WITHDRAWN`, and `ON_HOLD` transitions match the new contract.
-- [ ] 7.2 Implement application create/get-or-create using candidate/job/cycle idempotency and authenticated candidate ownership.
-- [ ] 7.3 Implement favorite-to-preparing and preparing-to-submission validation services without allowing model output to transition state.
-- [ ] 7.4 Define the application channel-eligibility interface for verified email contact, official external form, and manual handling; defer concrete contact resolution to group 9.
-- [ ] 7.5 Define the application/package binding interface for job version, resume version, evidence, and application package version; consume the package implementation from group 8.
-- [ ] 7.6 Implement append-only application timeline projection for user decisions, package events, submissions, mail proposals, reviews, reminders, and provider receipts.
-- [ ] 7.7 Implement external-form flow with trusted URL display, manual checklist, explicit completion confirmation, and no automatic submitted claim.
-- [ ] 7.8 Add API routes for application detail, state actions, channel selection, package selection, timeline, and manual submission confirmation.
-- [ ] 7.9 Add frontend application workspace with job evidence, channel choice, package status, exact payload preview, timeline, and pending actions.
-- [ ] 7.10 Add contract tests for duplicate application creation, illegal transitions, stale package approval, manual-form abandonment, and submitted evidence.
-- [ ] 7.11 Complete a vertical application-workspace slice using deterministic fixtures: inbox favorite → preparation → package binding → external-form/manual confirmation → timeline projection.
+- [x] 7.1 Refine the application domain state machine so `FAVORITED`, `PREPARING`, `SUBMITTED`, `INTERVIEWING`, `OFFER`, `REJECTED`, `WITHDRAWN`, and `ON_HOLD` transitions match the new contract.
+- [x] 7.2 Implement application create/get-or-create using candidate/job/cycle idempotency and authenticated candidate ownership.
+- [x] 7.3 Implement favorite-to-preparing and preparing-to-submission validation services without allowing model output to transition state.
+- [x] 7.4 Define the application channel-eligibility interface for verified email contact, official external form, and manual handling; defer concrete contact resolution to group 9.
+- [x] 7.5 Define the application/package binding interface for job version, resume version, evidence, and application package version; consume the package implementation from group 8.
+- [x] 7.6 Implement append-only application timeline projection for user decisions, package events, submissions, mail proposals, reviews, reminders, and provider receipts.
+- [x] 7.7 Implement external-form flow with trusted URL display, manual checklist, explicit completion confirmation, and no automatic submitted claim.
+- [x] 7.8 Add API routes for application detail, state actions, channel selection, package selection, timeline, and manual submission confirmation.
+- [x] 7.9 Add frontend application workspace with job evidence, channel choice, package status, exact payload preview, timeline, and pending actions.
+- [x] 7.10 Add contract tests for duplicate application creation, illegal transitions, stale package approval, manual-form abandonment, and submitted evidence.
+- [x] 7.11 Complete a vertical application-workspace slice using deterministic fixtures: inbox favorite → preparation → package binding → external-form/manual confirmation → timeline projection.
 
 ## 8. Job-specific application packages
 

@@ -68,6 +68,11 @@
             </template>
             <template v-else-if="column.key === 'action'">
               <a-space>
+                <router-link :to="`/applications/${record.id}`" class="table-link">
+                  <a-button type="link" size="small">
+                    打开工作区
+                  </a-button>
+                </router-link>
                 <a-popconfirm
                   v-if="['favorited', 'preparing'].includes(record.state)"
                   title="确认将该申请标记为已投递？"

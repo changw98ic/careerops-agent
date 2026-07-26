@@ -182,6 +182,7 @@ const pageTitle = computed(() => {
     'job-detail': 'Job detail',
     companies: 'Companies',
     applications: 'Applications',
+    'application-workspace': 'Application Workspace',
     profile: 'Profile',
     resumes: 'Resumes',
     evidence: 'Evidence',

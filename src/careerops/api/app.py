@@ -12,6 +12,7 @@ from careerops.api.auth_dependency import require_api_auth, require_web_auth
 from careerops.api.errors import install_error_handlers
 from careerops.api.metrics_middleware import MetricsMiddleware
 from careerops.api.middleware import RequestIdMiddleware
+from careerops.api.routes.application_workspace import router as application_workspace_router
 from careerops.api.routes.applications import router as applications_router
 from careerops.api.routes.crawl_plans import router as crawl_plans_router
 from careerops.api.routes.crawl_runs import router as crawl_runs_router
@@ -243,6 +244,22 @@ def create_app(
             job_data_repo=probe.matching_read_repo,
             capability_resolver=probe.capability_resolver,
         )
+        # Section-7 application workspace service (tasks 7.2-7.7). Composes the
+        # existing application repo (doubles as resume/package/follow-up repo)
+        # with the cycle repo (cycle-bound get-or-create) and the default
+        # job-evidence channel resolver. Package-binding store is wired in
+        # Section 8 (None here → binding reads return None until a package is
+        # approved). Trusted-contact lookup (EMAIL eligibility) arrives in
+        # Section 9; until then EMAIL is surfaced as deferred. Same DI pattern
+        # as the other Section-2/4/6 services.
+        from careerops.application.application_workspace import (
+            ApplicationWorkspaceService,
+        )
+
+        app.state.application_workspace_service = ApplicationWorkspaceService(
+            probe.application_repo,
+            cycle_repo=probe.application_cycle_repo,
+        )
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(MetricsMiddleware, metrics=metrics)
     install_error_handlers(app)
@@ -290,6 +307,13 @@ def create_app(
     # Section-6 inbox router (tasks 6.7-6.8). Same auth guard; candidate
     # ownership resolved server-side. Additive — no existing routes broken.
     app.include_router(inbox_router, dependencies=[Depends(require_api_auth)])
+    # Section-7 application-workspace router (tasks 7.8). Additive paths only
+    # (detail / prepare / channels / channel / package / timeline /
+    # confirm-external-submission / state); the M3 application routes are
+    # untouched. Same auth guard; candidate ownership resolved server-side.
+    app.include_router(
+        application_workspace_router, dependencies=[Depends(require_api_auth)]
+    )
 
     # Check if Vue SPA is enabled; if so, skip old Jinja2 UI routes.
     if not serve_spa:

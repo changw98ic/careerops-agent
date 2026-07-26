@@ -13,6 +13,9 @@ from careerops.api.errors import install_error_handlers
 from careerops.api.metrics_middleware import MetricsMiddleware
 from careerops.api.middleware import RequestIdMiddleware
 from careerops.api.routes.applications import router as applications_router
+from careerops.api.routes.crawl_plans import router as crawl_plans_router
+from careerops.api.routes.crawl_runs import router as crawl_runs_router
+from careerops.api.routes.crawl_sources import router as crawl_sources_router
 from careerops.api.routes.evidence import router as evidence_router
 from careerops.api.routes.health import router as health_router
 from careerops.api.routes.jobs import router as jobs_router
@@ -147,6 +150,11 @@ def create_app(
     if isinstance(probe, RuntimeResources):
         from careerops.application.applications import ApplicationService
         from careerops.application.contacts import ContactService
+        from careerops.application.crawl_plan_service import (
+            CrawlPlanService,
+            CrawlRunService,
+            CrawlSourceService,
+        )
         from careerops.application.evidence_service import (
             EvidenceService,
             LoggingEvidenceAuditSink,
@@ -200,6 +208,23 @@ def create_app(
         app.state.evidence_service = EvidenceService(
             probe.evidence_repo, audit_sink=LoggingEvidenceAuditSink()
         )
+        # Section-4 crawl services (tasks 4.4-4.7). Each wraps a Section-4
+        # repository; routes pull them through ``require_repository`` so a
+        # missing service surfaces as 503. The run service composes all three
+        # repos so it can resolve the eligible source set + active plan version
+        # when recording a manual run. Capability gating for
+        # CRAWL_PLAN_MANAGEMENT is applied at each router; the resolver is
+        # already on app.state.
+        crawl_source_service = CrawlSourceService(probe.crawl_source_repo)
+        crawl_plan_service = CrawlPlanService(probe.crawl_plan_repo)
+        crawl_run_service = CrawlRunService(
+            probe.crawl_run_repo,
+            plan_repository=probe.crawl_plan_repo,
+            source_repository=probe.crawl_source_repo,
+        )
+        app.state.crawl_source_service = crawl_source_service
+        app.state.crawl_plan_service = crawl_plan_service
+        app.state.crawl_run_service = crawl_run_service
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(MetricsMiddleware, metrics=metrics)
     install_error_handlers(app)
@@ -237,6 +262,13 @@ def create_app(
     app.include_router(profile_router, dependencies=[Depends(require_api_auth)])
     app.include_router(resumes_router, dependencies=[Depends(require_api_auth)])
     app.include_router(evidence_router, dependencies=[Depends(require_api_auth)])
+    # Section-4 additive routers (crawl sources / plans / runs). Same auth
+    # guard as the existing v1 routers; candidate ownership is resolved
+    # server-side inside each handler via ``require_candidate_id``. The
+    # CRAWL_PLAN_MANAGEMENT capability gate is composed inside each router.
+    app.include_router(crawl_sources_router, dependencies=[Depends(require_api_auth)])
+    app.include_router(crawl_plans_router, dependencies=[Depends(require_api_auth)])
+    app.include_router(crawl_runs_router, dependencies=[Depends(require_api_auth)])
 
     # Check if Vue SPA is enabled; if so, skip old Jinja2 UI routes.
     if not serve_spa:

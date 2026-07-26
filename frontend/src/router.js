@@ -10,6 +10,9 @@ const Applications = () => import('./views/Applications.vue')
 const Profile = () => import('./views/Profile.vue')
 const Resumes = () => import('./views/Resumes.vue')
 const Evidence = () => import('./views/Evidence.vue')
+const CrawlPlans = () => import('./views/CrawlPlans.vue')
+const CrawlRunHistory = () => import('./views/CrawlRunHistory.vue')
+const CrawlRunDetail = () => import('./views/CrawlRunDetail.vue')
 const NotFound = () => import('./views/NotFound.vue')
 
 const routes = [
@@ -23,6 +26,9 @@ const routes = [
   { path: '/profile', name: 'profile', component: Profile, meta: { auth: true } },
   { path: '/resumes', name: 'resumes', component: Resumes, meta: { auth: true } },
   { path: '/evidence', name: 'evidence', component: Evidence, meta: { auth: true } },
+  { path: '/crawl-plans', name: 'crawl-plans', component: CrawlPlans, meta: { auth: true } },
+  { path: '/crawl-runs', name: 'crawl-runs', component: CrawlRunHistory, meta: { auth: true } },
+  { path: '/crawl-runs/:id', name: 'crawl-run-detail', component: CrawlRunDetail, meta: { auth: true } },
   { path: '/bootstrap', name: 'bootstrap', component: () => import('./views/Bootstrap.vue') },
   { path: '/404', name: 'not-found', component: NotFound },
   { path: '/:pathMatch(.*)*', name: 'catch-all', redirect: '/404' },

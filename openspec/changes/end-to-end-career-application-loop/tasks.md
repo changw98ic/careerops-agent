@@ -40,12 +40,12 @@
 - [x] 4.2 Implement source registration for official company Careers, Greenhouse, Lever, and Ashby sources using existing adapters and source identifiers.
 - [x] 4.3 Store source trust, terms/robots status, adapter version, enabled/paused state, last-run metadata, and safe policy status.
 - [x] 4.4 Implement crawl-plan version creation with source selection, themes, keyword rules, location/remote rules, seniority, compensation, content scope, interval, timezone, and per-run limits.
-- [ ] 4.5 Implement plan pause/resume, source pause/resume, manual run requests, and idempotent command handling.
-- [ ] 4.6 Implement schedule validation and next-run calculation with bounded intervals, timezone validation, and no overlapping unbounded runs.
-- [ ] 4.7 Add API routes for source CRUD, plan CRUD/versioning, run-now, pause/resume, and run history.
-- [ ] 4.8 Add frontend “采集计划” workspace with source status, effective filters, schedule, last/next run, pause/resume, and run-now actions.
-- [ ] 4.9 Add frontend run-history detail with discovered/updated/closed/failed counts, safe error category, backoff time, and inbox links.
-- [ ] 4.10 Add contract tests for unsupported sources, invalid schedules, plan version immutability, pause behavior, and authenticated ownership.
+- [x] 4.5 Implement plan pause/resume, source pause/resume, manual run requests, and idempotent command handling.
+- [x] 4.6 Implement schedule validation and next-run calculation with bounded intervals, timezone validation, and no overlapping unbounded runs.
+- [x] 4.7 Add API routes for source CRUD, plan CRUD/versioning, run-now, pause/resume, and run history.
+- [x] 4.8 Add frontend “采集计划” workspace with source status, effective filters, schedule, last/next run, pause/resume, and run-now actions.
+- [x] 4.9 Add frontend run-history detail with discovered/updated/closed/failed counts, safe error category, backoff time, and inbox links.
+- [x] 4.10 Add contract tests for unsupported sources, invalid schedules, plan version immutability, pause behavior, and authenticated ownership.
 
 ## 5. Crawl execution, safety, and provenance
 

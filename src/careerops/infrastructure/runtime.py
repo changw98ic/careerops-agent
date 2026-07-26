@@ -107,6 +107,11 @@ class RuntimeResources:
         from careerops.infrastructure.database.postgres_contact_repo import (
             PostgresContactRepository,
         )
+        from careerops.infrastructure.database.postgres_crawl_repo import (
+            PostgresCrawlPlanRepository,
+            PostgresCrawlRunRepository,
+            PostgresCrawlSourceRepository,
+        )
         from careerops.infrastructure.database.postgres_evidence_repo import (
             PostgresEvidenceRepository,
         )
@@ -137,6 +142,15 @@ class RuntimeResources:
         self.profile_repo = PostgresProfileRepository(self.database)
         self.evidence_repo = PostgresEvidenceRepository(self.database)
         self.application_cycle_repo = PostgresApplicationCycleRepository(self.database)
+        # Section-4 crawl source / plan / run repos (tasks 4.1-4.3). Same
+        # pattern as the Section-2 candidate-owned repos: Postgres-backed, no
+        # in-memory fallback, scoped by the server-resolved candidate. A route
+        # that reaches them while the DB is down surfaces a sqlalchemy error;
+        # ``api.app`` exposes them through DI helpers that turn a missing repo
+        # into ``DependencyNotReadyError`` (503).
+        self.crawl_source_repo = PostgresCrawlSourceRepository(self.database)
+        self.crawl_plan_repo = PostgresCrawlPlanRepository(self.database)
+        self.crawl_run_repo = PostgresCrawlRunRepository(self.database)
 
     async def check(self) -> ReadinessReport:
         if self._closed:

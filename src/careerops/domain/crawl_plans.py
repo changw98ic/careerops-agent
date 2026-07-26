@@ -58,19 +58,19 @@ from careerops.domain.profiles import (
 
 __all__ = [
     "CRAWL_RUN_COUNTER_KEYS",
+    "SUPPORTED_SOURCE_TYPES",
     "CrawlPerRunLimits",
+    "CrawlPlanRepository",
     "CrawlPlanVersion",
     "CrawlPolicyStatus",
     "CrawlRun",
     "CrawlRunCounters",
     "CrawlRunRepository",
     "CrawlSource",
-    "CrawlPlanRepository",
     "CrawlSourceRepository",
     "CrawlSourceState",
     "CrawlSourceType",
     "CrawlTrustLevel",
-    "SUPPORTED_SOURCE_TYPES",
     "is_supported_source_type",
 ]
 
@@ -438,9 +438,7 @@ class CrawlRunRepository(Protocol):
         """
         ...
 
-    def get_by_identity(
-        self, owner_id: UUID, run_identity: str
-    ) -> CrawlRun | None:
+    def get_by_identity(self, owner_id: UUID, run_identity: str) -> CrawlRun | None:
         """Return the run matching ``run_identity`` for the owner, or None.
 
         Idempotency read: a worker retry calls this before inserting to decide

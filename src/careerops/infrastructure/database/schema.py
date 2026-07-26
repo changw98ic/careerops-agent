@@ -75,19 +75,11 @@ job_sources = sa.Table(
     # ``state`` above is the operational lifecycle. ``last_run_metadata`` is a
     # bounded safe summary (counts, next eligible time) — never raw sensitive
     # content.
-    sa.Column(
-        "trust_status", sa.String(16), server_default="unknown", nullable=False
-    ),
-    sa.Column(
-        "terms_status", sa.String(16), server_default="unknown", nullable=False
-    ),
-    sa.Column(
-        "robots_status", sa.String(16), server_default="unknown", nullable=False
-    ),
+    sa.Column("trust_status", sa.String(16), server_default="unknown", nullable=False),
+    sa.Column("terms_status", sa.String(16), server_default="unknown", nullable=False),
+    sa.Column("robots_status", sa.String(16), server_default="unknown", nullable=False),
     sa.Column("adapter_version", sa.Text(), server_default="", nullable=False),
-    sa.Column(
-        "enabled", sa.Boolean(), server_default=sa.text("false"), nullable=False
-    ),
+    sa.Column("enabled", sa.Boolean(), server_default=sa.text("false"), nullable=False),
     sa.Column("last_run_at", sa.DateTime(timezone=True)),
     sa.Column(
         "last_run_metadata",
@@ -2454,24 +2446,14 @@ crawl_plan_versions = sa.Table(
     sa.CheckConstraint("interval_seconds >= 0", name="interval_seconds_nonnegative"),
     sa.CheckConstraint("jsonb_typeof(sources) = 'array'", name="sources_array"),
     sa.CheckConstraint("jsonb_typeof(themes) = 'array'", name="themes_array"),
-    sa.CheckConstraint(
-        "jsonb_typeof(include_keywords) = 'array'", name="include_keywords_array"
-    ),
-    sa.CheckConstraint(
-        "jsonb_typeof(exclude_keywords) = 'array'", name="exclude_keywords_array"
-    ),
-    sa.CheckConstraint(
-        "jsonb_typeof(role_families) = 'array'", name="role_families_array"
-    ),
+    sa.CheckConstraint("jsonb_typeof(include_keywords) = 'array'", name="include_keywords_array"),
+    sa.CheckConstraint("jsonb_typeof(exclude_keywords) = 'array'", name="exclude_keywords_array"),
+    sa.CheckConstraint("jsonb_typeof(role_families) = 'array'", name="role_families_array"),
     sa.CheckConstraint("jsonb_typeof(locations) = 'array'", name="locations_array"),
     sa.CheckConstraint("jsonb_typeof(remote_rules) = 'object'", name="remote_rules_object"),
     sa.CheckConstraint("jsonb_typeof(seniority) = 'array'", name="seniority_array"),
-    sa.CheckConstraint(
-        "jsonb_typeof(compensation) = 'object'", name="compensation_object"
-    ),
-    sa.CheckConstraint(
-        "jsonb_typeof(per_run_limits) = 'object'", name="per_run_limits_object"
-    ),
+    sa.CheckConstraint("jsonb_typeof(compensation) = 'object'", name="compensation_object"),
+    sa.CheckConstraint("jsonb_typeof(per_run_limits) = 'object'", name="per_run_limits_object"),
 )
 
 # Exactly one active plan version per owner (partial unique index). The plan
@@ -2492,9 +2474,7 @@ crawl_runs = sa.Table(
     sa.Column(
         "plan_version_id",
         sa.Uuid(),
-        sa.ForeignKey(
-            f"{DATABASE_SCHEMA}.crawl_plan_versions.id", ondelete="RESTRICT"
-        ),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.crawl_plan_versions.id", ondelete="RESTRICT"),
         nullable=False,
     ),
     # ``run_identity`` is the idempotency key (Iron Rule 4): a worker retry

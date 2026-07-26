@@ -204,6 +204,20 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
         "/api/v1/evidence/{evidence_id}",
         "/api/v1/evidence/{evidence_id}/confirm",
         "/api/v1/evidence/{evidence_id}/reject",
+        # Section-4 additive routers (crawl-plan-management spec).
+        "/api/v1/crawl-sources",
+        "/api/v1/crawl-sources/{source_id}",
+        "/api/v1/crawl-sources/{source_id}/pause",
+        "/api/v1/crawl-sources/{source_id}/resume",
+        "/api/v1/crawl-plans",
+        "/api/v1/crawl-plans/versions",
+        "/api/v1/crawl-plans/versions/{version_id}",
+        "/api/v1/crawl-plans/versions/{version_id}/activate",
+        "/api/v1/crawl-plans/pause",
+        "/api/v1/crawl-plans/resume",
+        "/api/v1/crawl-plans/run-now",
+        "/api/v1/crawl-runs",
+        "/api/v1/crawl-runs/{run_id}",
     }
 
 

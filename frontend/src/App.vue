@@ -51,6 +51,14 @@
           <template #icon><AuditOutlined /></template>
           Evidence
         </a-menu-item>
+        <a-menu-item key="crawl-plans">
+          <template #icon><CloudDownloadOutlined /></template>
+          Crawl Plans
+        </a-menu-item>
+        <a-menu-item key="crawl-runs">
+          <template #icon><ThunderboltOutlined /></template>
+          Run History
+        </a-menu-item>
       </a-menu>
 
       <div v-if="isMobile || !collapsed" class="sider-footer">
@@ -92,6 +100,7 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   AuditOutlined,
   BankOutlined,
+  CloudDownloadOutlined,
   DashboardOutlined,
   FileTextOutlined,
   InboxOutlined,
@@ -99,6 +108,7 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   SolutionOutlined,
+  ThunderboltOutlined,
   UserOutlined,
 } from '@ant-design/icons-vue'
 import { status, user, checkSession, logout as sessionLogout } from './stores/session.js'
@@ -168,6 +178,9 @@ const pageTitle = computed(() => {
     profile: 'Profile',
     resumes: 'Resumes',
     evidence: 'Evidence',
+    'crawl-plans': 'Crawl Plans',
+    'crawl-runs': 'Run History',
+    'crawl-run-detail': 'Run Detail',
   }
   return titles[String(route.name)] || 'CareerOps'
 })

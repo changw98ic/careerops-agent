@@ -147,4 +147,30 @@ export const api = {
     request(`/api/v1/evidence/${id}/confirm`, { method: 'POST', body: body || {} }),
   rejectEvidence: (id, body) =>
     request(`/api/v1/evidence/${id}/reject`, { method: 'POST', body: body || {} }),
+
+  // -- Crawl sources (Section 4) --
+  listCrawlSources: (params) =>
+    request('/api/v1/crawl-sources?' + new URLSearchParams(params || {})),
+  getCrawlSource: (id) => request(`/api/v1/crawl-sources/${id}`),
+  registerCrawlSource: (data) => request('/api/v1/crawl-sources', { method: 'POST', body: data }),
+  updateCrawlSource: (id, data) => request(`/api/v1/crawl-sources/${id}`, { method: 'PATCH', body: data }),
+  removeCrawlSource: (id) => request(`/api/v1/crawl-sources/${id}`, { method: 'DELETE' }),
+  pauseCrawlSource: (id) => request(`/api/v1/crawl-sources/${id}/pause`, { method: 'POST' }),
+  resumeCrawlSource: (id) => request(`/api/v1/crawl-sources/${id}/resume`, { method: 'POST' }),
+
+  // -- Crawl plans (Section 4) --
+  getCrawlPlanHead: () => request('/api/v1/crawl-plans'),
+  listCrawlPlanVersions: (params) =>
+    request('/api/v1/crawl-plans/versions?' + new URLSearchParams(params || {})),
+  getCrawlPlanVersion: (id) => request(`/api/v1/crawl-plans/versions/${id}`),
+  createCrawlPlanVersion: (data) => request('/api/v1/crawl-plans/versions', { method: 'POST', body: data }),
+  activateCrawlPlanVersion: (id) => request(`/api/v1/crawl-plans/versions/${id}/activate`, { method: 'POST' }),
+  pauseCrawlPlan: () => request('/api/v1/crawl-plans/pause', { method: 'POST' }),
+  resumeCrawlPlan: () => request('/api/v1/crawl-plans/resume', { method: 'POST' }),
+  runCrawlPlanNow: () => request('/api/v1/crawl-plans/run-now', { method: 'POST' }),
+
+  // -- Crawl runs (Section 4) --
+  listCrawlRuns: (params) =>
+    request('/api/v1/crawl-runs?' + new URLSearchParams(params || {})),
+  getCrawlRun: (id) => request(`/api/v1/crawl-runs/${id}`),
 }

@@ -1219,10 +1219,14 @@ class InMemoryCrawlSourceRepository:
             trust_status=trust_status if trust_status is not None else existing.trust_status,
             terms_status=terms_status if terms_status is not None else existing.terms_status,
             robots_status=robots_status if robots_status is not None else existing.robots_status,
-            adapter_version=adapter_version if adapter_version is not None else existing.adapter_version,
+            adapter_version=adapter_version
+            if adapter_version is not None
+            else existing.adapter_version,
             last_run_at=last_run_at if last_run_at is not None else existing.last_run_at,
             last_run_metadata=(
-                dict(last_run_metadata) if last_run_metadata is not None else existing.last_run_metadata
+                dict(last_run_metadata)
+                if last_run_metadata is not None
+                else existing.last_run_metadata
             ),
             updated_at=now or datetime.now(UTC),
         )
@@ -1351,9 +1355,7 @@ class InMemoryCrawlRunRepository:
             raise NotFoundError("crawl run not found for owner")
         return run
 
-    def get_by_identity(
-        self, owner_id: UUID, run_identity: str
-    ) -> CrawlRun | None:
+    def get_by_identity(self, owner_id: UUID, run_identity: str) -> CrawlRun | None:
         run_id = self._by_identity.get(run_identity)
         if run_id is None:
             return None
@@ -1363,11 +1365,7 @@ class InMemoryCrawlRunRepository:
         return run
 
     def list_for_owner(self, owner_id: UUID, *, limit: int = 50) -> list[CrawlRun]:
-        items = [
-            r
-            for r in self._runs.values()
-            if self._owner_matches(r.plan_version_id, owner_id)
-        ]
+        items = [r for r in self._runs.values() if self._owner_matches(r.plan_version_id, owner_id)]
         items.sort(
             key=lambda r: (r.created_at or datetime.min.replace(tzinfo=UTC), r.id),
             reverse=True,
@@ -1406,7 +1404,9 @@ class InMemoryCrawlRunRepository:
             existing,
             state=state,
             counters=counters if counters is not None else existing.counters,
-            error_category=error_category if error_category is not None else existing.error_category,
+            error_category=error_category
+            if error_category is not None
+            else existing.error_category,
             next_eligible_at=(
                 next_eligible_at if next_eligible_at is not None else existing.next_eligible_at
             ),

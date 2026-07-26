@@ -18,7 +18,8 @@ Three concrete implementations of the Protocols in
   activate path performs the deactivate-prior + activate-new pair inside a
   single transaction so the partial unique index
   ``ix_crawl_plan_versions_owner_active`` is never transiently violated
-  (mirrors :class:`careerops.infrastructure.database.postgres_profile_repo.PostgresProfileRepository`).
+  (mirrors :class:`careerops.infrastructure.database.postgres_profile_repo`
+  `.PostgresProfileRepository`).
 
 - :class:`PostgresCrawlRunRepository` — run records on ``crawl_runs``, scoped
   transitively via the plan version's owner (ownership is a JOIN through
@@ -179,7 +180,9 @@ def _per_run_limits_to_domain(raw: Any) -> CrawlPerRunLimits:
 
     def _opt_int(key: str) -> int | None:
         value = raw.get(key)
-        return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return int(value)
+        return None
 
     return CrawlPerRunLimits(
         max_postings_per_source=_opt_int("max_postings_per_source"),
@@ -317,9 +320,7 @@ class PostgresCrawlSourceRepository:
     def get_by_id(self, owner_id: UUID, source_id: UUID) -> CrawlSource:
         with self._engine.begin() as conn:
             row = (
-                conn.execute(
-                    sa.select(job_sources).where(job_sources.c.id == source_id)
-                )
+                conn.execute(sa.select(job_sources).where(job_sources.c.id == source_id))
                 .mappings()
                 .first()
             )
@@ -431,9 +432,7 @@ class PostgresCrawlSourceRepository:
 
     def remove(self, owner_id: UUID, source_id: UUID) -> None:
         with self._engine.begin() as conn:
-            result = conn.execute(
-                sa.delete(job_sources).where(job_sources.c.id == source_id)
-            )
+            result = conn.execute(sa.delete(job_sources).where(job_sources.c.id == source_id))
             if result.rowcount == 0:
                 raise NotFoundError("crawl source not found")
 
@@ -654,10 +653,14 @@ def _owner_scoped_run_select(owner_id: UUID) -> sa.Select[Any]:
     re-types each value); the explicit type argument keeps pyright from
     flagging the generic ``Select`` as partially unknown.
     """
-    return sa.select(crawl_runs).join(
-        crawl_plan_versions,
-        crawl_runs.c.plan_version_id == crawl_plan_versions.c.id,
-    ).where(crawl_plan_versions.c.owner_id == owner_id)
+    return (
+        sa.select(crawl_runs)
+        .join(
+            crawl_plan_versions,
+            crawl_runs.c.plan_version_id == crawl_plan_versions.c.id,
+        )
+        .where(crawl_plan_versions.c.owner_id == owner_id)
+    )
 
 
 class PostgresCrawlRunRepository:
@@ -716,12 +719,8 @@ class PostgresCrawlRunRepository:
             raise NotFoundError("crawl run not found for owner")
         return _row_to_run(row)
 
-    def get_by_identity(
-        self, owner_id: UUID, run_identity: str
-    ) -> CrawlRun | None:
-        stmt = _owner_scoped_run_select(owner_id).where(
-            crawl_runs.c.run_identity == run_identity
-        )
+    def get_by_identity(self, owner_id: UUID, run_identity: str) -> CrawlRun | None:
+        stmt = _owner_scoped_run_select(owner_id).where(crawl_runs.c.run_identity == run_identity)
         with self._engine.begin() as conn:
             row = conn.execute(stmt).mappings().first()
         return _row_to_run(row) if row else None

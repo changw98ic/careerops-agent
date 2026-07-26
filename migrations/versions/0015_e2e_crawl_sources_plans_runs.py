@@ -160,9 +160,7 @@ def _create_crawl_plan_versions() -> None:
             server_default=sa.func.now(),
             nullable=False,
         ),
-        sa.UniqueConstraint(
-            "owner_id", "version", name="uq_crawl_plan_versions_owner_version"
-        ),
+        sa.UniqueConstraint("owner_id", "version", name="uq_crawl_plan_versions_owner_version"),
         sa.CheckConstraint("version > 0", name="version_positive"),
         sa.CheckConstraint("interval_seconds >= 0", name="interval_seconds_nonnegative"),
         sa.CheckConstraint("jsonb_typeof(sources) = 'array'", name="sources_array"),
@@ -173,20 +171,12 @@ def _create_crawl_plan_versions() -> None:
         sa.CheckConstraint(
             "jsonb_typeof(exclude_keywords) = 'array'", name="exclude_keywords_array"
         ),
-        sa.CheckConstraint(
-            "jsonb_typeof(role_families) = 'array'", name="role_families_array"
-        ),
+        sa.CheckConstraint("jsonb_typeof(role_families) = 'array'", name="role_families_array"),
         sa.CheckConstraint("jsonb_typeof(locations) = 'array'", name="locations_array"),
-        sa.CheckConstraint(
-            "jsonb_typeof(remote_rules) = 'object'", name="remote_rules_object"
-        ),
+        sa.CheckConstraint("jsonb_typeof(remote_rules) = 'object'", name="remote_rules_object"),
         sa.CheckConstraint("jsonb_typeof(seniority) = 'array'", name="seniority_array"),
-        sa.CheckConstraint(
-            "jsonb_typeof(compensation) = 'object'", name="compensation_object"
-        ),
-        sa.CheckConstraint(
-            "jsonb_typeof(per_run_limits) = 'object'", name="per_run_limits_object"
-        ),
+        sa.CheckConstraint("jsonb_typeof(compensation) = 'object'", name="compensation_object"),
+        sa.CheckConstraint("jsonb_typeof(per_run_limits) = 'object'", name="per_run_limits_object"),
         schema="careerops",
     )
     # Exactly one active plan version per owner.
@@ -274,23 +264,17 @@ def upgrade() -> None:
     # the migration never narrows an existing row.
     op.add_column(
         "job_sources",
-        sa.Column(
-            "trust_status", sa.String(16), server_default="unknown", nullable=False
-        ),
+        sa.Column("trust_status", sa.String(16), server_default="unknown", nullable=False),
         schema="careerops",
     )
     op.add_column(
         "job_sources",
-        sa.Column(
-            "terms_status", sa.String(16), server_default="unknown", nullable=False
-        ),
+        sa.Column("terms_status", sa.String(16), server_default="unknown", nullable=False),
         schema="careerops",
     )
     op.add_column(
         "job_sources",
-        sa.Column(
-            "robots_status", sa.String(16), server_default="unknown", nullable=False
-        ),
+        sa.Column("robots_status", sa.String(16), server_default="unknown", nullable=False),
         schema="careerops",
     )
     op.add_column(
@@ -300,9 +284,7 @@ def upgrade() -> None:
     )
     op.add_column(
         "job_sources",
-        sa.Column(
-            "enabled", sa.Boolean(), server_default=sa.text("false"), nullable=False
-        ),
+        sa.Column("enabled", sa.Boolean(), server_default=sa.text("false"), nullable=False),
         schema="careerops",
     )
     op.add_column(
@@ -349,14 +331,12 @@ def upgrade() -> None:
     # role, not just superuser. job_sources gains UPDATE on the new control
     # columns + SELECT (it was already readable but UPDATE on the control
     # columns is new in this migration).
-    _apply(
-        "GRANT SELECT, INSERT, UPDATE ON careerops.crawl_plan_versions TO careerops_api"
-    )
+    _apply("GRANT SELECT, INSERT, UPDATE ON careerops.crawl_plan_versions TO careerops_api")
     _apply("GRANT SELECT, INSERT, UPDATE ON careerops.crawl_runs TO careerops_api")
     _apply(
         "GRANT UPDATE (trust_status, terms_status, robots_status, adapter_version, "
-        "enabled, last_run_at, last_run_metadata, state, verified_at, "
-        "last_discovery_at) ON careerops.job_sources TO careerops_api"
+        "enabled, last_run_at, last_run_metadata)"
+        " ON careerops.job_sources TO careerops_api"
     )
 
 
@@ -367,18 +347,14 @@ def downgrade() -> None:
     # expands identically to the upgrade path so the resolved DB name matches.
     _apply(
         "REVOKE UPDATE (trust_status, terms_status, robots_status, adapter_version, "
-        "enabled, last_run_at, last_run_metadata, state, verified_at, "
-        "last_discovery_at) ON careerops.job_sources FROM careerops_api"
+        "enabled, last_run_at, last_run_metadata)"
+        " ON careerops.job_sources FROM careerops_api"
     )
     _apply("REVOKE SELECT, INSERT, UPDATE ON careerops.crawl_runs FROM careerops_api")
-    _apply(
-        "REVOKE SELECT, INSERT, UPDATE ON careerops.crawl_plan_versions FROM careerops_api"
-    )
+    _apply("REVOKE SELECT, INSERT, UPDATE ON careerops.crawl_plan_versions FROM careerops_api")
 
     op.drop_index("ix_crawl_runs_created_at", table_name="crawl_runs", schema="careerops")
-    op.drop_index(
-        "ix_crawl_runs_plan_version_state", table_name="crawl_runs", schema="careerops"
-    )
+    op.drop_index("ix_crawl_runs_plan_version_state", table_name="crawl_runs", schema="careerops")
     op.drop_table("crawl_runs", schema="careerops")
 
     op.drop_index(
@@ -388,15 +364,9 @@ def downgrade() -> None:
     )
     op.drop_table("crawl_plan_versions", schema="careerops")
 
-    op.drop_constraint(
-        "robots_status_values", "job_sources", schema="careerops", type_="check"
-    )
-    op.drop_constraint(
-        "terms_status_values", "job_sources", schema="careerops", type_="check"
-    )
-    op.drop_constraint(
-        "trust_status_values", "job_sources", schema="careerops", type_="check"
-    )
+    op.drop_constraint("robots_status_values", "job_sources", schema="careerops", type_="check")
+    op.drop_constraint("terms_status_values", "job_sources", schema="careerops", type_="check")
+    op.drop_constraint("trust_status_values", "job_sources", schema="careerops", type_="check")
     op.drop_column("job_sources", "last_run_metadata", schema="careerops")
     op.drop_column("job_sources", "last_run_at", schema="careerops")
     op.drop_column("job_sources", "enabled", schema="careerops")

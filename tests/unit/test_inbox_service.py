@@ -12,26 +12,24 @@ Tests cover:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, UTC
+from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-import pytest
-
 from careerops.application.inbox_service import (
-    HardFilterEngine,
-    RequirementMatchEngine,
     RULES_VERSION,
-    LLMSemanticRanker,
+    HardFilterEngine,
     InboxProjectionService,
+    LLMSemanticRanker,
+    RequirementMatchEngine,
 )
-from careerops.domain.candidates import EvidenceItem, EvidenceKind
 from careerops.domain.applications import ConfirmationStatus
+from careerops.domain.candidates import EvidenceItem, EvidenceKind
 from careerops.domain.inbox import (
     BlockingReason,
     FilterDecision,
     FilterVerdict,
+    RequirementMatchResult,
     SemanticRankingStatus,
 )
 from careerops.domain.profiles import (
@@ -47,9 +45,7 @@ from careerops.domain.profiles import (
 from careerops.orchestration.capability_resolver import (
     CapabilityDecision,
     CapabilityKind,
-    SettingsCapabilityResolver,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -60,10 +56,10 @@ def _make_profile(
     *,
     target_roles: tuple[TargetRole, ...] = (),
     locations: tuple[LocationPreference, ...] = (),
-    remote_rules: RemoteRules = RemoteRules(),
-    compensation: CompensationPreference = CompensationPreference(),
-    authorization: Authorization = Authorization(),
-    hard_exclusions: HardExclusions = HardExclusions(),
+    remote_rules: RemoteRules | None = None,
+    compensation: CompensationPreference | None = None,
+    authorization: Authorization | None = None,
+    hard_exclusions: HardExclusions | None = None,
 ) -> ProfileVersion:
     return ProfileVersion(
         id=uuid4(),
@@ -72,10 +68,10 @@ def _make_profile(
         is_active=True,
         target_roles=target_roles,
         locations=locations,
-        remote_rules=remote_rules,
-        compensation=compensation,
-        authorization=authorization,
-        hard_exclusions=hard_exclusions,
+        remote_rules=remote_rules if remote_rules is not None else RemoteRules(),
+        compensation=compensation if compensation is not None else CompensationPreference(),
+        authorization=authorization if authorization is not None else Authorization(),
+        hard_exclusions=hard_exclusions if hard_exclusions is not None else HardExclusions(),
         rules_version=RULES_VERSION,
     )
 
@@ -146,9 +142,7 @@ class TestHardFilterEngine:
         """Job in an excluded location is excluded."""
         engine = HardFilterEngine()
         profile = _make_profile(
-            locations=(
-                LocationPreference(name="New York", kind=LocationKind.EXCLUDED),
-            ),
+            locations=(LocationPreference(name="New York", kind=LocationKind.EXCLUDED),),
         )
         decision = engine.evaluate(
             canonical_job_id=uuid4(),
@@ -168,9 +162,7 @@ class TestHardFilterEngine:
         """Job not in any required location is excluded."""
         engine = HardFilterEngine()
         profile = _make_profile(
-            locations=(
-                LocationPreference(name="Chengdu", kind=LocationKind.REQUIRED),
-            ),
+            locations=(LocationPreference(name="Chengdu", kind=LocationKind.REQUIRED),),
         )
         decision = engine.evaluate(
             canonical_job_id=uuid4(),

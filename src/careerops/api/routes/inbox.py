@@ -17,9 +17,14 @@ Iron rules honored:
 - Reversible (Iron Rule 4): recording user decisions does NOT delete source history.
 """
 
+# Repos and services fetched via require_repository / _get_inbox_repo are typed
+# as ``object``; attribute access is safe but opaque to pyright.
+# pyright: reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportAttributeAccessIssue=false
+
 from __future__ import annotations
 
-from datetime import datetime, UTC
+from datetime import UTC, datetime
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -80,14 +85,6 @@ class SnoozeResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _get_inbox_service(request: Request) -> object:
-    """Pull the InboxProjectionService from app.state or raise 503."""
-    svc = getattr(request.app.state, "inbox_service", None)
-    if svc is None:
-        raise DependencyNotReadyError("inbox service not available")
-    return svc
-
-
 def _get_inbox_repo(request: Request) -> object:
     """Pull the PostgresInboxRepository from app.state or raise 503."""
     repo = getattr(request.app.state, "inbox_repository", None)
@@ -104,6 +101,7 @@ def _get_inbox_repo(request: Request) -> object:
 @router.get("")
 def list_inbox(
     request: Request,
+    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
     tab: str = Query("recommended", pattern="^(recommended|excluded|all)$"),
     cursor: str | None = None,
     limit: int = Query(50, ge=1, le=200),
@@ -118,9 +116,8 @@ def list_inbox(
     Active snooze records (``snoozed_until > now``) are excluded from all
     tabs so the user's deferred items stay out of the way.
     """
-    candidate_id = require_candidate_id(request)
     repo = _get_inbox_repo(request)
-    return repo.get_inbox_items(  # pyright: ignore[reportAttributeAccessIssue]
+    return repo.get_inbox_items(
         candidate_id,
         tab=tab,
         cursor=cursor,
@@ -130,40 +127,46 @@ def list_inbox(
 
 
 @router.get("/{job_id}")
-def get_job_detail(job_id: str, request: Request) -> dict[str, object]:
+def get_job_detail(
+    job_id: str,
+    request: Request,
+    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+) -> dict[str, object]:
     """Get job detail with evidence links, filter decision, requirement
     matches, application state, and snooze state."""
-    candidate_id = require_candidate_id(request)
     repo = _get_inbox_repo(request)
 
-    detail = repo.get_job_detail_with_evidence(  # pyright: ignore[reportAttributeAccessIssue]
-        candidate_id, UUID(job_id)
-    )
+    detail = repo.get_job_detail_with_evidence(candidate_id, UUID(job_id))
     if detail is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return detail
 
 
 @router.get("/{job_id}/excluded-reasons")
-def get_excluded_reasons(job_id: str, request: Request) -> dict[str, object]:
+def get_excluded_reasons(
+    job_id: str,
+    request: Request,
+    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+) -> dict[str, object]:
     """Return blocking reasons with evidence refs for an excluded job.
 
     Returns 404 when the job has no filter decision or is not excluded for
     the candidate's active profile.
     """
-    candidate_id = require_candidate_id(request)
     repo = _get_inbox_repo(request)
 
-    reasons = repo.get_excluded_reasons(  # pyright: ignore[reportAttributeAccessIssue]
-        candidate_id, UUID(job_id)
-    )
+    reasons = repo.get_excluded_reasons(candidate_id, UUID(job_id))
     if reasons is None:
         raise HTTPException(status_code=404, detail="No excluded decision found for this job")
     return reasons
 
 
 @router.post("/{job_id}/favorite")
-def favorite_job(job_id: str, request: Request) -> FavoriteIgnoreResponse:
+def favorite_job(
+    job_id: str,
+    request: Request,
+    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+) -> FavoriteIgnoreResponse:
     """Favorite a job (idempotent).
 
     Creates or reuses an application record in FAVORITED state.  If the
@@ -171,20 +174,17 @@ def favorite_job(job_id: str, request: Request) -> FavoriteIgnoreResponse:
     without modification.  Recording this user decision never deletes source
     history (canonical job + postings are preserved).
     """
-    candidate_id = require_candidate_id(request)
     app_service = require_repository(request, "application_service")
     now = datetime.now(tz=UTC)
     canonical_job_id = UUID(job_id)
 
     # Try to find existing application first (idempotent)
-    existing = app_service.find_by_candidate_and_job(  # pyright: ignore[reportAttributeAccessIssue]
-        candidate_id, canonical_job_id
-    )
+    existing = app_service.find_by_candidate_and_job(candidate_id, canonical_job_id)
     if existing is not None:
         # Already exists -- if not favorited, transition
         if existing.state != ApplicationState.FAVORITED:
             try:
-                updated = app_service.transition_state(  # pyright: ignore[reportAttributeAccessIssue]
+                updated = app_service.transition_state(
                     StateTransitionRequest(
                         application_id=existing.id,
                         to_state=ApplicationState.FAVORITED,
@@ -199,7 +199,7 @@ def favorite_job(job_id: str, request: Request) -> FavoriteIgnoreResponse:
                     canonical_job_id=str(updated.canonical_job_id),
                 )
             except Exception as e:
-                raise HTTPException(status_code=400, detail=str(e))
+                raise HTTPException(status_code=400, detail=str(e)) from e
         # Already favorited -- idempotent return
         return FavoriteIgnoreResponse(
             application_id=str(existing.id),
@@ -209,7 +209,7 @@ def favorite_job(job_id: str, request: Request) -> FavoriteIgnoreResponse:
 
     # Create new application
     try:
-        application = app_service.create_application(  # pyright: ignore[reportAttributeAccessIssue]
+        application = app_service.create_application(
             ApplicationCreateRequest(
                 candidate_id=candidate_id,
                 canonical_job_id=canonical_job_id,
@@ -217,9 +217,9 @@ def favorite_job(job_id: str, request: Request) -> FavoriteIgnoreResponse:
             now,
         )
     except ApplicationServiceError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
     return FavoriteIgnoreResponse(
         application_id=str(application.id),
@@ -229,26 +229,27 @@ def favorite_job(job_id: str, request: Request) -> FavoriteIgnoreResponse:
 
 
 @router.post("/{job_id}/ignore")
-def ignore_job(job_id: str, request: Request) -> FavoriteIgnoreResponse:
+def ignore_job(
+    job_id: str,
+    request: Request,
+    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+) -> FavoriteIgnoreResponse:
     """Ignore a job (idempotent).
 
     Records the decision and removes the job from the active recommendation
     queue.  The canonical job + postings are never deleted -- source history
     is preserved.
     """
-    candidate_id = require_candidate_id(request)
     app_service = require_repository(request, "application_service")
     now = datetime.now(tz=UTC)
     canonical_job_id = UUID(job_id)
 
     # Try to find existing application first (idempotent)
-    existing = app_service.find_by_candidate_and_job(  # pyright: ignore[reportAttributeAccessIssue]
-        candidate_id, canonical_job_id
-    )
+    existing = app_service.find_by_candidate_and_job(candidate_id, canonical_job_id)
     if existing is not None:
         if existing.state != ApplicationState.IGNORED:
             try:
-                updated = app_service.transition_state(  # pyright: ignore[reportAttributeAccessIssue]
+                updated = app_service.transition_state(
                     StateTransitionRequest(
                         application_id=existing.id,
                         to_state=ApplicationState.IGNORED,
@@ -263,7 +264,7 @@ def ignore_job(job_id: str, request: Request) -> FavoriteIgnoreResponse:
                     canonical_job_id=str(updated.canonical_job_id),
                 )
             except Exception as e:
-                raise HTTPException(status_code=400, detail=str(e))
+                raise HTTPException(status_code=400, detail=str(e)) from e
         # Already ignored -- idempotent return
         return FavoriteIgnoreResponse(
             application_id=str(existing.id),
@@ -273,14 +274,14 @@ def ignore_job(job_id: str, request: Request) -> FavoriteIgnoreResponse:
 
     # Create new application then transition to IGNORED
     try:
-        application = app_service.create_application(  # pyright: ignore[reportAttributeAccessIssue]
+        application = app_service.create_application(
             ApplicationCreateRequest(
                 candidate_id=candidate_id,
                 canonical_job_id=canonical_job_id,
             ),
             now,
         )
-        application = app_service.transition_state(  # pyright: ignore[reportAttributeAccessIssue]
+        application = app_service.transition_state(
             StateTransitionRequest(
                 application_id=application.id,
                 to_state=ApplicationState.IGNORED,
@@ -290,9 +291,9 @@ def ignore_job(job_id: str, request: Request) -> FavoriteIgnoreResponse:
             now,
         )
     except ApplicationServiceError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
     return FavoriteIgnoreResponse(
         application_id=str(application.id),
@@ -306,6 +307,7 @@ def snooze_job(
     job_id: str,
     body: SnoozeRequest,
     request: Request,
+    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
 ) -> SnoozeResponse:
     """Snooze a job until a future time (idempotent).
 
@@ -315,7 +317,6 @@ def snooze_job(
     same ``(candidate_id, canonical_job_id)`` updates the snooze time
     (idempotent).  Recording a snooze never deletes source history.
     """
-    candidate_id = require_candidate_id(request)
     repo = _get_inbox_repo(request)
     now = datetime.now(tz=UTC)
 
@@ -330,13 +331,11 @@ def snooze_job(
 
     # Verify the job exists
     job_repo = require_repository(request, "job_read_repository")
-    job_detail = job_repo.get_job_detail(job_id)  # pyright: ignore[reportAttributeAccessIssue]
+    job_detail = job_repo.get_job_detail(job_id)
     if job_detail is None:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    repo.upsert_snooze(  # pyright: ignore[reportAttributeAccessIssue]
-        candidate_id, canonical_job_id, snoozed_until
-    )
+    repo.upsert_snooze(candidate_id, canonical_job_id, snoozed_until)
 
     return SnoozeResponse(
         canonical_job_id=str(canonical_job_id),

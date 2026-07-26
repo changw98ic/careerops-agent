@@ -17,7 +17,6 @@ Uses in-memory repos + fake model client (no real network, no database).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
@@ -32,10 +31,10 @@ from careerops.application.applications import (
     StateTransitionRequest,
 )
 from careerops.application.inbox_service import (
+    RULES_VERSION,
     HardFilterEngine,
     InboxProjectionService,
     RequirementMatchEngine,
-    RULES_VERSION,
 )
 from careerops.domain.applications import (
     ApplicationEvent,
@@ -49,7 +48,6 @@ from careerops.domain.inbox import (
     FilterDecision,
     FilterVerdict,
     RequirementMatchResult,
-    SemanticRankingStatus,
 )
 from careerops.domain.profiles import (
     Authorization,
@@ -66,7 +64,6 @@ from careerops.orchestration.capability_resolver import (
     CapabilityKind,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -77,10 +74,10 @@ def _make_profile(
     profile_id: UUID | None = None,
     target_roles: tuple[TargetRole, ...] = (),
     locations: tuple[LocationPreference, ...] = (),
-    remote_rules: RemoteRules = RemoteRules(),
-    compensation: CompensationPreference = CompensationPreference(),
-    authorization: Authorization = Authorization(),
-    hard_exclusions: HardExclusions = HardExclusions(),
+    remote_rules: RemoteRules | None = None,
+    compensation: CompensationPreference | None = None,
+    authorization: Authorization | None = None,
+    hard_exclusions: HardExclusions | None = None,
 ) -> ProfileVersion:
     return ProfileVersion(
         id=profile_id or uuid4(),
@@ -89,10 +86,10 @@ def _make_profile(
         is_active=True,
         target_roles=target_roles,
         locations=locations,
-        remote_rules=remote_rules,
-        compensation=compensation,
-        authorization=authorization,
-        hard_exclusions=hard_exclusions,
+        remote_rules=remote_rules if remote_rules is not None else RemoteRules(),
+        compensation=compensation if compensation is not None else CompensationPreference(),
+        authorization=authorization if authorization is not None else Authorization(),
+        hard_exclusions=hard_exclusions if hard_exclusions is not None else HardExclusions(),
         rules_version=RULES_VERSION,
     )
 
@@ -230,9 +227,7 @@ class _FakeFollowUpRepo:
     def find_by_id(self, reminder_id: UUID) -> None:
         return None
 
-    def find_active_by_application_and_rule(
-        self, application_id: UUID, rule_version: str
-    ) -> None:
+    def find_active_by_application_and_rule(self, application_id: UUID, rule_version: str) -> None:
         return None
 
     def save(self, reminder: object) -> None:
@@ -257,9 +252,7 @@ class TestHardGatePrecedence:
         profile_id = uuid4()
         profile = _make_profile(
             profile_id=profile_id,
-            locations=(
-                LocationPreference(name="New York", kind=LocationKind.EXCLUDED),
-            ),
+            locations=(LocationPreference(name="New York", kind=LocationKind.EXCLUDED),),
         )
         inbox_repo = _FakeInboxRepo()
         # Evidence that would match Python if requirement matching ran

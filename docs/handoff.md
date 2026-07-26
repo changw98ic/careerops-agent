@@ -13,6 +13,12 @@ CareerOps 是一个安全优先的单用户求职运营助理，核心能力：
 3. **邮件沟通** — 投递草稿 + 面试邀请识别（stub）
 4. **LangGraph 编排** — 9 节点状态图 + human-in-the-loop 审核
 
+> **发送术语说明（规划中，尚未实现）。** 三个概念必须区分清楚，不要混为一谈：
+> (a) **用户在 CareerOps 内确认** —— 这是授权事件，是 system-managed 发送路径上唯一需要人做的动作；
+> (b) **系统通过 Gmail provider 代用户发送** —— 由 Side-effect Kernel 在 approval 持久化后执行，用户**不需要**打开 Gmail 手动发送；
+> (c) **无人值守海投 / auto-send 仍然被禁止** —— `CAREEROPS_AUTO_SEND_ENABLED` 保持默认关闭。
+> 端到端申请闭环目前仍处于 Phase 0（合同冻结），下方 M0/M1 状态描述的是已 shipped 的现状。
+
 ## 二、架构总览
 
 ```
@@ -71,7 +77,7 @@ crawl → extract_contacts → resume → filter → dedup → match → draft �
 | `match_node` | `LLMJobMatcher`（默认 **DisabledModelAdapter**；配置 `model_provider` + `model_base_url/api_key/name` 后可用真 LLM） | 真实，用户配置 |
 | `draft_node` | `email_drafting.generate_body` | 真实 |
 | `review_gate` | `kernel_adapter.review_gate`（interrupt + atomic approval） | side_effect_kernel |
-| `send_node` | `kernel.execute`（**FakeProvider**，v1 不真发） | side_effect_kernel |
+| `send_node` | `kernel.execute`（**FakeProvider**，v1 不真发；启用真实 Gmail provider 后由系统在用户于 CareerOps 内确认后代发，不是让用户去 Gmail 手动发送） | side_effect_kernel |
 
 **HITL 机制**：`review_gate` 用 `interrupt()` 暂停图，人工通过 `POST /api/v1/review/{approval_id}` 下发 `Command(resume=...)` 恢复。approval 创建幂等（`idempotency_key` + `get_or_create_pending_approval`）。
 

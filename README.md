@@ -9,6 +9,15 @@ CareerOps is a safety-first, single-user career operations assistant. The stack 
 All external writes, model providers, Google integrations, and auto-send features are disabled
 by default. The application rejects unknown policy actions.
 
+> **Sending terminology (planned, not yet implemented).** CareerOps distinguishes three things:
+> (a) the **user confirms inside CareerOps** -- this is the authorization event and the only
+> human action required for the system-managed path; (b) the **system sends via the Gmail
+> provider on the user's behalf** through the Side-effect Kernel once an approval is durable --
+> the user does **not** open Gmail and send manually for this path; (c) **unattended mass apply
+> and auto-send remain prohibited** (`CAREEROPS_AUTO_SEND_ENABLED` stays default-off). The
+> end-to-end application loop is still Phase 0 (contract freeze); the descriptions below cover
+> the M0 stack as shipped today.
+
 ---
 
 ## Prerequisites
@@ -443,6 +452,15 @@ They will not activate even if configured:
 | Auto-send | `CAREEROPS_AUTO_SEND_ENABLED` | `false` -- startup rejection |
 | Public webhooks | (no config) | Not implemented |
 | Public network binding | `CAREEROPS_BIND_HOST` | Loopback (`127.0.0.1` in standalone, `0.0.0.0` inside Compose network only) |
+
+Two rows deserve explicit terminology to avoid confusion with manual Gmail use:
+
+- **Gmail integration / Gmail send** -- when enabled by a future release, the user **confirms
+  inside CareerOps**; the system then sends through the Gmail provider on the user's behalf.
+  The user is never required to open Gmail and send manually for this system-managed path.
+- **Auto-send** -- unattended sending without per-message user confirmation. This is a
+  distinct, separately-gated capability and remains prohibited by default
+  (`CAREEROPS_AUTO_SEND_ENABLED=false`); mass apply / batch automation is out of scope.
 
 Enabling any of these requires completing the corresponding security milestone and updating
 the ADR index. See [docs/adr/README.md](docs/adr/README.md) and

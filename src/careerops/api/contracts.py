@@ -49,6 +49,15 @@ class ErrorCode(StrEnum):
     FORBIDDEN = "FORBIDDEN"
     METHOD_NOT_ALLOWED = "METHOD_NOT_ALLOWED"
     INTERNAL_ERROR = "INTERNAL_ERROR"
+    # Business-lifecycle error codes (end-to-end-career-application-loop, task 1.5).
+    # Each code maps to a fixed HTTP status via the matching CareerOpsHTTPException
+    # subclass in careerops/api/errors.py.
+    INVALID_STATE = "INVALID_STATE"
+    STALE_PAYLOAD = "STALE_PAYLOAD"
+    UNAVAILABLE_DEPENDENCY = "UNAVAILABLE_DEPENDENCY"
+    DENIED_POLICY = "DENIED_POLICY"
+    UNRESOLVED_EMAIL_LINK = "UNRESOLVED_EMAIL_LINK"
+    RECONCILIATION_REQUIRED = "RECONCILIATION_REQUIRED"
 
 
 class ErrorBody(StrictContract):

@@ -18,6 +18,13 @@ The external images are pinned by digest in `docker-compose.yml`, `Dockerfile`, 
 `redis:7.2.14-alpine3.21@sha256:dfa18828cbc07b3ae6a95ec7343f6c214fdee2d836197b4be8e9904420762cd8`,
 which keeps the Compose server on the Redis 7.2 BSD-licensed line.
 
+> **Scope note on email sending.** This runbook starts the M0 stack with all external writes,
+> Gmail integration, and auto-send disabled. The planned end-to-end application loop (still
+> Phase 0, not yet implemented here) uses a **system-managed send** path: the user **confirms
+> inside CareerOps** (the authorization event), and the system sends via the Gmail provider on
+> the user's behalf. The user is **not** expected to open Gmail and send manually for that
+> path. Unattended mass apply and auto-send remain prohibited regardless of configuration.
+
 ## Required environment
 
 Create a local ignored environment file or export each value. Do not commit a real secret. All

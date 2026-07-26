@@ -96,6 +96,25 @@ class EmailMessageState(StrEnum):
     ARCHIVED = "archived"
 
 
+class EmailEventProposalState(StrEnum):
+    """Lifecycle state of a mail-derived application event proposal.
+
+    Per recruiting-email-intelligence spec: a proposal is review-only model/
+    rules output and MUST NOT directly advance ``ApplicationState``. Only user
+    acceptance appends an application event through the legal transition table.
+    ``STALE`` covers a proposal that can no longer be safely applied because it
+    was superseded by a newer message in the thread, the application reached a
+    terminal state, or the thread link became unresolved; a stale proposal must
+    not be applied after the fact. Repeat decisions on the same proposal return
+    the recorded result without a second state transition.
+    """
+
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    STALE = "stale"
+
+
 @dataclass(frozen=True, slots=True)
 class EmailThread:
     """A Gmail thread linked to an email account."""

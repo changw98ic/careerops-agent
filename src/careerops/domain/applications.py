@@ -58,6 +58,23 @@ class FollowUpState(StrEnum):
     COMPLETED = "completed"
 
 
+class SubmissionChannel(StrEnum):
+    """How an application submission is delivered to the employer.
+
+    Per application-workspace spec the channel is derived from trusted job/source
+    evidence and user choice, never from model output. ``EMAIL`` requires a
+    verified recruiting contact (evidence-bound); ``EXTERNAL_FORM`` requires a
+    trusted official apply URL; ``MANUAL`` covers user-recorded submissions
+    outside the system-managed delivery chain. Model output cannot select or
+    invent a channel, and the workspace must show why a channel is eligible or
+    unavailable before preparation.
+    """
+
+    EMAIL = "email"
+    EXTERNAL_FORM = "external_form"
+    MANUAL = "manual"
+
+
 # Legal state transitions: from_state -> set of allowed to_states
 LEGAL_TRANSITIONS: dict[ApplicationState, frozenset[ApplicationState]] = {
     ApplicationState.FAVORITED: frozenset(
@@ -114,6 +131,13 @@ LEGAL_TRANSITIONS: dict[ApplicationState, frozenset[ApplicationState]] = {
         }
     ),
 }
+
+# Canonical contract name for the application state transition table.
+# ``LEGAL_TRANSITIONS`` above is the historical name retained for compatibility;
+# the two are the same mapping. Enforcement (validate_transition /
+# is_transition_legal / IllegalTransitionError) is already provided below and is
+# the contract a later gate consumes; illegal transitions MUST be rejected.
+ALLOWED_TRANSITIONS: dict[ApplicationState, frozenset[ApplicationState]] = LEGAL_TRANSITIONS
 
 # Terminal states where follow-ups should be cancelled
 FOLLOW_UP_CANCEL_STATES: frozenset[ApplicationState] = frozenset(

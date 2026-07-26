@@ -10,8 +10,7 @@ from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from careerops.api.contracts import ErrorCode, ErrorBody, ErrorResponse
-
+from careerops.api.contracts import ErrorBody, ErrorCode, ErrorResponse
 
 # ---------------------------------------------------------------------------
 # Domain exceptions — raise these in route handlers / dependencies
@@ -145,6 +144,103 @@ class DependencyNotReadyError(CareerOpsHTTPException):
     @classmethod
     def _status_code(cls) -> int:
         return HTTPStatus.SERVICE_UNAVAILABLE
+
+    def __init__(self, message: str = "", **kwargs: object) -> None:
+        super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Business-lifecycle exceptions (end-to-end-career-application-loop, task 1.5)
+#
+# These map the new ErrorCode values to fixed HTTP statuses. They are raised
+# by route handlers / domain services and converted to the standard
+# ErrorResponse envelope by ``handle_careerops_exception``. The generic
+# HTTPException fallback mapping below is intentionally left untouched: a
+# bare status code cannot distinguish these business codes, so callers must
+# raise the typed exception to get the precise code.
+# ---------------------------------------------------------------------------
+
+
+class InvalidStateError(CareerOpsHTTPException):
+    """Illegal application/package lifecycle transition or state mutation (HTTP 409)."""
+
+    error_code = ErrorCode.INVALID_STATE
+    message_default = "Operation not permitted in current state"
+
+    @classmethod
+    def _status_code(cls) -> int:
+        return HTTPStatus.CONFLICT
+
+    def __init__(self, message: str = "", **kwargs: object) -> None:
+        super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
+
+
+class StalePayloadError(CareerOpsHTTPException):
+    """Payload, package version, or confirmation binding changed since approval (HTTP 409)."""
+
+    error_code = ErrorCode.STALE_PAYLOAD
+    message_default = "Payload has changed since confirmation"
+
+    @classmethod
+    def _status_code(cls) -> int:
+        return HTTPStatus.CONFLICT
+
+    def __init__(self, message: str = "", **kwargs: object) -> None:
+        super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
+
+
+class UnavailableDependencyError(CareerOpsHTTPException):
+    """A required policy/provider/credential dependency is unavailable (HTTP 503, retryable)."""
+
+    error_code = ErrorCode.UNAVAILABLE_DEPENDENCY
+    retryable = True
+    message_default = "Required dependency is unavailable"
+
+    @classmethod
+    def _status_code(cls) -> int:
+        return HTTPStatus.SERVICE_UNAVAILABLE
+
+    def __init__(self, message: str = "", **kwargs: object) -> None:
+        super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
+
+
+class DeniedPolicyError(CareerOpsHTTPException):
+    """Action denied by policy evaluation; capability/recipient/evidence check failed (HTTP 403)."""
+
+    error_code = ErrorCode.DENIED_POLICY
+    message_default = "Action denied by policy"
+
+    @classmethod
+    def _status_code(cls) -> int:
+        return HTTPStatus.FORBIDDEN
+
+    def __init__(self, message: str = "", **kwargs: object) -> None:
+        super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
+
+
+class UnresolvedEmailLinkError(CareerOpsHTTPException):
+    """Email thread matches multiple applications and needs user resolution (HTTP 409)."""
+
+    error_code = ErrorCode.UNRESOLVED_EMAIL_LINK
+    message_default = "Email thread has unresolved application link"
+
+    @classmethod
+    def _status_code(cls) -> int:
+        return HTTPStatus.CONFLICT
+
+    def __init__(self, message: str = "", **kwargs: object) -> None:
+        super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
+
+
+class ReconciliationRequiredError(CareerOpsHTTPException):
+    """Provider outcome ambiguous; blind retry disabled pending reconciliation (HTTP 409)."""
+
+    error_code = ErrorCode.RECONCILIATION_REQUIRED
+    message_default = "Outcome requires reconciliation before retry"
+
+    @classmethod
+    def _status_code(cls) -> int:
+        return HTTPStatus.CONFLICT
 
     def __init__(self, message: str = "", **kwargs: object) -> None:
         super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]

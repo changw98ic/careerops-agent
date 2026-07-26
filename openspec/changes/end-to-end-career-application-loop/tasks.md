@@ -1,12 +1,12 @@
 ## 1. Contract freeze, scope, and release switches
 
-- [ ] 1.1 Add a superseding ADR that records the new application-centered product scope, including system-managed email delivery after CareerOps confirmation and the continued exclusion of unattended mass apply.
-- [ ] 1.2 Add a threat-model delta covering crawl-plan control, resume tailoring, system-managed Gmail send, inbound email classification, thread association, and reply drafts.
-- [ ] 1.3 Add canonical enums and transition tables for `SubmissionChannel`, crawl plan/run states, package states, mail event proposal states, review states, and reconciliation states.
-- [ ] 1.4 Add capability resolver entries for crawl plans, model tailoring, Gmail read, system-managed send, and auto-send with safe defaults and fail-closed unknown behavior.
-- [ ] 1.5 Define API error codes and response envelopes for invalid state, stale payload, unavailable dependency, denied policy, unresolved email link, and reconciliation-required outcomes.
-- [ ] 1.6 Add contract tests proving the default configuration keeps Google OAuth, external writes, and auto-send disabled while preview, manual tracking, and deterministic matching remain usable.
-- [ ] 1.7 Update README, handoff, and local runbook terminology so “CareerOps confirmation causes system-managed send” is not described as manual Gmail sending.
+- [x] 1.1 Add a superseding ADR that records the new application-centered product scope, including system-managed email delivery after CareerOps confirmation and the continued exclusion of unattended mass apply.
+- [x] 1.2 Add a threat-model delta covering crawl-plan control, resume tailoring, system-managed Gmail send, inbound email classification, thread association, and reply drafts.
+- [x] 1.3 Add canonical enums and transition tables for `SubmissionChannel`, crawl plan/run states, package states, mail event proposal states, review states, and reconciliation states.
+- [x] 1.4 Add capability resolver entries for crawl plans, model tailoring, Gmail read, system-managed send, and auto-send with safe defaults and fail-closed unknown behavior.
+- [x] 1.5 Define API error codes and response envelopes for invalid state, stale payload, unavailable dependency, denied policy, unresolved email link, and reconciliation-required outcomes.
+- [x] 1.6 Add contract tests proving the default configuration keeps Google OAuth, external writes, and auto-send disabled while preview, manual tracking, and deterministic matching remain usable.
+- [x] 1.7 Update README, handoff, and local runbook terminology so “CareerOps confirmation causes system-managed send” is not described as manual Gmail sending.
 
 ## 2. Database identity, candidate ownership, and migrations
 

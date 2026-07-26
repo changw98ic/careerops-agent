@@ -79,6 +79,15 @@ class Settings(BaseSettings):
     google_oauth_enabled: bool = False
     external_writes_enabled: bool = False
     auto_send_enabled: bool = False
+    # Phase-0 capability gates (design Decision 11). These are NOT the three
+    # prohibited external-effect flags above and are never rejected by
+    # ``reject_unreleased_capabilities``; they gate the read/discovery path and
+    # the review-only model path. ``SettingsCapabilityResolver.decide`` reads
+    # them to return safe ``CapabilityDecision`` values. Defaults: crawl-plan
+    # management released (still subject to source policy); model tailoring
+    # disabled — model output is review-only regardless of this flag.
+    crawl_plan_management_enabled: bool = True
+    model_tailoring_enabled: bool = False
 
     @model_validator(mode="after")
     def reject_unreleased_capabilities(self) -> Self:

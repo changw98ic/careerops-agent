@@ -9,11 +9,13 @@ integration testing.
 
 from __future__ import annotations
 
+import dataclasses
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import UUID
 
-from careerops.api.errors import NotFoundError
+from careerops.api.errors import ConflictError, NotFoundError
 from careerops.domain.applications import (
     Application,
     ApplicationCycle,
@@ -31,6 +33,15 @@ from careerops.domain.candidates import (
     RemoteEligibility,
 )
 from careerops.domain.contacts import RecruitingContact
+from careerops.domain.crawl import CrawlRunState
+from careerops.domain.crawl_plans import (
+    CrawlPlanVersion,
+    CrawlPolicyStatus,
+    CrawlRun,
+    CrawlRunCounters,
+    CrawlSource,
+    CrawlSourceState,
+)
 from careerops.domain.jobs import (
     AggregateState,
     CanonicalJob,
@@ -1142,3 +1153,265 @@ def _match_to_dict(m: MatchResult) -> dict[str, object]:
         "input_hash": m.input_hash,
         "output_hash": m.output_hash,
     }
+
+
+# ---------------------------------------------------------------------------
+# Crawl source / plan / run repositories (end-to-end-career-application-loop,
+# Section 4). Behaviorally identical to the Postgres repos in
+# ``infrastructure/database/postgres_crawl_repo.py``. Every method scopes by
+# the server-resolved ``owner_id`` (Iron Rule 2).
+# ---------------------------------------------------------------------------
+
+
+class InMemoryCrawlSourceRepository:
+    """In-memory crawl-source store mirroring
+    :class:`careerops.infrastructure.database.postgres_crawl_repo.PostgresCrawlSourceRepository`.
+
+    Sources are keyed by id; ``owner_id`` is tracked per source (the single-
+    user runtime means it is constant today, but the in-memory store keeps the
+    field so the ownership-scoping pattern is exercised the same way as the
+    Postgres path).
+    """
+
+    def __init__(self) -> None:
+        self._sources: dict[UUID, CrawlSource] = {}
+
+    def get_by_id(self, owner_id: UUID, source_id: UUID) -> CrawlSource:
+        source = self._sources.get(source_id)
+        if source is None:
+            raise NotFoundError("crawl source not found")
+        return _source_with_owner(source, owner_id)
+
+    def list_for(self, owner_id: UUID, *, limit: int = 50) -> list[CrawlSource]:
+        items = list(self._sources.values())
+        items.sort(
+            key=lambda s: (s.created_at or datetime.min.replace(tzinfo=UTC), s.id),
+            reverse=True,
+        )
+        return [_source_with_owner(s, owner_id) for s in items[:limit]]
+
+    def save(self, source: CrawlSource) -> CrawlSource:
+        self._sources[source.id] = source
+        return source
+
+    def update_state(
+        self,
+        owner_id: UUID,
+        source_id: UUID,
+        *,
+        state: CrawlSourceState | None = None,
+        enabled: bool | None = None,
+        trust_status: CrawlPolicyStatus | None = None,
+        terms_status: CrawlPolicyStatus | None = None,
+        robots_status: CrawlPolicyStatus | None = None,
+        adapter_version: str | None = None,
+        last_run_at: datetime | None = None,
+        last_run_metadata: Mapping[str, object] | None = None,
+        now: datetime | None = None,
+    ) -> CrawlSource:
+        existing = self._sources.get(source_id)
+        if existing is None:
+            raise NotFoundError("crawl source not found")
+        updated = dataclasses.replace(
+            existing,
+            state=state if state is not None else existing.state,
+            enabled=enabled if enabled is not None else existing.enabled,
+            trust_status=trust_status if trust_status is not None else existing.trust_status,
+            terms_status=terms_status if terms_status is not None else existing.terms_status,
+            robots_status=robots_status if robots_status is not None else existing.robots_status,
+            adapter_version=adapter_version if adapter_version is not None else existing.adapter_version,
+            last_run_at=last_run_at if last_run_at is not None else existing.last_run_at,
+            last_run_metadata=(
+                dict(last_run_metadata) if last_run_metadata is not None else existing.last_run_metadata
+            ),
+            updated_at=now or datetime.now(UTC),
+        )
+        self._sources[source_id] = updated
+        return _source_with_owner(updated, owner_id)
+
+    def remove(self, owner_id: UUID, source_id: UUID) -> None:
+        if source_id not in self._sources:
+            raise NotFoundError("crawl source not found")
+        del self._sources[source_id]
+
+
+def _source_with_owner(source: CrawlSource, owner_id: UUID) -> CrawlSource:
+    """Stamp the server-resolved owner onto the source (mirrors the Postgres
+    repo which has no owner column on ``job_sources``)."""
+    if source.owner_id == owner_id:
+        return source
+    return dataclasses.replace(source, owner_id=owner_id)
+
+
+class InMemoryCrawlPlanRepository:
+    """In-memory crawl-plan-version store mirroring
+    :class:`careerops.infrastructure.database.postgres_crawl_repo.PostgresCrawlPlanRepository`.
+
+    Exactly one active version per owner (invariants mirror the DB partial
+    unique index ``ix_crawl_plan_versions_owner_active``).
+    """
+
+    def __init__(self) -> None:
+        self._versions: dict[UUID, CrawlPlanVersion] = {}
+        self._active_by_owner: dict[UUID, UUID] = {}
+
+    def get_active_for(self, owner_id: UUID) -> CrawlPlanVersion | None:
+        active_id = self._active_by_owner.get(owner_id)
+        if active_id is None:
+            return None
+        return self._versions.get(active_id)
+
+    def get_by_id(self, owner_id: UUID, version_id: UUID) -> CrawlPlanVersion:
+        version = self._versions.get(version_id)
+        if version is None or version.owner_id != owner_id:
+            raise NotFoundError("crawl plan version not found for owner")
+        return version
+
+    def list_versions(self, owner_id: UUID, *, limit: int = 50) -> list[CrawlPlanVersion]:
+        items = [v for v in self._versions.values() if v.owner_id == owner_id]
+        items.sort(key=lambda v: v.version, reverse=True)
+        return items[:limit]
+
+    def plan_belongs_to_owner(self, plan_version_id: UUID, owner_id: UUID) -> bool:
+        """Transitive-ownership helper for the run repo (Iron Rule 2).
+
+        Public so :class:`InMemoryCrawlRunRepository` can resolve whether a
+        plan version belongs to an owner without reaching into this repo's
+        private ``_versions`` dict.
+        """
+        version = self._versions.get(plan_version_id)
+        return version is not None and version.owner_id == owner_id
+
+    def create_version(self, plan: CrawlPlanVersion) -> CrawlPlanVersion:
+        stored = dataclasses.replace(plan, is_active=False)
+        self._versions[plan.id] = stored
+        if plan.is_active:
+            return self._activate(owner_id=plan.owner_id, version_id=plan.id)
+        return stored
+
+    def activate(
+        self, owner_id: UUID, version_id: UUID, *, now: datetime | None = None
+    ) -> CrawlPlanVersion:
+        target = self._versions.get(version_id)
+        if target is None or target.owner_id != owner_id:
+            raise NotFoundError("crawl plan version not found for owner")
+        return self._activate(owner_id=owner_id, version_id=version_id)
+
+    def deactivate_all(self, owner_id: UUID, *, now: datetime | None = None) -> None:
+        prior_id = self._active_by_owner.pop(owner_id, None)
+        if prior_id is None:
+            return
+        prior = self._versions.get(prior_id)
+        if prior is not None:
+            self._versions[prior_id] = dataclasses.replace(prior, is_active=False)
+
+    def _activate(self, *, owner_id: UUID, version_id: UUID) -> CrawlPlanVersion:
+        prior_id = self._active_by_owner.get(owner_id)
+        if prior_id is not None and prior_id != version_id:
+            prior = self._versions.get(prior_id)
+            if prior is not None:
+                self._versions[prior_id] = dataclasses.replace(prior, is_active=False)
+        target = self._versions[version_id]
+        self._versions[version_id] = dataclasses.replace(target, is_active=True)
+        self._active_by_owner[owner_id] = version_id
+        return self._versions[version_id]
+
+
+class InMemoryCrawlRunRepository:
+    """In-memory crawl-run store mirroring
+    :class:`careerops.infrastructure.database.postgres_crawl_repo.PostgresCrawlRunRepository`.
+
+    Ownership is transitive via the plan version; a run whose
+    ``plan_version_id`` belongs to a different owner is never returned (Iron
+    Rule 2). ``run_identity`` uniqueness is enforced in-memory (Iron Rule 4).
+    """
+
+    def __init__(self, plans: InMemoryCrawlPlanRepository) -> None:
+        # Bound to the plan repo so ownership can be resolved transitively
+        # without a separate owner index.
+        self._plans = plans
+        self._runs: dict[UUID, CrawlRun] = {}
+        self._by_identity: dict[str, UUID] = {}
+
+    def _owner_matches(self, plan_version_id: UUID, owner_id: UUID) -> bool:
+        return self._plans.plan_belongs_to_owner(plan_version_id, owner_id)
+
+    def create(self, owner_id: UUID, run: CrawlRun) -> CrawlRun:
+        if not self._owner_matches(run.plan_version_id, owner_id):
+            raise NotFoundError("crawl plan version not found for owner")
+        if run.run_identity in self._by_identity:
+            raise ConflictError("crawl run identity already exists")
+        self._runs[run.id] = run
+        self._by_identity[run.run_identity] = run.id
+        return run
+
+    def get_by_id(self, owner_id: UUID, run_id: UUID) -> CrawlRun:
+        run = self._runs.get(run_id)
+        if run is None or not self._owner_matches(run.plan_version_id, owner_id):
+            raise NotFoundError("crawl run not found for owner")
+        return run
+
+    def get_by_identity(
+        self, owner_id: UUID, run_identity: str
+    ) -> CrawlRun | None:
+        run_id = self._by_identity.get(run_identity)
+        if run_id is None:
+            return None
+        run = self._runs.get(run_id)
+        if run is None or not self._owner_matches(run.plan_version_id, owner_id):
+            return None
+        return run
+
+    def list_for_owner(self, owner_id: UUID, *, limit: int = 50) -> list[CrawlRun]:
+        items = [
+            r
+            for r in self._runs.values()
+            if self._owner_matches(r.plan_version_id, owner_id)
+        ]
+        items.sort(
+            key=lambda r: (r.created_at or datetime.min.replace(tzinfo=UTC), r.id),
+            reverse=True,
+        )
+        return items[:limit]
+
+    def list_for_plan(
+        self, owner_id: UUID, plan_version_id: UUID, *, limit: int = 50
+    ) -> list[CrawlRun]:
+        if not self._owner_matches(plan_version_id, owner_id):
+            return []
+        items = [r for r in self._runs.values() if r.plan_version_id == plan_version_id]
+        items.sort(
+            key=lambda r: (r.created_at or datetime.min.replace(tzinfo=UTC), r.id),
+            reverse=True,
+        )
+        return items[:limit]
+
+    def update_terminal(
+        self,
+        owner_id: UUID,
+        run_id: UUID,
+        *,
+        state: CrawlRunState,
+        counters: CrawlRunCounters | None = None,
+        error_category: str | None = None,
+        next_eligible_at: datetime | None = None,
+        started_at: datetime | None = None,
+        ended_at: datetime | None = None,
+        now: datetime | None = None,
+    ) -> CrawlRun:
+        existing = self._runs.get(run_id)
+        if existing is None or not self._owner_matches(existing.plan_version_id, owner_id):
+            raise NotFoundError("crawl run not found for owner")
+        updated = dataclasses.replace(
+            existing,
+            state=state,
+            counters=counters if counters is not None else existing.counters,
+            error_category=error_category if error_category is not None else existing.error_category,
+            next_eligible_at=(
+                next_eligible_at if next_eligible_at is not None else existing.next_eligible_at
+            ),
+            started_at=started_at if started_at is not None else existing.started_at,
+            ended_at=ended_at if ended_at is not None else existing.ended_at,
+        )
+        self._runs[run_id] = updated
+        return updated

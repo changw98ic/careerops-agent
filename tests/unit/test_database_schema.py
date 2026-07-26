@@ -34,6 +34,8 @@ EXPECTED_TABLES = {
     "contacts",
     "content_blobs",
     "content_objects",
+    "crawl_plan_versions",
+    "crawl_runs",
     "email_accounts",
     "email_extractions",
     "email_messages",

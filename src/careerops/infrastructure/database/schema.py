@@ -69,6 +69,32 @@ job_sources = sa.Table(
     sa.Column("state", sa.String(24), server_default="pending_review", nullable=False),
     sa.Column("verified_at", sa.DateTime(timezone=True)),
     sa.Column("last_discovery_at", sa.DateTime(timezone=True)),
+    # 4.2/4.3 (end-to-end-career-application-loop Section 4): additive source
+    # control columns. Sources declare scope only; the crawl policy layer stays
+    # authoritative (Iron Rule 6). ``enabled`` is the user on/off toggle;
+    # ``state`` above is the operational lifecycle. ``last_run_metadata`` is a
+    # bounded safe summary (counts, next eligible time) — never raw sensitive
+    # content.
+    sa.Column(
+        "trust_status", sa.String(16), server_default="unknown", nullable=False
+    ),
+    sa.Column(
+        "terms_status", sa.String(16), server_default="unknown", nullable=False
+    ),
+    sa.Column(
+        "robots_status", sa.String(16), server_default="unknown", nullable=False
+    ),
+    sa.Column("adapter_version", sa.Text(), server_default="", nullable=False),
+    sa.Column(
+        "enabled", sa.Boolean(), server_default=sa.text("false"), nullable=False
+    ),
+    sa.Column("last_run_at", sa.DateTime(timezone=True)),
+    sa.Column(
+        "last_run_metadata",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
     sa.Column(
         "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     ),
@@ -84,6 +110,18 @@ job_sources = sa.Table(
     sa.CheckConstraint(
         "state IN ('pending_review', 'active', 'paused', 'blocked')",
         name="state_values",
+    ),
+    sa.CheckConstraint(
+        "trust_status IN ('unknown', 'allowed', 'blocked')",
+        name="trust_status_values",
+    ),
+    sa.CheckConstraint(
+        "terms_status IN ('unknown', 'allowed', 'blocked')",
+        name="terms_status_values",
+    ),
+    sa.CheckConstraint(
+        "robots_status IN ('unknown', 'allowed', 'blocked')",
+        name="robots_status_values",
     ),
 )
 
@@ -2303,4 +2341,223 @@ APPEND_ONLY_TABLES = (
     "job_posting_versions",
     "policy_decisions",
     "provider_receipts",
+)
+
+# ---------------------------------------------------------------------------
+# End-to-end career loop Section 4: crawl sources control columns (additive,
+# declared above on ``job_sources``) + versioned crawl plans + run records.
+# (crawl-plan-management spec, tasks 4.1-4.4.) Plan versions are immutable
+# copy-on-write (design Decision 2); runs bind to one plan-version snapshot
+# + source set + run identity (Iron Rule 4). The crawl policy layer stays
+# authoritative — these tables declare scope only (Iron Rule 6).
+# ---------------------------------------------------------------------------
+
+crawl_plan_versions = sa.Table(
+    "crawl_plan_versions",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    # ``owner_id`` is the server-resolved candidate id (Iron Rule 2). Named
+    # ``owner_id`` (not ``owner``) to avoid the PostgreSQL keyword and match
+    # the FK ``*_id`` convention used elsewhere; semantically identical to
+    # ``candidate_id`` on the sibling ``profile_versions`` table.
+    sa.Column(
+        "owner_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.candidates.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column("version", sa.Integer(), nullable=False),
+    sa.Column(
+        "is_active",
+        sa.Boolean(),
+        server_default=sa.text("false"),
+        nullable=False,
+    ),
+    sa.Column(
+        "sources",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "themes",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "include_keywords",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "exclude_keywords",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "role_families",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "locations",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "remote_rules",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "seniority",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "compensation",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column("content_scope", sa.Text(), server_default="", nullable=False),
+    # Schedule (Iron Rule 5: bounded intervals + IANA timezone validated by the
+    # service layer in task 4.6; the DB stores the declared values).
+    sa.Column("interval_seconds", sa.Integer(), nullable=False),
+    sa.Column("timezone", sa.Text(), server_default="UTC", nullable=False),
+    sa.Column(
+        "per_run_limits",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column("rules_version", sa.Text(), server_default="", nullable=False),
+    sa.Column(
+        "created_at",
+        sa.DateTime(timezone=True),
+        server_default=sa.func.now(),
+        nullable=False,
+    ),
+    sa.UniqueConstraint("owner_id", "version", name="uq_crawl_plan_versions_owner_version"),
+    # Shape guards mirroring ``profile_versions`` (Section 2) so the jsonb
+    # columns decode unambiguously into the frozen domain types in
+    # ``careerops.domain.crawl_plans``. Short names expand to
+    # ``ck_crawl_plan_versions_<short>`` via the naming convention.
+    sa.CheckConstraint("version > 0", name="version_positive"),
+    sa.CheckConstraint("interval_seconds >= 0", name="interval_seconds_nonnegative"),
+    sa.CheckConstraint("jsonb_typeof(sources) = 'array'", name="sources_array"),
+    sa.CheckConstraint("jsonb_typeof(themes) = 'array'", name="themes_array"),
+    sa.CheckConstraint(
+        "jsonb_typeof(include_keywords) = 'array'", name="include_keywords_array"
+    ),
+    sa.CheckConstraint(
+        "jsonb_typeof(exclude_keywords) = 'array'", name="exclude_keywords_array"
+    ),
+    sa.CheckConstraint(
+        "jsonb_typeof(role_families) = 'array'", name="role_families_array"
+    ),
+    sa.CheckConstraint("jsonb_typeof(locations) = 'array'", name="locations_array"),
+    sa.CheckConstraint("jsonb_typeof(remote_rules) = 'object'", name="remote_rules_object"),
+    sa.CheckConstraint("jsonb_typeof(seniority) = 'array'", name="seniority_array"),
+    sa.CheckConstraint(
+        "jsonb_typeof(compensation) = 'object'", name="compensation_object"
+    ),
+    sa.CheckConstraint(
+        "jsonb_typeof(per_run_limits) = 'object'", name="per_run_limits_object"
+    ),
+)
+
+# Exactly one active plan version per owner (partial unique index). The plan
+# repo performs the deactivate-prior + activate-new pair inside a single
+# transaction so this index is never transiently violated (mirrors
+# ``ix_profile_versions_candidate_active``).
+sa.Index(
+    "ix_crawl_plan_versions_owner_active",
+    crawl_plan_versions.c.owner_id,
+    unique=True,
+    postgresql_where=crawl_plan_versions.c.is_active == sa.true(),
+)
+
+crawl_runs = sa.Table(
+    "crawl_runs",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "plan_version_id",
+        sa.Uuid(),
+        sa.ForeignKey(
+            f"{DATABASE_SCHEMA}.crawl_plan_versions.id", ondelete="RESTRICT"
+        ),
+        nullable=False,
+    ),
+    # ``run_identity`` is the idempotency key (Iron Rule 4): a worker retry
+    # that reuses the same identity MUST NOT create duplicate postings or
+    # versions. The unique constraint below makes the DB the final authority.
+    sa.Column("run_identity", sa.Text(), nullable=False, unique=True),
+    sa.Column(
+        "source_set",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "state",
+        sa.String(24),
+        server_default="pending",
+        nullable=False,
+    ),
+    sa.Column("started_at", sa.DateTime(timezone=True)),
+    sa.Column("ended_at", sa.DateTime(timezone=True)),
+    sa.Column(
+        "limits",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "counters",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    # ``error_category`` is a SAFE, non-sensitive label (e.g. ``terms_blocked``,
+    # ``rate_limited``, ``parser_drift``); the service layer never persists raw
+    # error payloads or PII here (crawl-plan-management spec: "Operational
+    # failures SHALL be actionable without exposing credentials or raw
+    # sensitive content").
+    sa.Column("error_category", sa.Text(), server_default="", nullable=False),
+    sa.Column("next_eligible_at", sa.DateTime(timezone=True)),
+    sa.Column(
+        "created_at",
+        sa.DateTime(timezone=True),
+        server_default=sa.func.now(),
+        nullable=False,
+    ),
+    sa.CheckConstraint(
+        "state IN ('pending', 'running', 'succeeded', 'failed', 'cancelled', 'timeout')",
+        name="state_values",
+    ),
+    sa.CheckConstraint("jsonb_typeof(source_set) = 'array'", name="source_set_array"),
+    sa.CheckConstraint("jsonb_typeof(limits) = 'object'", name="limits_object"),
+    sa.CheckConstraint("jsonb_typeof(counters) = 'object'", name="counters_object"),
+)
+
+# Ownership of a run is transitive via its plan version; list-for-owner queries
+# join through ``plan_version_id``. Index the FK column + state so the "active
+# runs for owner" and "terminal history for plan" projections stay cheap.
+sa.Index(
+    "ix_crawl_runs_plan_version_state",
+    crawl_runs.c.plan_version_id,
+    crawl_runs.c.state,
+)
+sa.Index(
+    "ix_crawl_runs_created_at",
+    crawl_runs.c.created_at,
 )

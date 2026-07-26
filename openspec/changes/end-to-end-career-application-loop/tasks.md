@@ -36,10 +36,10 @@
 
 ## 4. Crawl sources and user-managed plans
 
-- [ ] 4.1 Define the `CrawlSource`, `CrawlPlanVersion`, and `CrawlRun` domain contracts and repository protocols.
-- [ ] 4.2 Implement source registration for official company Careers, Greenhouse, Lever, and Ashby sources using existing adapters and source identifiers.
-- [ ] 4.3 Store source trust, terms/robots status, adapter version, enabled/paused state, last-run metadata, and safe policy status.
-- [ ] 4.4 Implement crawl-plan version creation with source selection, themes, keyword rules, location/remote rules, seniority, compensation, content scope, interval, timezone, and per-run limits.
+- [x] 4.1 Define the `CrawlSource`, `CrawlPlanVersion`, and `CrawlRun` domain contracts and repository protocols.
+- [x] 4.2 Implement source registration for official company Careers, Greenhouse, Lever, and Ashby sources using existing adapters and source identifiers.
+- [x] 4.3 Store source trust, terms/robots status, adapter version, enabled/paused state, last-run metadata, and safe policy status.
+- [x] 4.4 Implement crawl-plan version creation with source selection, themes, keyword rules, location/remote rules, seniority, compensation, content scope, interval, timezone, and per-run limits.
 - [ ] 4.5 Implement plan pause/resume, source pause/resume, manual run requests, and idempotent command handling.
 - [ ] 4.6 Implement schedule validation and next-run calculation with bounded intervals, timezone validation, and no overlapping unbounded runs.
 - [ ] 4.7 Add API routes for source CRUD, plan CRUD/versioning, run-now, pause/resume, and run history.

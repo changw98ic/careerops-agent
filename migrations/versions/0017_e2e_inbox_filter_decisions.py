@@ -10,8 +10,8 @@ match results. No existing tables are modified; downgrade drops only the new
 tables.
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "0017"
@@ -106,9 +106,7 @@ def upgrade() -> None:
             server_default=sa.text("'[]'::jsonb"),
             nullable=False,
         ),
-        sa.Column(
-            "confidence", sa.Numeric(5, 4), server_default="0", nullable=False
-        ),
+        sa.Column("confidence", sa.Numeric(5, 4), server_default="0", nullable=False),
         sa.Column("reason", sa.Text(), server_default="", nullable=False),
         sa.Column("rules_version", sa.Text(), server_default="", nullable=False),
         sa.Column("model_version", sa.Text(), server_default="", nullable=False),
@@ -122,12 +120,8 @@ def upgrade() -> None:
             "match_level IN ('strong', 'partial', 'transferable', 'unsupported')",
             name="match_level_values",
         ),
-        sa.CheckConstraint(
-            "confidence >= 0 AND confidence <= 1", name="confidence_range"
-        ),
-        sa.CheckConstraint(
-            "jsonb_typeof(evidence_ids) = 'array'", name="evidence_ids_array"
-        ),
+        sa.CheckConstraint("confidence >= 0 AND confidence <= 1", name="confidence_range"),
+        sa.CheckConstraint("jsonb_typeof(evidence_ids) = 'array'", name="evidence_ids_array"),
         schema="careerops",
     )
     op.create_index(

@@ -218,6 +218,13 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
         "/api/v1/crawl-plans/run-now",
         "/api/v1/crawl-runs",
         "/api/v1/crawl-runs/{run_id}",
+        # Section-6 additive routers (inbox projection spec).
+        "/api/v1/inbox",
+        "/api/v1/inbox/{job_id}",
+        "/api/v1/inbox/{job_id}/excluded-reasons",
+        "/api/v1/inbox/{job_id}/favorite",
+        "/api/v1/inbox/{job_id}/ignore",
+        "/api/v1/inbox/{job_id}/snooze",
     }
 
 

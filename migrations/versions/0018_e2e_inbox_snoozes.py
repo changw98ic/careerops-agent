@@ -11,8 +11,8 @@ decision that does not touch the applications table.  No existing tables are
 modified; downgrade drops only the new table.
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0018"
 down_revision = "0017"

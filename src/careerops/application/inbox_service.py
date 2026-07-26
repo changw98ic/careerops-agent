@@ -21,26 +21,22 @@ Iron rules honored:
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 import re
-from dataclasses import dataclass, field
-from datetime import datetime, UTC
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Protocol
 from uuid import UUID
 
-from careerops.domain.candidates import EvidenceItem, MatchLevel
+from careerops.domain.candidates import EvidenceItem
 from careerops.domain.inbox import (
     BlockingReason,
     FilterDecision,
     FilterVerdict,
-    InboxItem,
-    InboxProvenance,
     RequirementMatchResult,
     SemanticRankingStatus,
 )
-from careerops.domain.jobs import AggregateState, PostingSourceState
+from careerops.domain.jobs import AggregateState
 from careerops.domain.profiles import (
     Authorization,
     CompensationPreference,
@@ -52,7 +48,6 @@ from careerops.domain.profiles import (
     TargetRole,
 )
 from careerops.orchestration.capability_resolver import (
-    CapabilityDecision,
     CapabilityKind,
     SettingsCapabilityResolver,
 )
@@ -198,7 +193,11 @@ def _remote_passes(
     If onsite_required and job is onsite, passes.
     If remote required but no remote signals, fails with unknown.
     """
-    if not remote_rules.remote_allowed and not remote_rules.hybrid_allowed and not remote_rules.onsite_required:
+    if (
+        not remote_rules.remote_allowed
+        and not remote_rules.hybrid_allowed
+        and not remote_rules.onsite_required
+    ):
         return True, ""  # no constraint
 
     text_norm = job_text.lower()
@@ -480,7 +479,7 @@ class RequirementMatchEngine:
             evidence_by_name.setdefault(key, []).append(e)
 
         results: list[RequirementMatchResult] = []
-        for req_name, is_hard, source_text in requirements:
+        for req_name, is_hard, _source_text in requirements:
             req_norm = _normalize_skill(req_name)
             matching = evidence_by_name.get(req_norm, [])
 
@@ -519,17 +518,15 @@ class RequirementMatchEngine:
 
         return tuple(results)
 
-    def _extract_requirements(
-        self, structured_data: dict[str, Any]
-    ) -> list[tuple[str, bool, str]]:
+    def _extract_requirements(self, structured_data: dict[str, Any]) -> list[tuple[str, bool, str]]:
         """Extract (name, is_hard, source_text) from job structured data."""
         requirements: list[tuple[str, bool, str]] = []
         seen: set[str] = set()
 
         skills = structured_data.get("skills", [])
         if isinstance(skills, list):
-            for skill in skills:
-                name = str(skill).strip()
+            for skill in skills:  # pyright: ignore[reportUnknownVariableType]
+                name = str(skill).strip()  # pyright: ignore[reportUnknownArgumentType]
                 if name and name.lower() not in seen:
                     seen.add(name.lower())
                     requirements.append((name, False, ""))
@@ -718,9 +715,7 @@ class InboxProjectionService:
         )
 
         # 2. Persist filter decision (6.3)
-        decision_id = self._inbox_repo.upsert_filter_decision(
-            candidate_id, decision, now=now
-        )
+        decision_id = self._inbox_repo.upsert_filter_decision(candidate_id, decision, now=now)
 
         # 3. For recommended jobs: evidence matching (6.5) + optional LLM (6.6)
         if decision.verdict is FilterVerdict.RECOMMENDED:

@@ -12,10 +12,15 @@ Iron rules honored:
   ``(canonical_job_id, candidate_id, profile_version_id)``.
 """
 
+# RowMapping values are typed as ``Any`` by SQLAlchemy; suppress the
+# unknown-family diagnostics at file scope rather than littering every
+# accessor with inline ignores.
+# pyright: reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownArgumentType=false
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import Any
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -26,17 +31,12 @@ from careerops.domain.inbox import (
     BlockingReason,
     FilterDecision,
     FilterVerdict,
-    InboxItem,
-    InboxProvenance,
     RequirementMatchResult,
-    SemanticRankingStatus,
 )
 from careerops.infrastructure.database.schema import (
     applications,
     canonical_jobs,
     companies,
-    crawl_plan_versions,
-    crawl_runs,
     filter_decisions,
     inbox_snoozes,
     job_posting_assignments,
@@ -48,12 +48,6 @@ from careerops.infrastructure.database.schema import (
 )
 
 __all__ = ["PostgresInboxRepository"]
-
-
-def _uuid(val: Any) -> UUID:
-    if isinstance(val, UUID):
-        return val
-    return UUID(str(val))
 
 
 class PostgresInboxRepository:
@@ -230,17 +224,14 @@ class PostgresInboxRepository:
     ) -> datetime | None:
         """Return the ``snoozed_until`` timestamp for a job, or ``None``."""
         with self._engine.begin() as conn:
-            row = (
-                conn.execute(
-                    sa.select(inbox_snoozes.c.snoozed_until).where(
-                        sa.and_(
-                            inbox_snoozes.c.candidate_id == candidate_id,
-                            inbox_snoozes.c.canonical_job_id == canonical_job_id,
-                        )
+            row = conn.execute(
+                sa.select(inbox_snoozes.c.snoozed_until).where(
+                    sa.and_(
+                        inbox_snoozes.c.candidate_id == candidate_id,
+                        inbox_snoozes.c.canonical_job_id == canonical_job_id,
                     )
                 )
-                .scalar()
-            )
+            ).scalar()
         return row  # type: ignore[return-value]
 
     # -- reads (inbox projection) -------------------------------------------
@@ -290,7 +281,9 @@ class PostgresInboxRepository:
 
             # Tab filter: "all" has no verdict restriction
             if tab in ("recommended", "excluded"):
-                verdict_filter = FilterVerdict.RECOMMENDED if tab == "recommended" else FilterVerdict.EXCLUDED
+                verdict_filter = (
+                    FilterVerdict.RECOMMENDED if tab == "recommended" else FilterVerdict.EXCLUDED
+                )
                 base_conditions.append(filter_decisions.c.verdict == verdict_filter.value)
 
             # Exclude snoozed items
@@ -357,9 +350,7 @@ class PostgresInboxRepository:
 
         has_more = len(rows) > limit
         rows = rows[:limit]
-        next_cursor = (
-            _encode_cursor(rows[-1]["created_at"], rows[-1]["id"]) if has_more else None
-        )
+        next_cursor = _encode_cursor(rows[-1]["created_at"], rows[-1]["id"]) if has_more else None
 
         # Batch-fetch postings, versions, provenance, and application state
         job_ids = [row["id"] for row in rows]
@@ -382,7 +373,9 @@ class PostgresInboxRepository:
             rmatches = req_matches.get(row[filter_decisions.c.id], [])  # pyright: ignore[reportPossiblyUnboundVariable]
 
             blocking = [
-                BlockingReason(r) for r in (row["blocking_reasons"] or []) if _is_valid_blocking_reason(r)
+                BlockingReason(r)
+                for r in (row["blocking_reasons"] or [])
+                if _is_valid_blocking_reason(r)
             ]
 
             item: dict[str, object] = {
@@ -472,7 +465,9 @@ class PostgresInboxRepository:
                     "structured_data": sd,
                     "apply_url": sd.get("apply_url", ""),
                     "crawl_run_id": str(vr["crawl_run_id"]) if vr["crawl_run_id"] else None,
-                    "plan_version_id": str(vr["plan_version_id"]) if vr["plan_version_id"] else None,
+                    "plan_version_id": str(vr["plan_version_id"])
+                    if vr["plan_version_id"]
+                    else None,
                     "captured_at": vr["captured_at"].isoformat() if vr["captured_at"] else None,
                 }
 
@@ -632,11 +627,7 @@ class PostgresInboxRepository:
         if row is None:
             return None
 
-        blocking = [
-            r
-            for r in (row["blocking_reasons"] or [])
-            if _is_valid_blocking_reason(r)
-        ]
+        blocking = [r for r in (row["blocking_reasons"] or []) if _is_valid_blocking_reason(r)]
         return {
             "verdict": row["verdict"],
             "blocking_reasons": blocking,
@@ -715,12 +706,16 @@ class PostgresInboxRepository:
                     )
                 ).scalar()
                 if det_id_row is not None:
-                    req_matches = self._fetch_requirement_matches(conn, [det_id_row]).get(det_id_row, [])
+                    req_matches = self._fetch_requirement_matches(conn, [det_id_row]).get(
+                        det_id_row, []
+                    )
 
         # Application state
         app_data: dict[str, object] = {}
         with self._engine.begin() as conn:
-            app_data = self._fetch_application_states(conn, candidate_id, [canonical_job_id]).get(canonical_job_id, {})
+            app_data = self._fetch_application_states(conn, candidate_id, [canonical_job_id]).get(
+                canonical_job_id, {}
+            )
 
         # Snooze state
         snoozed_until = self.get_snooze(candidate_id, canonical_job_id)

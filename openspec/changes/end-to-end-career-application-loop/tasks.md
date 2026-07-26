@@ -62,16 +62,16 @@
 
 ## 6. Job inbox, filtering, and matching
 
-- [ ] 6.1 Connect the job projection to the active profile version and crawl-plan provenance without changing canonical job identity semantics.
-- [ ] 6.2 Implement deterministic hard filters for role, location, remote, authorization, compensation, source status, and explicit exclusions.
-- [ ] 6.3 Persist filter decisions with profile version, rule version, blocking reasons, and evidence references.
-- [ ] 6.4 Keep deterministic dedup/merge/split decisions reversible and expose semantic matches only as reviewable proposals.
-- [ ] 6.5 Add requirement-level match results with job evidence, candidate evidence, confidence, rules/model versions, and review-only status.
-- [ ] 6.6 Ensure model-disabled/unavailable/invalid output falls back to deterministic filtering and marks semantic ranking unavailable.
-- [ ] 6.7 Add API support for inbox filters, cursor pagination, search, favorite, ignore, snooze, excluded-reason inspection, and job detail evidence.
-- [ ] 6.8 Make favorite and ignore actions idempotent and record user decisions without deleting source history.
-- [ ] 6.9 Add frontend inbox cards/table with recommended/excluded tabs, deterministic blocking reasons, evidence links, and next-action affordances.
-- [ ] 6.10 Add unit/contract tests for hard-gate precedence, unknown remote, profile-version provenance, prompt injection, reversible merge, and stale job handling.
+- [x] 6.1 Connect the job projection to the active profile version and crawl-plan provenance without changing canonical job identity semantics.
+- [x] 6.2 Implement deterministic hard filters for role, location, remote, authorization, compensation, source status, and explicit exclusions.
+- [x] 6.3 Persist filter decisions with profile version, rule version, blocking reasons, and evidence references.
+- [x] 6.4 Keep deterministic dedup/merge/split decisions reversible and expose semantic matches only as reviewable proposals.
+- [x] 6.5 Add requirement-level match results with job evidence, candidate evidence, confidence, rules/model versions, and review-only status.
+- [x] 6.6 Ensure model-disabled/unavailable/invalid output falls back to deterministic filtering and marks semantic ranking unavailable.
+- [x] 6.7 Add API support for inbox filters, cursor pagination, search, favorite, ignore, snooze, excluded-reason inspection, and job detail evidence.
+- [x] 6.8 Make favorite and ignore actions idempotent and record user decisions without deleting source history.
+- [x] 6.9 Add frontend inbox cards/table with recommended/excluded tabs, deterministic blocking reasons, evidence links, and next-action affordances.
+- [x] 6.10 Add unit/contract tests for hard-gate precedence, unknown remote, profile-version provenance, prompt injection, reversible merge, and stale job handling.
 
 ## 7. Application workspace and lifecycle
 

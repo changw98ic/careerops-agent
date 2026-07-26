@@ -18,6 +18,7 @@ from careerops.api.routes.crawl_runs import router as crawl_runs_router
 from careerops.api.routes.crawl_sources import router as crawl_sources_router
 from careerops.api.routes.evidence import router as evidence_router
 from careerops.api.routes.health import router as health_router
+from careerops.api.routes.inbox import router as inbox_router
 from careerops.api.routes.jobs import router as jobs_router
 from careerops.api.routes.matching import router as matching_router
 from careerops.api.routes.metrics import router as metrics_router
@@ -229,6 +230,19 @@ def create_app(
         # through RuntimeResources; reachable from API routes and Temporal
         # activities via app.state.crawl_execution_service.
         app.state.crawl_execution_service = probe.crawl_execution_service
+        # Section-6 inbox projection service + repository (tasks 6.1-6.6).
+        # Connects the job projection to the active profile + crawl-plan
+        # provenance. Same DI pattern as Section-2/4/5 services.
+        from careerops.application.inbox_service import InboxProjectionService
+
+        app.state.inbox_repository = probe.inbox_repo
+        app.state.inbox_service = InboxProjectionService(
+            inbox_repo=probe.inbox_repo,
+            profile_repo=probe.profile_repo,
+            evidence_repo=probe.evidence_repo,
+            job_data_repo=probe.matching_read_repo,
+            capability_resolver=probe.capability_resolver,
+        )
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(MetricsMiddleware, metrics=metrics)
     install_error_handlers(app)
@@ -273,6 +287,9 @@ def create_app(
     app.include_router(crawl_sources_router, dependencies=[Depends(require_api_auth)])
     app.include_router(crawl_plans_router, dependencies=[Depends(require_api_auth)])
     app.include_router(crawl_runs_router, dependencies=[Depends(require_api_auth)])
+    # Section-6 inbox router (tasks 6.7-6.8). Same auth guard; candidate
+    # ownership resolved server-side. Additive — no existing routes broken.
+    app.include_router(inbox_router, dependencies=[Depends(require_api_auth)])
 
     # Check if Vue SPA is enabled; if so, skip old Jinja2 UI routes.
     if not serve_spa:

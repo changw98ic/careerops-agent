@@ -27,9 +27,13 @@
           <template #icon><DashboardOutlined /></template>
           Overview
         </a-menu-item>
+        <a-menu-item key="inbox">
+          <template #icon><MailOutlined /></template>
+          Inbox
+        </a-menu-item>
         <a-menu-item key="jobs">
           <template #icon><InboxOutlined /></template>
-          Jobs inbox
+          Jobs
         </a-menu-item>
         <a-menu-item key="companies">
           <template #icon><BankOutlined /></template>
@@ -105,6 +109,7 @@ import {
   FileTextOutlined,
   InboxOutlined,
   LogoutOutlined,
+  MailOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   SolutionOutlined,
@@ -171,7 +176,9 @@ const selectedKeys = computed(() => [String(route.name || 'dashboard')])
 const pageTitle = computed(() => {
   const titles = {
     dashboard: 'Overview',
-    jobs: 'Jobs inbox',
+    inbox: 'Job Inbox',
+    'inbox-detail': 'Job detail',
+    jobs: 'Jobs',
     'job-detail': 'Job detail',
     companies: 'Companies',
     applications: 'Applications',

@@ -152,6 +152,15 @@ class RuntimeResources:
         self.crawl_plan_repo = PostgresCrawlPlanRepository(self.database)
         self.crawl_run_repo = PostgresCrawlRunRepository(self.database)
 
+        # Section-6 inbox repository (tasks 6.1-6.3). Persists filter
+        # decisions and requirement match results. Same Postgres-backed
+        # pattern as the Section-2/4 repos.
+        from careerops.infrastructure.database.postgres_inbox_repo import (
+            PostgresInboxRepository,
+        )
+
+        self.inbox_repo = PostgresInboxRepository(self.database)
+
         # Section 5 crawl execution service (tasks 5.1, 5.5, 5.6). Wraps the
         # crawl adapter sink + policy evaluation + provenance ingest. The
         # execution service is what Temporal activities (task 5.4) or a direct

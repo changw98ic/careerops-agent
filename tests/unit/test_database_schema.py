@@ -18,6 +18,7 @@ EXPECTED_TABLES = {
     "application_events",
     "application_lifecycle_events",
     "application_packages",
+    "application_package_versions",
     "applications",
     "approval_requests",
     "attachment_quarantine",

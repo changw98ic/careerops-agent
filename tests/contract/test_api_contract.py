@@ -234,6 +234,11 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
         "/api/v1/applications/{application_id}/timeline",
         "/api/v1/applications/{application_id}/confirm-external-submission",
         "/api/v1/applications/{application_id}/state",
+        # Section-8 job-specific package routes (career-profile-and-resume spec).
+        "/api/v1/applications/{application_id}/packages",
+        "/api/v1/applications/{application_id}/packages/latest",
+        "/api/v1/applications/{application_id}/packages/{version_id}/approve",
+        "/api/v1/applications/{application_id}/packages/{version_id}/edits",
     }
 
 

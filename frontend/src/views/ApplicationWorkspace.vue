@@ -129,9 +129,7 @@
           </a-spin>
         </a-card>
 
-        <!-- Package binding status (Section 7): shows the bound package version +
-        payload hash when one is bound via /package. The full package editor
-        arrives with Section 8. -->
+        <!-- Package binding summary (the full editor lives below the row) -->
         <a-card title="投递包状态" class="detail-card" style="margin-top: 16px">
           <template v-if="app.package_version_id || app.payload_hash">
             <a-descriptions :column="1" size="small" :label-style="{ color: '#667085', width: '110px' }">
@@ -145,8 +143,11 @@
                 {{ channelLabel(app.submission_channel) }}
               </a-descriptions-item>
             </a-descriptions>
+            <a-button size="small" type="link" @click="scrollToPackageEditor">
+              打开包编辑器 ↓
+            </a-button>
           </template>
-          <a-empty v-else description="尚未绑定投递包 — Section 8 将提供包编辑器。" />
+          <a-empty v-else description="尚未绑定投递包 — 在下方包编辑器中创建首版草稿。" />
         </a-card>
       </a-col>
 
@@ -308,6 +309,15 @@
         </a-card>
       </a-col>
     </a-row>
+
+    <!-- Full-width package editor (Section 8) -->
+    <div ref="packageEditorRef">
+      <PackageEditor
+        :application-id="appId"
+        @approved="onPackageApproved"
+        @created="onPackageCreated"
+      />
+    </div>
   </div>
 
   <!-- Loading state -->
@@ -357,6 +367,7 @@ import {
 } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
 import { api, parseApiError } from '../api/client.js'
+import PackageEditor from '../components/PackageEditor.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -377,6 +388,7 @@ const notFound = ref(false)
 const actionLoading = ref('')
 
 const submissionRef = ref(null)
+const packageEditorRef = ref(null)
 
 const submissionForm = ref({
   apply_url: '',
@@ -601,6 +613,30 @@ function scrollToSubmission() {
   nextTick(() => {
     submissionRef.value?.$el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   })
+}
+
+function scrollToPackageEditor() {
+  nextTick(() => {
+    packageEditorRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  })
+}
+
+// --- package editor callbacks ---
+// When a package is approved, reload the application so the binding
+// (package_version_id / payload_hash) reflects the approved version.
+async function onPackageApproved() {
+  try {
+    const data = await api.getApplication(appId.value)
+    app.value = data
+  } catch {
+    // Non-fatal: the editor already reflects the approved state inline.
+  }
+}
+
+// When the first draft is created, no application-level binding changes
+// (binding happens on approval). Kept as a hook for future telemetry.
+function onPackageCreated() {
+  // no-op for now
 }
 
 // --- helpers: state ---

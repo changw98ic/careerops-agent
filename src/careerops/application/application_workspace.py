@@ -35,6 +35,7 @@ from uuid import UUID, uuid4
 from careerops.application.applications import (
     ApplicationRepository,
 )
+from careerops.application.package_service import PackageService
 from careerops.domain.application_workspace import (
     ChannelEligibilityResolver,
     ChannelEligibilitySnapshot,
@@ -61,6 +62,7 @@ __all__ = [
     "ApplicationWorkspaceService",
     "ChannelUnavailableError",
     "ExternalFormEvidenceError",
+    "PackageServiceBindingStore",
 ]
 
 
@@ -505,3 +507,33 @@ class ApplicationWorkspaceService:
         if self._contact_lookup is None:
             return False
         return bool(self._contact_lookup(app.candidate_id, app.canonical_job_id))
+
+
+class PackageServiceBindingStore:
+    """Adapt a Section-8 ``PackageService``-like reader to PackageBindingStore.
+
+    The workspace reads the LATEST package version; if the latest is not
+    approved (e.g. the user edited inputs after a prior approval), the binding
+    surfaces that — which is how invalidation-on-mutation becomes visible to
+    the submission gate. Implements the ``PackageBindingStore`` protocol.
+    """
+
+    def __init__(self, package_service: PackageService) -> None:
+        self._packages = package_service
+
+    def get_binding(self, application_id: UUID) -> PackageBinding | None:
+        latest = self._packages.get_latest(application_id)
+        if latest is None:
+            return None
+        evidence: list[UUID] = []
+        for claim in latest.claims:
+            evidence.extend(claim.evidence_ids)
+        return PackageBinding(
+            application_id=application_id,
+            job_version_id=latest.job_version_id,
+            resume_version_id=latest.resume_version_id,
+            package_version_id=latest.id,
+            payload_hash=latest.payload_hash,
+            approval_state=latest.approval_state.value,
+            evidence_refs=tuple(evidence),
+        )

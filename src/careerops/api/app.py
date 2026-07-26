@@ -254,11 +254,27 @@ def create_app(
         # as the other Section-2/4/6 services.
         from careerops.application.application_workspace import (
             ApplicationWorkspaceService,
+            PackageServiceBindingStore,
         )
 
+        # Section-8 package service (tasks 8.2-8.7). The application repo
+        # doubles as both the package-version repo (find_latest_package_version
+        # / save_package_version / ...) and the resume-read repo
+        # (find_resume_by_id), so a single instance satisfies both ports.
+        # Tailoring stays default-disabled via the shared capability resolver
+        # until MODEL_TAILORING is released.
+        from careerops.application.package_service import PackageService
+
+        package_service = PackageService(
+            probe.application_repo,  # type: ignore[arg-type]
+            probe.application_repo,  # type: ignore[arg-type]
+            capability_resolver=probe.capability_resolver,
+        )
+        app.state.package_service = package_service
         app.state.application_workspace_service = ApplicationWorkspaceService(
             probe.application_repo,
             cycle_repo=probe.application_cycle_repo,
+            package_binding_store=PackageServiceBindingStore(package_service),
         )
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(MetricsMiddleware, metrics=metrics)

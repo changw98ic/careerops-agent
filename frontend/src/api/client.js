@@ -196,4 +196,16 @@ export const api = {
     request(`/api/v1/applications/${id}/confirm-external-submission`, { method: 'POST', body: data }),
   changeApplicationState: (id, data) =>
     request(`/api/v1/applications/${id}/state`, { method: 'POST', body: data }),
+
+  // -- Application packages (Section 8) --
+  createPackageDraft: (applicationId, data) =>
+    request(`/api/v1/applications/${applicationId}/packages`, { method: 'POST', body: data }),
+  listApplicationPackages: (applicationId) =>
+    request(`/api/v1/applications/${applicationId}/packages`),
+  getLatestPackage: (applicationId) =>
+    request(`/api/v1/applications/${applicationId}/packages/latest`),
+  approvePackage: (applicationId, versionId) =>
+    request(`/api/v1/applications/${applicationId}/packages/${versionId}/approve`, { method: 'POST' }),
+  applyPackageEdits: (applicationId, versionId, data) =>
+    request(`/api/v1/applications/${applicationId}/packages/${versionId}/edits`, { method: 'POST', body: data }),
 }

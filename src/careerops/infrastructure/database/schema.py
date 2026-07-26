@@ -1480,6 +1480,93 @@ application_packages = sa.Table(
     ),
 )
 
+
+application_package_versions = sa.Table(
+    "application_package_versions",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "application_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.applications.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column("version_number", sa.Integer(), nullable=False),
+    sa.Column(
+        "resume_version_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.resume_versions.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column(
+        "job_version_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.job_posting_versions.id", ondelete="RESTRICT"),
+        nullable=True,
+    ),
+    sa.Column(
+        "profile_version_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.profile_versions.id", ondelete="RESTRICT"),
+        nullable=True,
+    ),
+    sa.Column("cover_letter_text", sa.Text(), server_default="", nullable=False),
+    sa.Column("notes", sa.Text(), server_default="", nullable=False),
+    sa.Column(
+        "answers",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "claims",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "attachments",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "diff",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "requirement_gaps",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column("payload_hash", sa.String(64), nullable=True),
+    sa.Column("approval_state", sa.String(24), server_default="draft", nullable=False),
+    sa.Column("approved_at", sa.DateTime(timezone=True), nullable=True),
+    sa.Column("approved_by", sa.Text(), server_default="", nullable=False),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.Column(
+        "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.UniqueConstraint(
+        "application_id",
+        "version_number",
+        name="uq_application_package_versions_app_version",
+    ),
+    sa.CheckConstraint(
+        "approval_state IN ('draft', 'pending_review', 'approved', 'rejected')",
+        name="ck_application_package_versions_approval_state",
+    ),
+    sa.CheckConstraint(
+        "payload_hash IS NULL OR char_length(payload_hash) = 64",
+        name="ck_application_package_versions_payload_hash_length",
+    ),
+)
+
 follow_up_reminders = sa.Table(
     "follow_up_reminders",
     metadata,

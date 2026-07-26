@@ -89,16 +89,16 @@
 
 ## 8. Job-specific application packages
 
-- [ ] 8.1 Define application-package version contracts for resume presentation, cover letter, answers, email subject/body, attachments, claim references, and approval state.
-- [ ] 8.2 Implement package draft creation from exact job version, profile version, confirmed resume, and selected evidence.
-- [ ] 8.3 Implement deterministic requirement/evidence comparison and explainable gap output.
-- [ ] 8.4 Add optional LangGraph tailoring workflow that returns structured suggestions and never writes trusted claims or external payloads directly.
-- [ ] 8.5 Implement diff generation against immutable resume content and preserve user edits as new package versions.
-- [ ] 8.6 Reject package approval when any positive claim lacks evidence, any required resume confirmation is missing, or any source content is stale beyond policy.
-- [ ] 8.7 Implement package approval with actor, timestamp, input identities, payload hash, attachment hashes, and invalidation on mutation.
-- [ ] 8.8 Add frontend package editor/review with side-by-side diff, evidence references, unresolved warnings, attachment status, and approval action.
-- [ ] 8.9 Add tests for unsupported model claims, evidence binding, diff/version behavior, stale inputs, attachment mutation, and model-disabled package drafting.
-- [ ] 8.10 Gate email work on a package slice that creates a job-specific diff, rejects unsupported claims, approves an exact payload, and proves any input mutation invalidates approval.
+- [x] 8.1 Define application-package version contracts for resume presentation, cover letter, answers, email subject/body, attachments, claim references, and approval state.
+- [x] 8.2 Implement package draft creation from exact job version, profile version, confirmed resume, and selected evidence.
+- [x] 8.3 Implement deterministic requirement/evidence comparison and explainable gap output.
+- [x] 8.4 Add optional LangGraph tailoring workflow that returns structured suggestions and never writes trusted claims or external payloads directly.
+- [x] 8.5 Implement diff generation against immutable resume content and preserve user edits as new package versions.
+- [x] 8.6 Reject package approval when any positive claim lacks evidence, any required resume confirmation is missing, or any source content is stale beyond policy.
+- [x] 8.7 Implement package approval with actor, timestamp, input identities, payload hash, attachment hashes, and invalidation on mutation.
+- [x] 8.8 Add frontend package editor/review with side-by-side diff, evidence references, unresolved warnings, attachment status, and approval action.
+- [x] 8.9 Add tests for unsupported model claims, evidence binding, diff/version behavior, stale inputs, attachment mutation, and model-disabled package drafting.
+- [x] 8.10 Gate email work on a package slice that creates a job-specific diff, rejects unsupported claims, approves an exact payload, and proves any input mutation invalidates approval.
 
 ## 9. Trusted contacts and initial email payloads
 

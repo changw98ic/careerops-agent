@@ -163,6 +163,12 @@ class ApplicationService:
         self._packages = package_repo
         self._follow_ups = follow_up_repo
 
+    def find_by_candidate_and_job(
+        self, candidate_id: UUID, canonical_job_id: UUID
+    ) -> Application | None:
+        """Find an existing application for a candidate + job pair."""
+        return self._applications.find_by_candidate_and_job(candidate_id, canonical_job_id)
+
     def create_application(self, request: ApplicationCreateRequest, now: datetime) -> Application:
         """Create a new application in FAVORITED state."""
         existing = self._applications.find_by_candidate_and_job(

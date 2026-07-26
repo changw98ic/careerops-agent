@@ -2557,3 +2557,144 @@ sa.Index(
     "ix_crawl_runs_created_at",
     crawl_runs.c.created_at,
 )
+
+# ---------------------------------------------------------------------------
+# End-to-end career loop Section 6: inbox filter decisions + requirement matches
+# ---------------------------------------------------------------------------
+
+filter_decisions = sa.Table(
+    "filter_decisions",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "canonical_job_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.canonical_jobs.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column(
+        "candidate_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.candidates.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column(
+        "profile_version_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.profile_versions.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column("verdict", sa.String(16), nullable=False),
+    sa.Column("rules_version", sa.Text(), server_default="", nullable=False),
+    sa.Column(
+        "blocking_reasons",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "evidence_refs",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "created_at",
+        sa.DateTime(timezone=True),
+        server_default=sa.func.now(),
+        nullable=False,
+    ),
+    sa.UniqueConstraint(
+        "canonical_job_id",
+        "candidate_id",
+        "profile_version_id",
+        name="uq_filter_decisions_job_candidate_profile",
+    ),
+    sa.CheckConstraint(
+        "verdict IN ('recommended', 'excluded')",
+        name="verdict_values",
+    ),
+    sa.CheckConstraint("jsonb_typeof(blocking_reasons) = 'array'", name="blocking_reasons_array"),
+    sa.CheckConstraint("jsonb_typeof(evidence_refs) = 'object'", name="evidence_refs_object"),
+)
+
+sa.Index(
+    "ix_filter_decisions_candidate_verdict",
+    filter_decisions.c.candidate_id,
+    filter_decisions.c.verdict,
+)
+
+requirement_match_results = sa.Table(
+    "requirement_match_results",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "filter_decision_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.filter_decisions.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column("requirement_name", sa.Text(), nullable=False),
+    sa.Column("match_level", sa.String(24), nullable=False),
+    sa.Column(
+        "evidence_ids",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column("confidence", sa.Numeric(5, 4), server_default="0", nullable=False),
+    sa.Column("reason", sa.Text(), server_default="", nullable=False),
+    sa.Column("rules_version", sa.Text(), server_default="", nullable=False),
+    sa.Column("model_version", sa.Text(), server_default="", nullable=False),
+    sa.Column(
+        "created_at",
+        sa.DateTime(timezone=True),
+        server_default=sa.func.now(),
+        nullable=False,
+    ),
+    sa.CheckConstraint(
+        "match_level IN ('strong', 'partial', 'transferable', 'unsupported')",
+        name="match_level_values",
+    ),
+    sa.CheckConstraint("confidence >= 0 AND confidence <= 1", name="confidence_range"),
+    sa.CheckConstraint("jsonb_typeof(evidence_ids) = 'array'", name="evidence_ids_array"),
+)
+
+sa.Index(
+    "ix_requirement_match_results_decision",
+    requirement_match_results.c.filter_decision_id,
+)
+
+# ---------------------------------------------------------------------------
+# End-to-end career loop Section 6: inbox snooze records
+# ---------------------------------------------------------------------------
+
+inbox_snoozes = sa.Table(
+    "inbox_snoozes",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "candidate_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.candidates.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column(
+        "canonical_job_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.canonical_jobs.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column("snoozed_until", sa.DateTime(timezone=True), nullable=False),
+    sa.Column(
+        "created_at",
+        sa.DateTime(timezone=True),
+        server_default=sa.func.now(),
+        nullable=False,
+    ),
+    sa.UniqueConstraint(
+        "candidate_id",
+        "canonical_job_id",
+        name="uq_inbox_snoozes_candidate_job",
+    ),
+)

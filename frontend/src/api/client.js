@@ -173,4 +173,13 @@ export const api = {
   listCrawlRuns: (params) =>
     request('/api/v1/crawl-runs?' + new URLSearchParams(params || {})),
   getCrawlRun: (id) => request(`/api/v1/crawl-runs/${id}`),
+
+  // -- Inbox (Section 6) --
+  listInbox: (params) =>
+    request('/api/v1/inbox?' + new URLSearchParams(params || {})),
+  getInboxJobDetail: (jobId) => request(`/api/v1/inbox/${jobId}`),
+  getInboxExcludedReasons: (jobId) => request(`/api/v1/inbox/${jobId}/excluded-reasons`),
+  favoriteInboxJob: (jobId) => request(`/api/v1/inbox/${jobId}/favorite`, { method: 'POST' }),
+  ignoreInboxJob: (jobId) => request(`/api/v1/inbox/${jobId}/ignore`, { method: 'POST' }),
+  snoozeInboxJob: (jobId, data) => request(`/api/v1/inbox/${jobId}/snooze`, { method: 'POST', body: data }),
 }

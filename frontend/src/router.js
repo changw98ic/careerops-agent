@@ -13,6 +13,8 @@ const Evidence = () => import('./views/Evidence.vue')
 const CrawlPlans = () => import('./views/CrawlPlans.vue')
 const CrawlRunHistory = () => import('./views/CrawlRunHistory.vue')
 const CrawlRunDetail = () => import('./views/CrawlRunDetail.vue')
+const Inbox = () => import('./views/Inbox.vue')
+const InboxDetail = () => import('./views/InboxDetail.vue')
 const NotFound = () => import('./views/NotFound.vue')
 
 const routes = [
@@ -29,6 +31,8 @@ const routes = [
   { path: '/crawl-plans', name: 'crawl-plans', component: CrawlPlans, meta: { auth: true } },
   { path: '/crawl-runs', name: 'crawl-runs', component: CrawlRunHistory, meta: { auth: true } },
   { path: '/crawl-runs/:id', name: 'crawl-run-detail', component: CrawlRunDetail, meta: { auth: true } },
+  { path: '/inbox', name: 'inbox', component: Inbox, meta: { auth: true } },
+  { path: '/inbox/:id', name: 'inbox-detail', component: InboxDetail, meta: { auth: true } },
   { path: '/bootstrap', name: 'bootstrap', component: () => import('./views/Bootstrap.vue') },
   { path: '/404', name: 'not-found', component: NotFound },
   { path: '/:pathMatch(.*)*', name: 'catch-all', redirect: '/404' },

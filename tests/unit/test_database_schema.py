@@ -14,6 +14,7 @@ from careerops.infrastructure.database.schema import APPEND_ONLY_TABLES, metadat
 EXPECTED_TABLES = {
     "action_intents",
     "action_payload_versions",
+    "application_cycles",
     "application_events",
     "application_lifecycle_events",
     "application_packages",
@@ -52,6 +53,7 @@ EXPECTED_TABLES = {
     "oauth_credential_references",
     "outbox_events",
     "policy_decisions",
+    "profile_versions",
     "provider_receipts",
     "reconciliation_records",
     "reply_drafts",

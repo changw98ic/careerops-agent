@@ -10,17 +10,17 @@
 
 ## 2. Database identity, candidate ownership, and migrations
 
-- [ ] 2.1 Add a durable user-to-candidate association with a uniqueness constraint for the single-user runtime and server-side lookup support.
-- [ ] 2.2 Add profile-version storage for target roles, locations, remote rules, compensation, seniority, authorization, include keywords, exclude keywords, and hard exclusions.
-- [ ] 2.3 Add validation constraints and service-level validation for contradictory profile preferences and invalid compensation/location values.
-- [ ] 2.4 Extend resume-version storage with parse status, confirmation status, target type, source reference, content hash, and lifecycle timestamps if not already present in the current schema.
-- [ ] 2.5 Add evidence-item storage or projection fields for candidate claims, source spans, confirmation status, extractor version, and evidence hashes.
-- [ ] 2.6 Add `application_cycle` identity and uniqueness constraints so one candidate/job pair has one active cycle while explicit re-application cycles retain prior history.
-- [ ] 2.7 Add `submission_channel`, package version, payload hash, and provider linkage fields to the application projection without weakening append-only event history.
-- [ ] 2.8 Add additive migration guards, downgrade behavior, role grants, and runtime capability checks for all new tables and columns.
-- [ ] 2.9 Run disposable PostgreSQL migration tests for clean upgrade, downgrade where supported, uniqueness, ownership scoping, and runtime-role permissions.
-- [ ] 2.10 Backfill existing single-user records into the new candidate/profile/cycle/provenance fields, quarantine ambiguous ownership links for user review, and test that no legacy job/application/email history is silently reassigned.
-- [ ] 2.11 Wire new repositories, application services, capability resolver, and projections through `infrastructure/runtime.py` and `api/app.py`, with explicit dependency-not-ready behavior instead of silently using an unscoped or in-memory fallback.
+- [x] 2.1 Add a durable user-to-candidate association with a uniqueness constraint for the single-user runtime and server-side lookup support.
+- [x] 2.2 Add profile-version storage for target roles, locations, remote rules, compensation, seniority, authorization, include keywords, exclude keywords, and hard exclusions.
+- [x] 2.3 Add validation constraints and service-level validation for contradictory profile preferences and invalid compensation/location values.
+- [x] 2.4 Extend resume-version storage with parse status, confirmation status, target type, source reference, content hash, and lifecycle timestamps if not already present in the current schema.
+- [x] 2.5 Add evidence-item storage or projection fields for candidate claims, source spans, confirmation status, extractor version, and evidence hashes.
+- [x] 2.6 Add `application_cycle` identity and uniqueness constraints so one candidate/job pair has one active cycle while explicit re-application cycles retain prior history.
+- [x] 2.7 Add `submission_channel`, package version, payload hash, and provider linkage fields to the application projection without weakening append-only event history.
+- [x] 2.8 Add additive migration guards, downgrade behavior, role grants, and runtime capability checks for all new tables and columns.
+- [x] 2.9 Run disposable PostgreSQL migration tests for clean upgrade, downgrade where supported, uniqueness, ownership scoping, and runtime-role permissions.
+- [x] 2.10 Backfill existing single-user records into the new candidate/profile/cycle/provenance fields, quarantine ambiguous ownership links for user review, and test that no legacy job/application/email history is silently reassigned.
+- [x] 2.11 Wire new repositories, application services, capability resolver, and projections through `infrastructure/runtime.py` and `api/app.py`, with explicit dependency-not-ready behavior instead of silently using an unscoped or in-memory fallback.
 
 ## 3. Career profile, resume, and evidence services
 

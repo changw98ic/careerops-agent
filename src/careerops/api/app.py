@@ -162,6 +162,17 @@ def create_app(
             package_repo=_PackageRepoAdapter(probe.application_repo),
             follow_up_repo=_FollowUpRepoAdapter(probe.application_repo),
         )
+        # Section-2 server-side-candidate-owned repos + shared capability
+        # resolver (end-to-end-career-application-loop tasks 2.2/2.5/2.6/2.11).
+        # These are exposed on app.state so Section-3+ routes can pull them via
+        # ``require_repository``; the helper raises DependencyNotReadyError
+        # (503) if a repo is ever absent rather than silently degrading. The
+        # capability resolver backs both the LangGraph review stack and the
+        # ``require_capability`` external-effect gate.
+        app.state.profile_repository = probe.profile_repo
+        app.state.evidence_repository = probe.evidence_repo
+        app.state.application_cycle_repository = probe.application_cycle_repo
+        app.state.capability_resolver = probe.capability_resolver
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(MetricsMiddleware, metrics=metrics)
     install_error_handlers(app)

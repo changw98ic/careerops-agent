@@ -74,6 +74,16 @@ class RuntimeResources:
         self._temporal: Client | None = None
         self._temporal_lock = asyncio.Lock()
         self._closed = False
+        # Phase-0 capability resolver (end-to-end-career-application-loop
+        # Decision 11). A single shared instance backs BOTH the LangGraph
+        # review stack and the new Section-2 external-effect projections. It
+        # reads trusted flag state from ``Settings`` and is fail-closed for
+        # any capability it has not been explicitly taught.
+        from careerops.orchestration.capability_resolver import (
+            SettingsCapabilityResolver,
+        )
+
+        self.capability_resolver = SettingsCapabilityResolver(settings)
         # LangGraph review stack (plan v0.4 §2.4 / §3 Stage 3). v1 is single-
         # process (MemorySaver + InMemorySideEffectStore + InMemoryReviewMapping
         # Store share this process's lifetime). PRODUCTION is fail-closed: the
@@ -88,11 +98,17 @@ class RuntimeResources:
         # Read repositories and application services for API routes.
         # Always use Postgres-backed repos when a database URL is configured.
         # InMemory imports are kept for tests that mock the database.
+        from careerops.infrastructure.database.postgres_application_cycle_repo import (
+            PostgresApplicationCycleRepository,
+        )
         from careerops.infrastructure.database.postgres_application_repo import (
             PostgresApplicationRepository,
         )
         from careerops.infrastructure.database.postgres_contact_repo import (
             PostgresContactRepository,
+        )
+        from careerops.infrastructure.database.postgres_evidence_repo import (
+            PostgresEvidenceRepository,
         )
         from careerops.infrastructure.database.postgres_job_repo import (
             PostgresJobReadRepository,
@@ -100,11 +116,27 @@ class RuntimeResources:
         from careerops.infrastructure.database.postgres_matching_repo import (
             PostgresMatchingReadRepository,
         )
+        from careerops.infrastructure.database.postgres_profile_repo import (
+            PostgresProfileRepository,
+        )
 
         self.matching_read_repo = PostgresMatchingReadRepository(self.database)
         self.job_read_repo = PostgresJobReadRepository(self.database)
         self.contact_repo = PostgresContactRepository(self.database)
+        # ``PostgresApplicationRepository`` doubles as the ResumeRepository,
+        # PackageRepository and FollowUpRepository and already carries the
+        # Section-2 lifecycle methods (content-addressed resume dedupe,
+        # eligible-resume filtering, cycle/package/payload linkage).
         self.application_repo = PostgresApplicationRepository(self.database)
+        # Section-2 server-side-candidate-owned repos (tasks 2.2 / 2.5 / 2.6).
+        # Every method on these repos scopes by a server-resolved
+        # ``candidate_id``; there is NO unscoped or in-memory fallback — a
+        # request that reaches them while the DB is down surfaces a
+        # sqlalchemy error, and ``api.app`` exposes them through DI helpers
+        # that turn a missing repo into ``DependencyNotReadyError`` (503).
+        self.profile_repo = PostgresProfileRepository(self.database)
+        self.evidence_repo = PostgresEvidenceRepository(self.database)
+        self.application_cycle_repo = PostgresApplicationCycleRepository(self.database)
 
     async def check(self) -> ReadinessReport:
         if self._closed:
@@ -202,9 +234,6 @@ class RuntimeResources:
             FakeSideEffectProvider,
         )
         from careerops.model_gateway.factory import create_model_client
-        from careerops.orchestration.capability_resolver import (
-            SettingsCapabilityResolver,
-        )
         from careerops.orchestration.graph import build_graph
         from careerops.orchestration.mapping_store import InMemoryReviewMappingStore
         from careerops.orchestration.state import ContactDTO, RawJobDTO
@@ -212,6 +241,10 @@ class RuntimeResources:
         settings = self._settings
         metrics = self._metrics
         is_production = settings.environment is RuntimeEnvironment.PRODUCTION
+        # Reuse the shared Phase-0 resolver (Iron Rule: one source of truth
+        # for capability decisions across the review stack and the new
+        # external-effect projections).
+        capability_resolver = self.capability_resolver
 
         # Checkpointer: PostgresSaver in PRODUCTION (if available), MemorySaver otherwise.
         # PRODUCTION wraps in try/except so the app starts even without a
@@ -241,7 +274,6 @@ class RuntimeResources:
 
         kernel = SideEffectKernel(side_effect_store, side_effect_provider)  # type: ignore[arg-type]
         review_mapping: ReviewMappingStore = InMemoryReviewMappingStore()
-        capability_resolver = SettingsCapabilityResolver(settings)
 
         # Wire LLM token recording via the model client factory (ADR 0006).
         usage_recorder = metrics if metrics is not None else None

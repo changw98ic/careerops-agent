@@ -58,6 +58,35 @@ class FollowUpState(StrEnum):
     COMPLETED = "completed"
 
 
+class ResumeParseStatus(StrEnum):
+    """Deterministic parse lifecycle of a registered resume version.
+
+    A resume may only enter an application package once parsing succeeded
+    (``PARSED``) and the user confirmed the extracted content (``confirmation_status = CONFIRMED``).
+    Model tailoring never changes this status directly; it is driven by the
+    parse/confirmation services.
+    """
+
+    PENDING = "pending"
+    PARSED = "parsed"
+    FAILED = "failed"
+
+
+class ConfirmationStatus(StrEnum):
+    """User confirmation state for a resume version or an evidence item.
+
+    Shared by ``resume_versions.confirmation_status`` and
+    ``evidence_items.confirmation_status``. ``UNCONFIRMED`` is the default for
+    newly extracted content; only ``CONFIRMED`` content is eligible for
+    approved application packages. ``REJECTED`` content is retained for audit
+    but excluded from trusted claims.
+    """
+
+    UNCONFIRMED = "unconfirmed"
+    CONFIRMED = "confirmed"
+    REJECTED = "rejected"
+
+
 class SubmissionChannel(StrEnum):
     """How an application submission is delivered to the employer.
 
@@ -172,6 +201,27 @@ def is_transition_legal(from_state: ApplicationState, to_state: ApplicationState
 
 
 @dataclass(frozen=True, slots=True)
+class ApplicationCycle:
+    """One application cycle for a (candidate, canonical_job) pair.
+
+    At most one active cycle exists per pair at a time (DB partial unique
+    index). An explicit re-application opens a NEW cycle linked to the prior
+    one via ``prior_cycle_id`` and closes the old one, preserving full history
+    (design Decision 8). ``active`` and ``closed_at`` move together: an active
+    cycle has no closed_at; an inactive cycle must be closed.
+    """
+
+    id: UUID
+    candidate_id: UUID
+    canonical_job_id: UUID
+    active: bool = True
+    prior_cycle_id: UUID | None = None
+    reason: str = ""
+    created_at: datetime | None = None
+    closed_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Application:
     """A job application with lifecycle state."""
 
@@ -180,6 +230,18 @@ class Application:
     canonical_job_id: UUID
     state: ApplicationState = ApplicationState.FAVORITED
     apply_url: str = ""
+    # 2.6: link to the application cycle (nullable for backfill; required at
+    # the service layer for new rows in a later stage).
+    cycle_id: UUID | None = None
+    # 2.7: submission channel (Phase 0 SubmissionChannel), approved package
+    # version binding, payload hash, and provider receipt linkage. All
+    # nullable/additive. payload_hash binds the approved package; any mutation
+    # invalidates the prior approval (design Decision 4/5).
+    submission_channel: SubmissionChannel | None = None
+    package_version_id: UUID | None = None
+    payload_hash: str | None = None
+    provider_kind: str | None = None
+    provider_message_id: str | None = None
     submitted_at: datetime | None = None
     follow_up_due_at: datetime | None = None
     version: int = 1
@@ -218,6 +280,14 @@ class ResumeVersion:
     content_hash: str
     target_type: str = "general"
     human_confirmed: bool = False
+    # 2.4 lifecycle fields (additive; defaults keep existing callers valid).
+    # A resume is eligible for an application package only when
+    # ``parse_status == PARSED`` and ``confirmation_status == CONFIRMED``.
+    parse_status: ResumeParseStatus = ResumeParseStatus.PENDING
+    confirmation_status: ConfirmationStatus = ConfirmationStatus.UNCONFIRMED
+    source_reference: str = ""
+    parsed_at: datetime | None = None
+    confirmed_at: datetime | None = None
     created_at: datetime | None = None
 
 

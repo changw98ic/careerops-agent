@@ -257,3 +257,37 @@ class SettingsCapabilityResolver:
             released=False,
             reason=f"unknown capability {capability!r}: fail-closed denial",
         )
+
+
+def is_external_effect_path_usable(
+    resolver: SettingsCapabilityResolver,
+    capability: CapabilityKind,
+    *,
+    dependency_available: bool,
+) -> tuple[bool, str]:
+    """Combined gate for repos/projections that touch external-effect
+    capabilities (end-to-end-career-application-loop task 2.8 helper).
+
+    Returns ``(usable, reason)``. A path is usable only when BOTH hold:
+
+    1. the backing dependency (provider, model, crawl worker, ...) is
+       available — ``dependency_available=True``; AND
+    2. the ``SettingsCapabilityResolver`` releases the capability.
+
+    Iron rule 3 makes dependency-not-ready win over capability denial: a
+    released capability whose dependency is down is still unusable, and the
+    caller MUST surface ``DEPENDENCY_NOT_READY`` (503) rather than silently
+    fall back to an unscoped or in-memory implementation. The reason string
+    is safe to surface in operator/UI messaging.
+
+    This helper is intentionally NOT wired into request paths yet (task 2.11
+    does the runtime/app wiring); it exists so stage-3+ repositories and
+    projections route external-effect decisions through one place instead of
+    re-implementing the dependency-vs-capability precedence.
+    """
+    if not dependency_available:
+        return False, "dependency_not_ready"
+    decision = resolver.decide(capability)
+    if not decision.released:
+        return False, decision.reason
+    return True, decision.reason

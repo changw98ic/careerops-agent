@@ -7,6 +7,8 @@ from datetime import date, datetime
 from enum import StrEnum
 from uuid import UUID
 
+from careerops.domain.applications import ConfirmationStatus
+
 
 class EvidenceKind(StrEnum):
     SKILL = "skill"
@@ -54,7 +56,15 @@ class Candidate:
 class EvidenceItem:
     """A single piece of candidate evidence (skill, project, etc.).
 
-    Idempotency key: (repository, commit_sha, path, symbol, content_hash).
+    Idempotency key (repository-derived path): (repository, commit_sha, path,
+    symbol, content_hash).
+
+    Resume-derived evidence additionally carries a bounded ``source_span``,
+    ``extractor_version``, ``confirmation_status``, ``evidence_hash``, and an
+    optional link to the resume version it was extracted from (task 2.5).
+    These fields are additive: the repository-derived path leaves them at
+    their defaults. Only ``confirmation_status == CONFIRMED`` evidence is
+    eligible for approved application packages.
     """
 
     id: UUID
@@ -69,6 +79,11 @@ class EvidenceItem:
     content_hash: str = ""
     source_url: str = ""
     verified: bool = False
+    extractor_version: str = ""
+    source_span: str = ""
+    confirmation_status: ConfirmationStatus = ConfirmationStatus.UNCONFIRMED
+    evidence_hash: str = ""
+    resume_version_id: UUID | None = None
     created_at: datetime | None = None
 
 

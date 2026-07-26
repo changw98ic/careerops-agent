@@ -10,14 +10,18 @@ integration testing.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import cast
+from typing import Any, cast
 from uuid import UUID
 
+from careerops.api.errors import NotFoundError
 from careerops.domain.applications import (
     Application,
+    ApplicationCycle,
     ApplicationEvent,
     ApplicationPackage,
+    ConfirmationStatus,
     FollowUpReminder,
+    ResumeParseStatus,
     ResumeVersion,
 )
 from careerops.domain.candidates import (
@@ -34,6 +38,10 @@ from careerops.domain.jobs import (
     JobPosting,
     JobPostingVersion,
     PostingSourceState,
+)
+from careerops.domain.profiles import ProfileVersion
+from careerops.infrastructure.database.profile_validation import (
+    validate_profile_preferences,
 )
 
 # ---------------------------------------------------------------------------
@@ -585,6 +593,41 @@ class InMemoryApplicationRepository:
         if current is None or version.version_number > current.version_number:
             self._resume_latest[version.candidate_id] = version
 
+    # -- Resume lifecycle (task 2.4): content-addressed dedupe + eligibility -
+
+    def find_resume_by_content_hash(
+        self, candidate_id: UUID, content_hash: str
+    ) -> ResumeVersion | None:
+        """Content-addressed dedupe: return the existing version for a hash."""
+        if not content_hash:
+            return None
+        matches = [
+            r
+            for r in self._resumes.values()
+            if r.candidate_id == candidate_id and r.content_hash == content_hash
+        ]
+        if not matches:
+            return None
+        return max(matches, key=lambda r: r.version_number)
+
+    def find_resume_by_id(self, candidate_id: UUID, version_id: UUID) -> ResumeVersion | None:
+        version = self._resumes.get(version_id)
+        if version is None or version.candidate_id != candidate_id:
+            return None
+        return version
+
+    def find_eligible_resumes(self, candidate_id: UUID, *, limit: int = 50) -> list[ResumeVersion]:
+        """Parsed + confirmed resumes — the only ones eligible for packages."""
+        eligible = [
+            r
+            for r in self._resumes.values()
+            if r.candidate_id == candidate_id
+            and r.parse_status == ResumeParseStatus.PARSED
+            and r.confirmation_status == ConfirmationStatus.CONFIRMED
+        ]
+        eligible.sort(key=lambda r: r.version_number, reverse=True)
+        return eligible[:limit]
+
     # -- Package operations -------------------------------------------------
 
     def find_by_application(self, application_id: UUID) -> ApplicationPackage | None:
@@ -678,6 +721,373 @@ class InMemoryApplicationRepository:
             "total": total,
             "next_cursor": next_cursor,
         }
+
+
+# ---------------------------------------------------------------------------
+# Profile version repository (end-to-end-career-application-loop, Section 2)
+# ---------------------------------------------------------------------------
+
+
+class InMemoryProfileRepository:
+    """In-memory profile-version store, behaviorally identical to
+    :class:`careerops.infrastructure.database.postgres_profile_repo.PostgresProfileRepository`.
+
+    Exactly one active version per candidate (invariants mirror the DB partial
+    unique index). ``create_version`` and ``activate`` both validate
+    contradictory preferences before mutating state so an invalid version can
+    never become active.
+    """
+
+    def __init__(self) -> None:
+        self._versions: dict[UUID, ProfileVersion] = {}
+        self._active_by_candidate: dict[UUID, UUID] = {}
+
+    def get_active_for(self, candidate_id: UUID) -> ProfileVersion | None:
+        active_id = self._active_by_candidate.get(candidate_id)
+        if active_id is None:
+            return None
+        return self._versions.get(active_id)
+
+    def get_by_version_id(self, candidate_id: UUID, version_id: UUID) -> ProfileVersion:
+        version = self._versions.get(version_id)
+        if version is None or version.candidate_id != candidate_id:
+            raise NotFoundError("profile version not found for candidate")
+        return version
+
+    def list_versions(self, candidate_id: UUID, *, limit: int = 50) -> list[ProfileVersion]:
+        items = [v for v in self._versions.values() if v.candidate_id == candidate_id]
+        items.sort(key=lambda v: v.version, reverse=True)
+        return items[:limit]
+
+    def create_version(self, profile: ProfileVersion) -> ProfileVersion:
+        validate_profile_preferences(profile)
+        # Store inactive first; flip to active under the same logical op so the
+        # one-active invariant never transiently breaks.
+        stored = ProfileVersion(
+            id=profile.id,
+            candidate_id=profile.candidate_id,
+            version=profile.version,
+            is_active=False,
+            target_roles=profile.target_roles,
+            locations=profile.locations,
+            remote_rules=profile.remote_rules,
+            compensation=profile.compensation,
+            seniority=profile.seniority,
+            authorization=profile.authorization,
+            include_keywords=profile.include_keywords,
+            exclude_keywords=profile.exclude_keywords,
+            hard_exclusions=profile.hard_exclusions,
+            rules_version=profile.rules_version,
+            created_at=profile.created_at,
+            updated_at=profile.updated_at,
+        )
+        self._versions[profile.id] = stored
+        if profile.is_active:
+            return self._activate(candidate_id=profile.candidate_id, version_id=profile.id)
+        return stored
+
+    def activate(
+        self, candidate_id: UUID, version_id: UUID, *, now: datetime | None = None
+    ) -> ProfileVersion:
+        target = self._versions.get(version_id)
+        if target is None or target.candidate_id != candidate_id:
+            raise NotFoundError("profile version not found for candidate")
+        # Re-validate: a version that became contradictory after a rules change
+        # must not flip to active.
+        validate_profile_preferences(target)
+        return self._activate(candidate_id=candidate_id, version_id=version_id)
+
+    def _activate(self, *, candidate_id: UUID, version_id: UUID) -> ProfileVersion:
+        prior_active_id = self._active_by_candidate.get(candidate_id)
+        if prior_active_id is not None and prior_active_id != version_id:
+            prior = self._versions.get(prior_active_id)
+            if prior is not None:
+                # frozen dataclass -> replace. Mutate the dict in place so the
+                # re-spread stays ``dict[str, Any]`` (a merge literal would
+                # widen to ``dict[str, Any | bool]`` and break the typed kwargs).
+                prior_dict = _profile_as_dict(prior)
+                prior_dict["is_active"] = False
+                self._versions[prior_active_id] = ProfileVersion(**prior_dict)
+        target = self._versions[version_id]
+        target_dict = _profile_as_dict(target)
+        target_dict["is_active"] = True
+        self._versions[version_id] = ProfileVersion(**target_dict)
+        self._active_by_candidate[candidate_id] = version_id
+        return self._versions[version_id]
+
+    @staticmethod
+    def validate(profile: ProfileVersion) -> None:
+        validate_profile_preferences(profile)
+
+
+def _profile_as_dict(profile: ProfileVersion) -> dict[str, Any]:
+    """Return a mutable dict for the frozen dataclass re-build pattern."""
+    # dataclasses.asdict would deep-copy tuples/dicts; we want the SAME
+    # references so the rebuild preserves identity for nested frozen types.
+    # Values are typed ``Any`` (not ``object``) so the ``**`` re-spread into
+    # ``ProfileVersion(...)`` is accepted by pyright: the rebuild is structurally
+    # identical to the source (we only ever flip ``is_active``).
+    return {
+        "id": profile.id,
+        "candidate_id": profile.candidate_id,
+        "version": profile.version,
+        "is_active": profile.is_active,
+        "target_roles": profile.target_roles,
+        "locations": profile.locations,
+        "remote_rules": profile.remote_rules,
+        "compensation": profile.compensation,
+        "seniority": profile.seniority,
+        "authorization": profile.authorization,
+        "include_keywords": profile.include_keywords,
+        "exclude_keywords": profile.exclude_keywords,
+        "hard_exclusions": profile.hard_exclusions,
+        "rules_version": profile.rules_version,
+        "created_at": profile.created_at,
+        "updated_at": profile.updated_at,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Application cycle repository (end-to-end-career-application-loop, Section 2)
+# ---------------------------------------------------------------------------
+
+
+class InMemoryApplicationCycleRepository:
+    """In-memory application-cycle store mirroring
+    :class:`careerops.infrastructure.database.postgres_application_cycle_repo.PostgresApplicationCycleRepository`.
+
+    Enforces one active cycle per (candidate, canonical_job) in memory. Re-
+    application closes the prior active cycle and opens a new one linked via
+    ``prior_cycle_id``, preserving full history.
+    """
+
+    def __init__(self) -> None:
+        self._cycles: dict[UUID, ApplicationCycle] = {}
+
+    def get_active_for(self, candidate_id: UUID, canonical_job_id: UUID) -> ApplicationCycle | None:
+        for cycle in self._cycles.values():
+            if (
+                cycle.candidate_id == candidate_id
+                and cycle.canonical_job_id == canonical_job_id
+                and cycle.active
+            ):
+                return cycle
+        return None
+
+    def get_by_id(self, candidate_id: UUID, cycle_id: UUID) -> ApplicationCycle:
+        cycle = self._cycles.get(cycle_id)
+        if cycle is None or cycle.candidate_id != candidate_id:
+            raise NotFoundError("application cycle not found for candidate")
+        return cycle
+
+    def list_history(
+        self,
+        candidate_id: UUID,
+        canonical_job_id: UUID,
+        *,
+        limit: int = 50,
+    ) -> list[ApplicationCycle]:
+        items = [
+            c
+            for c in self._cycles.values()
+            if c.candidate_id == candidate_id and c.canonical_job_id == canonical_job_id
+        ]
+        items.sort(
+            key=lambda c: c.created_at or datetime.min.replace(tzinfo=UTC),
+            reverse=True,
+        )
+        return items[:limit]
+
+    def get_or_create_active(
+        self,
+        candidate_id: UUID,
+        canonical_job_id: UUID,
+        *,
+        cycle_id: UUID,
+        reason: str = "",
+        now: datetime | None = None,
+    ) -> ApplicationCycle:
+        existing = self.get_active_for(candidate_id, canonical_job_id)
+        if existing is not None:
+            return existing
+        created_at = now or datetime.now(UTC)
+        cycle = ApplicationCycle(
+            id=cycle_id,
+            candidate_id=candidate_id,
+            canonical_job_id=canonical_job_id,
+            active=True,
+            prior_cycle_id=None,
+            reason=reason,
+            created_at=created_at,
+            closed_at=None,
+        )
+        self._cycles[cycle_id] = cycle
+        return cycle
+
+    def open_reapplication_cycle(
+        self,
+        candidate_id: UUID,
+        canonical_job_id: UUID,
+        *,
+        new_cycle_id: UUID,
+        reason: str = "",
+        now: datetime | None = None,
+    ) -> ApplicationCycle:
+        prior = self.get_active_for(candidate_id, canonical_job_id)
+        if prior is None:
+            raise NotFoundError("no active application cycle to reapply from")
+        closed_at = now or datetime.now(UTC)
+        # Close prior
+        self._cycles[prior.id] = ApplicationCycle(
+            id=prior.id,
+            candidate_id=prior.candidate_id,
+            canonical_job_id=prior.canonical_job_id,
+            active=False,
+            prior_cycle_id=prior.prior_cycle_id,
+            reason=prior.reason,
+            created_at=prior.created_at,
+            closed_at=closed_at,
+        )
+        # Open new linked cycle
+        new_cycle = ApplicationCycle(
+            id=new_cycle_id,
+            candidate_id=candidate_id,
+            canonical_job_id=canonical_job_id,
+            active=True,
+            prior_cycle_id=prior.id,
+            reason=reason,
+            created_at=closed_at,
+            closed_at=None,
+        )
+        self._cycles[new_cycle_id] = new_cycle
+        return new_cycle
+
+
+# ---------------------------------------------------------------------------
+# Evidence repository (resume-derived lifecycle)
+# ---------------------------------------------------------------------------
+
+
+class InMemoryEvidenceRepository:
+    """In-memory evidence lifecycle store mirroring
+    :class:`careerops.infrastructure.database.postgres_evidence_repo.PostgresEvidenceRepository`.
+
+    Stores resume-derived evidence with source_span / extractor_version /
+    confirmation_status / evidence_hash / resume_version_id. Confirm/reject
+    only flips confirmation_status — evidence rows are never deleted, so the
+    created_at-ordered sequence IS the append-only audit trail.
+    """
+
+    def __init__(self) -> None:
+        self._items: dict[UUID, EvidenceItem] = {}
+
+    def get_by_id(self, candidate_id: UUID, evidence_id: UUID) -> EvidenceItem:
+        item = self._items.get(evidence_id)
+        if item is None or item.candidate_id != candidate_id:
+            raise NotFoundError("evidence item not found for candidate")
+        return item
+
+    def list_for_candidate(self, candidate_id: UUID, *, limit: int = 200) -> list[EvidenceItem]:
+        items = [i for i in self._items.values() if i.candidate_id == candidate_id]
+        items.sort(
+            key=lambda i: i.created_at or datetime.min.replace(tzinfo=UTC),
+            reverse=True,
+        )
+        return items[:limit]
+
+    def list_confirmed_for(self, candidate_id: UUID, *, limit: int = 200) -> list[EvidenceItem]:
+        confirmed = [
+            i
+            for i in self._items.values()
+            if i.candidate_id == candidate_id
+            and i.confirmation_status == ConfirmationStatus.CONFIRMED
+        ]
+        confirmed.sort(
+            key=lambda i: i.created_at or datetime.min.replace(tzinfo=UTC),
+            reverse=True,
+        )
+        return confirmed[:limit]
+
+    def find_by_evidence_hash(self, candidate_id: UUID, evidence_hash: str) -> EvidenceItem | None:
+        if not evidence_hash:
+            return None
+        for item in self._items.values():
+            if item.candidate_id == candidate_id and item.evidence_hash == evidence_hash:
+                return item
+        return None
+
+    def store(self, item: EvidenceItem) -> EvidenceItem:
+        # Idempotency on the repository-derived key: if a row with the same
+        # (candidate_id, repository, commit_sha, path, symbol, content_hash)
+        # already exists, keep the existing row (mirrors the DB partial key).
+        existing = self._find_by_repo_key(item)
+        if existing is not None:
+            return existing
+        self._items[item.id] = item
+        return item
+
+    def confirm(
+        self,
+        candidate_id: UUID,
+        evidence_id: UUID,
+        *,
+        now: datetime | None = None,
+    ) -> EvidenceItem:
+        return self._set_confirmation(candidate_id, evidence_id, ConfirmationStatus.CONFIRMED)
+
+    def reject(
+        self,
+        candidate_id: UUID,
+        evidence_id: UUID,
+        *,
+        now: datetime | None = None,
+    ) -> EvidenceItem:
+        return self._set_confirmation(candidate_id, evidence_id, ConfirmationStatus.REJECTED)
+
+    def _find_by_repo_key(self, item: EvidenceItem) -> EvidenceItem | None:
+        for existing in self._items.values():
+            if (
+                existing.candidate_id == item.candidate_id
+                and existing.repository == item.repository
+                and existing.commit_sha == item.commit_sha
+                and existing.path == item.path
+                and existing.symbol == item.symbol
+                and existing.content_hash == item.content_hash
+            ):
+                return existing
+        return None
+
+    def _set_confirmation(
+        self,
+        candidate_id: UUID,
+        evidence_id: UUID,
+        status: ConfirmationStatus,
+    ) -> EvidenceItem:
+        existing = self.get_by_id(candidate_id, evidence_id)
+        if existing.confirmation_status is status:
+            return existing
+        updated = EvidenceItem(
+            id=existing.id,
+            candidate_id=existing.candidate_id,
+            kind=existing.kind,
+            name=existing.name,
+            description=existing.description,
+            repository=existing.repository,
+            commit_sha=existing.commit_sha,
+            path=existing.path,
+            symbol=existing.symbol,
+            content_hash=existing.content_hash,
+            source_url=existing.source_url,
+            verified=existing.verified,
+            extractor_version=existing.extractor_version,
+            source_span=existing.source_span,
+            confirmation_status=status,
+            evidence_hash=existing.evidence_hash,
+            resume_version_id=existing.resume_version_id,
+            created_at=existing.created_at,
+        )
+        self._items[evidence_id] = updated
+        return updated
 
 
 # ---------------------------------------------------------------------------

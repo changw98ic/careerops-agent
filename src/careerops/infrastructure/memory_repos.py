@@ -628,6 +628,15 @@ class InMemoryApplicationRepository:
         eligible.sort(key=lambda r: r.version_number, reverse=True)
         return eligible[:limit]
 
+    def list_resumes(self, candidate_id: UUID, *, limit: int = 50) -> list[ResumeVersion]:
+        """All resume versions for the candidate, newest version_number first.
+
+        Additive read (Section 3 task 3.3) mirroring the Postgres repo.
+        """
+        items = [r for r in self._resumes.values() if r.candidate_id == candidate_id]
+        items.sort(key=lambda r: r.version_number, reverse=True)
+        return items[:limit]
+
     # -- Package operations -------------------------------------------------
 
     def find_by_application(self, application_id: UUID) -> ApplicationPackage | None:

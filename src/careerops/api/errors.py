@@ -246,6 +246,25 @@ class ReconciliationRequiredError(CareerOpsHTTPException):
         super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
 
 
+class PayloadTooLargeError(CareerOpsHTTPException):
+    """Upload payload exceeded the configured size limit (HTTP 413).
+
+    Used by the early Content-Length guard in upload routes so an oversize
+    request is rejected BEFORE any byte is buffered into memory. The
+    post-read size validation in the service layer stays as defense-in-depth.
+    """
+
+    error_code = ErrorCode.PAYLOAD_TOO_LARGE
+    message_default = "Payload too large"
+
+    @classmethod
+    def _status_code(cls) -> int:
+        return HTTPStatus.REQUEST_ENTITY_TOO_LARGE
+
+    def __init__(self, message: str = "", **kwargs: object) -> None:
+        super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
+
+
 # ---------------------------------------------------------------------------
 # Internal mapping for generic HTTPException fallback
 # ---------------------------------------------------------------------------

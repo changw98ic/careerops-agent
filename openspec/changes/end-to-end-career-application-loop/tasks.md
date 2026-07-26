@@ -24,15 +24,15 @@
 
 ## 3. Career profile, resume, and evidence services
 
-- [ ] 3.1 Implement profile create/update/read services that create immutable versions and activate only validated versions.
-- [ ] 3.2 Add profile API routes scoped to the authenticated user's candidate and reject client-supplied candidate substitution.
-- [ ] 3.3 Add resume registration with content-addressed storage, media/size validation, duplicate hash handling, and immutable version creation.
-- [ ] 3.4 Connect deterministic resume parsing to parse-status persistence and expose parse errors without persisting unsupported raw artifacts.
-- [ ] 3.5 Implement evidence extraction records with bounded source spans, extractor version, and confirmed/unconfirmed state.
-- [ ] 3.6 Add evidence confirmation/rejection endpoints with idempotency and append-only audit events.
-- [ ] 3.7 Add model-input minimization for optional tailoring so only selected candidate evidence and minimum job text can leave the local boundary.
-- [ ] 3.8 Add unit and security tests for unsupported claims, duplicate resumes, expired content, model-disabled operation, and forbidden egress markers.
-- [ ] 3.9 Add frontend views for profile preferences, resume versions, parse status, evidence review, and active-version selection with empty/error states.
+- [x] 3.1 Implement profile create/update/read services that create immutable versions and activate only validated versions.
+- [x] 3.2 Add profile API routes scoped to the authenticated user's candidate and reject client-supplied candidate substitution.
+- [x] 3.3 Add resume registration with content-addressed storage, media/size validation, duplicate hash handling, and immutable version creation.
+- [x] 3.4 Connect deterministic resume parsing to parse-status persistence and expose parse errors without persisting unsupported raw artifacts.
+- [x] 3.5 Implement evidence extraction records with bounded source spans, extractor version, and confirmed/unconfirmed state.
+- [x] 3.6 Add evidence confirmation/rejection endpoints with idempotency and append-only audit events.
+- [x] 3.7 Add model-input minimization for optional tailoring so only selected candidate evidence and minimum job text can leave the local boundary.
+- [x] 3.8 Add unit and security tests for unsupported claims, duplicate resumes, expired content, model-disabled operation, and forbidden egress markers.
+- [x] 3.9 Add frontend views for profile preferences, resume versions, parse status, evidence review, and active-version selection with empty/error states.
 
 ## 4. Crawl sources and user-managed plans
 

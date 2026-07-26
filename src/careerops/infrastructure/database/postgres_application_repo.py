@@ -387,6 +387,23 @@ class PostgresApplicationRepository:
             rows = conn.execute(stmt).mappings().all()
         return [_row_to_resume(row) for row in rows]
 
+    def list_resumes(self, candidate_id: UUID, *, limit: int = 50) -> list[ResumeVersion]:
+        """Return all resume versions for the candidate, newest version_number first.
+
+        Additive read (Section 3 task 3.3) consumed by the resume service's
+        history view; scoped by the server-resolved ``candidate_id`` like every
+        other resume read.
+        """
+        stmt = (
+            sa.select(resume_versions)
+            .where(resume_versions.c.candidate_id == candidate_id)
+            .order_by(resume_versions.c.version_number.desc())
+            .limit(limit)
+        )
+        with self._engine.begin() as conn:
+            rows = conn.execute(stmt).mappings().all()
+        return [_row_to_resume(row) for row in rows]
+
     # -- PackageRepository protocol ----------------------------------------
 
     def find_by_application(self, application_id: UUID) -> ApplicationPackage | None:

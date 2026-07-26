@@ -13,10 +13,13 @@ from careerops.api.errors import install_error_handlers
 from careerops.api.metrics_middleware import MetricsMiddleware
 from careerops.api.middleware import RequestIdMiddleware
 from careerops.api.routes.applications import router as applications_router
+from careerops.api.routes.evidence import router as evidence_router
 from careerops.api.routes.health import router as health_router
 from careerops.api.routes.jobs import router as jobs_router
 from careerops.api.routes.matching import router as matching_router
 from careerops.api.routes.metrics import router as metrics_router
+from careerops.api.routes.profile import router as profile_router
+from careerops.api.routes.resumes import router as resumes_router
 from careerops.api.routes.review import install_review_endpoint
 from careerops.application.dashboard import DashboardSnapshotProvider
 from careerops.application.ports.readiness import ReadinessProbe
@@ -144,10 +147,16 @@ def create_app(
     if isinstance(probe, RuntimeResources):
         from careerops.application.applications import ApplicationService
         from careerops.application.contacts import ContactService
+        from careerops.application.evidence_service import (
+            EvidenceService,
+            LoggingEvidenceAuditSink,
+        )
         from careerops.application.matching import (
             EvidenceImportService,
             MatchOrchestrator,
         )
+        from careerops.application.profile_service import ProfileService
+        from careerops.application.resume_service import ResumeService
 
         app.state.matching_repository = probe.matching_read_repo
         app.state.evidence_import_service = EvidenceImportService(probe.matching_read_repo)
@@ -173,6 +182,24 @@ def create_app(
         app.state.evidence_repository = probe.evidence_repo
         app.state.application_cycle_repository = probe.application_cycle_repo
         app.state.capability_resolver = probe.capability_resolver
+        # Section-3 application services (tasks 3.1 / 3.3 / 3.6). Each wraps a
+        # Section-2 repository; routes pull them through ``require_repository``
+        # so a missing service surfaces as 503 rather than a silent empty
+        # response. The resume service reuses the content-addressed store on
+        # the runtime (``probe.storage``) and the per-candidate byte cap from
+        # settings. The evidence service gets a structured-log audit sink by
+        # default; a durable Postgres sink can be wired in a later stage
+        # without changing the service contract.
+        app.state.profile_service = ProfileService(probe.profile_repo)
+        app.state.resume_service = ResumeService(
+            probe.application_repo,
+            probe.evidence_repo,
+            probe.storage,
+            max_bytes=resolved.storage_max_object_bytes,
+        )
+        app.state.evidence_service = EvidenceService(
+            probe.evidence_repo, audit_sink=LoggingEvidenceAuditSink()
+        )
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(MetricsMiddleware, metrics=metrics)
     install_error_handlers(app)
@@ -204,6 +231,12 @@ def create_app(
     app.include_router(jobs_router, dependencies=[Depends(require_api_auth)])
     app.include_router(matching_router, dependencies=[Depends(require_api_auth)])
     app.include_router(applications_router, dependencies=[Depends(require_api_auth)])
+    # Section-3 additive routers (profile / resumes / evidence). Same auth
+    # guard as the existing v1 routers; candidate ownership is resolved
+    # server-side inside each handler via ``require_candidate_id``.
+    app.include_router(profile_router, dependencies=[Depends(require_api_auth)])
+    app.include_router(resumes_router, dependencies=[Depends(require_api_auth)])
+    app.include_router(evidence_router, dependencies=[Depends(require_api_auth)])
 
     # Check if Vue SPA is enabled; if so, skip old Jinja2 UI routes.
     if not serve_spa:

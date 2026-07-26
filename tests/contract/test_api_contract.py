@@ -157,8 +157,9 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
     # Declared route set covers health + jobs + matching + applications + auth
     # (SPA session flow: preauth/session/me/login/bootstrap/logout) + email
     # drafting (email-draft/send-email) added by the e2e-career-application-loop
-    # change. ErrorResponse business codes are validated separately by the
-    # Phase 0 contract freeze tests.
+    # change, plus the Section-3 additive profile/resumes/evidence routers.
+    # ErrorResponse business codes are validated separately by the Phase 0
+    # contract freeze tests.
     assert set(response.json()["paths"]) == {
         "/api/v1/auth/login",
         "/api/v1/auth/logout",
@@ -189,6 +190,20 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
         "/api/v1/resume-versions",
         "/api/v1/application-packages",
         "/api/v1/follow-ups",
+        # Section-3 additive routers (career-profile-and-resume spec).
+        "/api/v1/profile",
+        "/api/v1/profile/versions",
+        "/api/v1/profile/versions/{version_id}",
+        "/api/v1/profile/versions/{version_id}/activate",
+        "/api/v1/resumes",
+        "/api/v1/resumes/eligible",
+        "/api/v1/resumes/{version_id}",
+        "/api/v1/resumes/{version_id}/confirm",
+        "/api/v1/resumes/{version_id}/evidence",
+        "/api/v1/evidence",
+        "/api/v1/evidence/{evidence_id}",
+        "/api/v1/evidence/{evidence_id}/confirm",
+        "/api/v1/evidence/{evidence_id}/reject",
     }
 
 

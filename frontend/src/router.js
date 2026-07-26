@@ -7,6 +7,9 @@ const Jobs = () => import('./views/Jobs.vue')
 const JobDetail = () => import('./views/JobDetail.vue')
 const Companies = () => import('./views/Companies.vue')
 const Applications = () => import('./views/Applications.vue')
+const Profile = () => import('./views/Profile.vue')
+const Resumes = () => import('./views/Resumes.vue')
+const Evidence = () => import('./views/Evidence.vue')
 const NotFound = () => import('./views/NotFound.vue')
 
 const routes = [
@@ -17,6 +20,9 @@ const routes = [
   { path: '/jobs/:id', name: 'job-detail', component: JobDetail, meta: { auth: true } },
   { path: '/companies', name: 'companies', component: Companies, meta: { auth: true } },
   { path: '/applications', name: 'applications', component: Applications, meta: { auth: true } },
+  { path: '/profile', name: 'profile', component: Profile, meta: { auth: true } },
+  { path: '/resumes', name: 'resumes', component: Resumes, meta: { auth: true } },
+  { path: '/evidence', name: 'evidence', component: Evidence, meta: { auth: true } },
   { path: '/bootstrap', name: 'bootstrap', component: () => import('./views/Bootstrap.vue') },
   { path: '/404', name: 'not-found', component: NotFound },
   { path: '/:pathMatch(.*)*', name: 'catch-all', redirect: '/404' },

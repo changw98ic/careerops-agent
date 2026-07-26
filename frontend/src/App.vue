@@ -39,6 +39,18 @@
           <template #icon><FileTextOutlined /></template>
           Applications
         </a-menu-item>
+        <a-menu-item key="profile">
+          <template #icon><SolutionOutlined /></template>
+          Profile
+        </a-menu-item>
+        <a-menu-item key="resumes">
+          <template #icon><FileTextOutlined /></template>
+          Resumes
+        </a-menu-item>
+        <a-menu-item key="evidence">
+          <template #icon><AuditOutlined /></template>
+          Evidence
+        </a-menu-item>
       </a-menu>
 
       <div v-if="isMobile || !collapsed" class="sider-footer">
@@ -78,6 +90,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
+  AuditOutlined,
   BankOutlined,
   DashboardOutlined,
   FileTextOutlined,
@@ -85,6 +98,7 @@ import {
   LogoutOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  SolutionOutlined,
   UserOutlined,
 } from '@ant-design/icons-vue'
 import { status, user, checkSession, logout as sessionLogout } from './stores/session.js'
@@ -151,6 +165,9 @@ const pageTitle = computed(() => {
     'job-detail': 'Job detail',
     companies: 'Companies',
     applications: 'Applications',
+    profile: 'Profile',
+    resumes: 'Resumes',
+    evidence: 'Evidence',
   }
   return titles[String(route.name)] || 'CareerOps'
 })

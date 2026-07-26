@@ -4,11 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-
 from careerops.api.app import create_app
-from careerops.auth.service import ConsoleAuthService
 
 
 def _openapi(auth_service: MagicMock | None = None) -> dict:
@@ -67,6 +63,12 @@ class TestOpenApiErrorResponses:
             "FORBIDDEN",
             "METHOD_NOT_ALLOWED",
             "INTERNAL_ERROR",
+            "INVALID_STATE",
+            "STALE_PAYLOAD",
+            "UNAVAILABLE_DEPENDENCY",
+            "DENIED_POLICY",
+            "UNRESOLVED_EMAIL_LINK",
+            "RECONCILIATION_REQUIRED",
         }
         assert set(code_enum) == expected_codes
 
@@ -75,7 +77,9 @@ class TestOpenApiErrorResponses:
         paths = schema.get("paths", {})
         first_path = next(iter(paths))
         first_method = next(
-            m for m in paths[first_path] if m not in ("parameters", "summary", "description", "servers")
+            m
+            for m in paths[first_path]
+            if m not in ("parameters", "summary", "description", "servers")
         )
         resp_401 = paths[first_path][first_method]["responses"]["401"]
         content = resp_401["content"]["application/json"]
@@ -88,7 +92,9 @@ class TestOpenApiErrorResponses:
         paths = schema.get("paths", {})
         first_path = next(iter(paths))
         first_method = next(
-            m for m in paths[first_path] if m not in ("parameters", "summary", "description", "servers")
+            m
+            for m in paths[first_path]
+            if m not in ("parameters", "summary", "description", "servers")
         )
         resp_429 = paths[first_path][first_method]["responses"]["429"]
         content = resp_429["content"]["application/json"]
@@ -101,7 +107,9 @@ class TestOpenApiErrorResponses:
         paths = schema.get("paths", {})
         first_path = next(iter(paths))
         first_method = next(
-            m for m in paths[first_path] if m not in ("parameters", "summary", "description", "servers")
+            m
+            for m in paths[first_path]
+            if m not in ("parameters", "summary", "description", "servers")
         )
         resp_503 = paths[first_path][first_method]["responses"]["503"]
         content = resp_503["content"]["application/json"]

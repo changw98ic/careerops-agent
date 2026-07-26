@@ -1062,15 +1062,20 @@ class TestJobsApiRoutes:
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
+        from careerops.api.errors import install_error_handlers
         from careerops.api.routes.jobs import router
 
         app = FastAPI()
         app.include_router(router)
+        # Install the standard error handlers so the dependency-not-ready path
+        # produces the canonical ErrorResponse envelope (Phase 0 contract).
+        install_error_handlers(app)
         client = TestClient(app)
         response = client.get("/api/v1/jobs/nonexistent")
         assert response.status_code == 503
         data = response.json()
-        assert data["error"] == "not_available"
+        assert data["error"]["code"] == "DEPENDENCY_NOT_READY"
+        assert data["error"]["retryable"] is True
 
     def test_list_companies_with_repo(self) -> None:
         from fastapi import FastAPI

@@ -161,7 +161,10 @@ class TestListPaginationStability:
         app = _app(repo)
         TestClient(app).get("/api/v1/jobs?cursor=abc&limit=10")
         repo.list_canonical_jobs.assert_called_once_with(
-            cursor="abc", limit=10, state=None, q=None,
+            cursor="abc",
+            limit=10,
+            state=None,
+            q=None,
         )
 
     def test_state_filter_forwarded_to_repository(self) -> None:
@@ -170,7 +173,10 @@ class TestListPaginationStability:
         app = _app(repo)
         TestClient(app).get("/api/v1/jobs?state=active&q=engineer")
         repo.list_canonical_jobs.assert_called_once_with(
-            cursor=None, limit=50, state="active", q="engineer",
+            cursor=None,
+            limit=50,
+            state="active",
+            q="engineer",
         )
 
     def test_cache_control_header_is_no_store(self) -> None:

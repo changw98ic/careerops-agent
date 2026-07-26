@@ -42,7 +42,8 @@ def re_crawl() -> None:
     lever_adapter = LeverAdapter()
 
     with engine.connect() as conn:
-        rows = conn.execute(text("""
+        rows = conn.execute(
+            text("""
             SELECT DISTINCT ON (jpv.job_posting_id)
                    jpv.id, jpv.job_posting_id, jpv.source_url, jpv.structured_data,
                    jp.external_id, js.source_type, js.source_identifier
@@ -50,7 +51,8 @@ def re_crawl() -> None:
             JOIN job_postings jp ON jp.id = jpv.job_posting_id
             JOIN job_sources js ON js.id = jp.source_id
             ORDER BY jpv.job_posting_id, jpv.captured_at DESC
-        """)).fetchall()
+        """)
+        ).fetchall()
 
     print(f"Found {len(rows)} posting versions to check")
 
@@ -59,7 +61,6 @@ def re_crawl() -> None:
     errors = 0
 
     for row in rows:
-        version_id = row[0]
         posting_id = row[1]
         source_url = row[2]
         structured_data = row[3] if isinstance(row[3], dict) else json.loads(row[3])
@@ -84,10 +85,16 @@ def re_crawl() -> None:
         try:
             if source_type == "greenhouse":
                 base = source_url.rstrip("/")
-                detail_url = f"{base}/{external_id}" if base.endswith("/jobs") else f"{base}/jobs/{external_id}"
+                detail_url = (
+                    f"{base}/{external_id}"
+                    if base.endswith("/jobs")
+                    else f"{base}/jobs/{external_id}"
+                )
                 resp = fetch(detail_url)
                 data = json.loads(resp.body)
-                record = gh_detail.fetch_job(data, source_url=detail_url, fetched_at=resp.fetched_at)
+                record = gh_detail.fetch_job(
+                    data, source_url=detail_url, fetched_at=resp.fetched_at
+                )
                 if needs_desc and record.description:
                     new_desc = record.description
                 if needs_url and record.url:
@@ -128,25 +135,31 @@ def re_crawl() -> None:
                 now = datetime.now(tz=UTC)
 
                 with engine.begin() as update_conn:
-                    update_conn.execute(sa.text("""
+                    update_conn.execute(
+                        sa.text("""
                         INSERT INTO job_posting_versions
                             (id, job_posting_id, content_hash, source_url, parser_version,
                              structured_data, changed_fields, captured_at)
                         VALUES (:id, :posting_id, :hash, :source_url, :parser_version,
                                 :data, :changed, :captured)
                         ON CONFLICT (job_posting_id, content_hash) DO NOTHING
-                    """), {
-                        "id": str(uuid.uuid4()),
-                        "posting_id": str(posting_id),
-                        "hash": new_hash,
-                        "source_url": source_url,
-                        "parser_version": "re-crawl-v1",
-                        "data": json.dumps(updated_data),
-                        "changed": json.dumps([]),
-                        "captured": now.isoformat(),
-                    })
+                    """),
+                        {
+                            "id": str(uuid.uuid4()),
+                            "posting_id": str(posting_id),
+                            "hash": new_hash,
+                            "source_url": source_url,
+                            "parser_version": "re-crawl-v1",
+                            "data": json.dumps(updated_data),
+                            "changed": json.dumps([]),
+                            "captured": now.isoformat(),
+                        },
+                    )
                 updated += 1
-                print(f"  ✅ {source_identifier}/{external_id}: desc={bool(new_desc)} url={bool(new_url)}")
+                print(
+                    f"  ✅ {source_identifier}/{external_id}: "
+                    f"desc={bool(new_desc)} url={bool(new_url)}"
+                )
             else:
                 skipped += 1
 

@@ -154,9 +154,18 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
 
     assert response.status_code == 200
     assert response.json()["info"]["title"] == "CareerOps API"
+    # Declared route set covers health + jobs + matching + applications + auth
+    # (SPA session flow: preauth/session/me/login/bootstrap/logout) + email
+    # drafting (email-draft/send-email) added by the e2e-career-application-loop
+    # change. ErrorResponse business codes are validated separately by the
+    # Phase 0 contract freeze tests.
     assert set(response.json()["paths"]) == {
         "/api/v1/auth/login",
         "/api/v1/auth/logout",
+        "/api/v1/auth/preauth",
+        "/api/v1/auth/bootstrap",
+        "/api/v1/auth/session",
+        "/api/v1/me",
         "/api/v1/health/live",
         "/api/v1/health/ready",
         "/api/v1/companies",
@@ -175,6 +184,8 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
         "/api/v1/applications/{application_id}/transition",
         "/api/v1/applications/{application_id}/submit",
         "/api/v1/applications/{application_id}/events",
+        "/api/v1/applications/{application_id}/email-draft",
+        "/api/v1/applications/{application_id}/send-email",
         "/api/v1/resume-versions",
         "/api/v1/application-packages",
         "/api/v1/follow-ups",

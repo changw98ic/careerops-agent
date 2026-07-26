@@ -198,7 +198,9 @@ class LeverAdapter:
                 location = str(categories.get("location", ""))
             # applyUrl is the direct application link
             url = str(job.get("applyUrl", "") or job.get("hostedUrl", ""))
-            description = html.unescape(str(job.get("descriptionPlain", "") or job.get("description", "")))
+            description = html.unescape(
+                str(job.get("descriptionPlain", "") or job.get("description", ""))
+            )
             records.append(
                 RawJobRecord(
                     external_id=ext_id,
@@ -242,11 +244,13 @@ class AshbyAdapter:
             location = str(job.get("location", ""))
             # applyUrl is the direct application link; jobUrl is the board page
             url = str(job.get("applyUrl", "") or job.get("jobUrl", "") or job.get("url", ""))
-            description = html.unescape(str(
-                job.get("descriptionPlain", "")
-                or job.get("descriptionHtml", "")
-                or job.get("description", "")
-            ))
+            description = html.unescape(
+                str(
+                    job.get("descriptionPlain", "")
+                    or job.get("descriptionHtml", "")
+                    or job.get("description", "")
+                )
+            )
             records.append(
                 RawJobRecord(
                     external_id=ext_id,

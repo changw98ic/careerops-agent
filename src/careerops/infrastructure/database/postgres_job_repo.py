@@ -9,10 +9,10 @@ Implements the same interface as ``InMemoryJobReadRepository`` using the
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import Engine, and_, func, or_, select
+from sqlalchemy import ColumnElement, Engine, and_, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from careerops.domain.jobs import (
@@ -43,14 +43,14 @@ def _uuid(val: Any) -> UUID:
 def _encode_cursor(created_at: datetime, row_id: UUID) -> str:
     """Encode (created_at, id) into an opaque cursor string."""
     import base64
-    return base64.urlsafe_b64encode(
-        f"{created_at.isoformat()}|{row_id}".encode()
-    ).decode()
+
+    return base64.urlsafe_b64encode(f"{created_at.isoformat()}|{row_id}".encode()).decode()
 
 
 def _decode_cursor(cursor: str) -> tuple[datetime, UUID]:
     """Decode an opaque cursor back to (created_at, id)."""
     import base64
+
     decoded = base64.urlsafe_b64decode(cursor.encode()).decode()
     ts_str, id_str = decoded.rsplit("|", 1)
     return datetime.fromisoformat(ts_str), UUID(id_str)
@@ -141,20 +141,14 @@ class PostgresJobReadRepository:
                 )
             )
 
-    def list_companies(
-        self, *, cursor: str | None = None, limit: int = 50
-    ) -> dict[str, object]:
+    def list_companies(self, *, cursor: str | None = None, limit: int = 50) -> dict[str, object]:
         with self._engine.begin() as conn:
             # Total count (unfiltered).
-            total = conn.execute(
-                select(func.count()).select_from(companies)
-            ).scalar_one()
+            total = conn.execute(select(func.count()).select_from(companies)).scalar_one()
 
             # Fetch limit+1 to detect has_more.
             stmt = (
-                select(companies)
-                .order_by(companies.c.created_at, companies.c.id)
-                .limit(limit + 1)
+                select(companies).order_by(companies.c.created_at, companies.c.id).limit(limit + 1)
             )
             if cursor is not None:
                 cur_created, cur_id = _decode_cursor(cursor)
@@ -198,7 +192,7 @@ class PostgresJobReadRepository:
     ) -> dict[str, object]:
         with self._engine.begin() as conn:
             # Build base filter conditions.
-            filters = []
+            filters: list[ColumnElement[bool]] = []
             if state is not None:
                 filters.append(canonical_jobs.c.aggregate_state == state)
             if q is not None and q.strip():
@@ -234,9 +228,7 @@ class PostgresJobReadRepository:
 
         has_more = len(rows) > limit
         rows = rows[:limit]
-        next_cursor = (
-            _encode_cursor(rows[-1]["created_at"], rows[-1]["id"]) if has_more else None
-        )
+        next_cursor = _encode_cursor(rows[-1]["created_at"], rows[-1]["id"]) if has_more else None
 
         # Batch-fetch postings and latest versions for all listed jobs.
         job_ids = [row["id"] for row in rows]
@@ -270,7 +262,7 @@ class PostgresJobReadRepository:
                 )
                 for r in posting_rows:
                     cjid = r["canonical_job_id"]
-                    postings_by_job.setdefault(cjid, []).append(r)
+                    postings_by_job.setdefault(cjid, []).append(cast("dict[str, object]", r))
 
                 # Fetch latest version per posting to get apply_url.
                 posting_ids = [r["id"] for r in posting_rows]
@@ -296,7 +288,7 @@ class PostgresJobReadRepository:
                         if pid in seen_postings:
                             continue
                         seen_postings.add(pid)
-                        sd = vr["structured_data"] or {}
+                        sd: dict[str, Any] = vr["structured_data"] or {}
                         url = sd.get("apply_url", "")
                         if url:
                             # Find which canonical job this posting belongs to
@@ -392,9 +384,7 @@ class PostgresJobReadRepository:
                 version_rows = list(
                     conn.execute(
                         select(job_posting_versions)
-                        .where(
-                            job_posting_versions.c.job_posting_id.in_(posting_ids)
-                        )
+                        .where(job_posting_versions.c.job_posting_id.in_(posting_ids))
                         .order_by(job_posting_versions.c.captured_at.desc())
                     )
                     .mappings()
@@ -413,7 +403,7 @@ class PostgresJobReadRepository:
         # Compute current apply URL from latest version's structured_data.
         current_apply_url = ""
         if version_rows:
-            sd = version_rows[0].get("structured_data") or {}
+            sd: dict[str, Any] = version_rows[0].get("structured_data") or {}
             current_apply_url = sd.get("apply_url", "")
 
         # Aggregate source statuses.

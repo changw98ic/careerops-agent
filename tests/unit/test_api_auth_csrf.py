@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Annotated
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -32,14 +33,14 @@ def _app_with_auth(auth_service: MagicMock) -> FastAPI:
     # Web route (GET, no CSRF)
     @app.get("/api/v1/auth/session")
     async def web_endpoint(
-        principal: AuthenticatedPrincipal | None = Depends(require_web_auth),
+        principal: Annotated[AuthenticatedPrincipal | None, Depends(require_web_auth)] = None,
     ) -> dict[str, bool]:
         return {"authenticated": principal is not None}
 
     # API route (POST, requires CSRF)
     @app.post("/api/v1/test-mutation")
     async def api_endpoint(
-        principal: AuthenticatedPrincipal | None = Depends(require_api_auth),
+        principal: Annotated[AuthenticatedPrincipal | None, Depends(require_api_auth)] = None,
     ) -> dict[str, bool]:
         return {"ok": True}
 
@@ -47,7 +48,7 @@ def _app_with_auth(auth_service: MagicMock) -> FastAPI:
     @app.put("/api/v1/test-mutation/{id}")
     async def api_put(
         id: str,
-        principal: AuthenticatedPrincipal | None = Depends(require_api_auth),
+        principal: Annotated[AuthenticatedPrincipal | None, Depends(require_api_auth)] = None,
     ) -> dict[str, bool]:
         return {"ok": True}
 
@@ -55,7 +56,7 @@ def _app_with_auth(auth_service: MagicMock) -> FastAPI:
     @app.delete("/api/v1/test-mutation/{id}")
     async def api_delete(
         id: str,
-        principal: AuthenticatedPrincipal | None = Depends(require_api_auth),
+        principal: Annotated[AuthenticatedPrincipal | None, Depends(require_api_auth)] = None,
     ) -> dict[str, bool]:
         return {"ok": True}
 

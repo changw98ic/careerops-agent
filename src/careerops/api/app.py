@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import Any, cast
 from uuid import UUID
 
 from fastapi import Depends, FastAPI
@@ -237,6 +238,7 @@ def create_app(
             # API routes should not be caught by SPA fallback
             if full_path.startswith("api/"):
                 from fastapi import HTTPException
+
                 raise HTTPException(status_code=404, detail="Not found")
             # Serve the file if it exists, otherwise serve index.html for SPA routing.
             file_path = frontend_dist / full_path
@@ -292,7 +294,7 @@ _ERROR_RESPONSE_SCHEMAS: dict[str, dict[str, object]] = {
         },
     },
     "403": {
-        "description": "Forbidden — CSRF rejected, bootstrap closed, or profile required",
+        "description": "Forbidden — CSRF, bootstrap, profile requirement, or policy denial",
         "content": {
             "application/json": {
                 "schema": {"$ref": "#/components/schemas/ErrorResponse"},
@@ -327,6 +329,18 @@ _ERROR_RESPONSE_SCHEMAS: dict[str, dict[str, object]] = {
                             "error": {
                                 "code": "CANDIDATE_PROFILE_REQUIRED",
                                 "message": "Candidate profile is required",
+                                "retryable": False,
+                                "details": None,
+                                "trace_id": "abc123",
+                            }
+                        },
+                    },
+                    "denied_policy": {
+                        "summary": "DENIED_POLICY",
+                        "value": {
+                            "error": {
+                                "code": "DENIED_POLICY",
+                                "message": "Action denied by policy",
                                 "retryable": False,
                                 "details": None,
                                 "trace_id": "abc123",
@@ -463,6 +477,12 @@ def _install_openapi_error_responses(app: FastAPI) -> None:
                                     "FORBIDDEN",
                                     "METHOD_NOT_ALLOWED",
                                     "INTERNAL_ERROR",
+                                    "INVALID_STATE",
+                                    "STALE_PAYLOAD",
+                                    "UNAVAILABLE_DEPENDENCY",
+                                    "DENIED_POLICY",
+                                    "UNRESOLVED_EMAIL_LINK",
+                                    "RECONCILIATION_REQUIRED",
                                 ],
                             },
                             "message": {"type": "string"},
@@ -475,13 +495,10 @@ def _install_openapi_error_responses(app: FastAPI) -> None:
             }
 
         # Inject error responses into every path/operation
-        for _path, methods in schema.get("paths", {}).items():  # type: ignore[union-attr]
-            if not isinstance(methods, dict):
-                continue
+        paths = cast("dict[str, dict[str, dict[str, Any]]]", schema.get("paths", {}))
+        for _path, methods in paths.items():
             for method, operation in methods.items():
                 if method in ("parameters", "summary", "description", "servers"):
-                    continue
-                if not isinstance(operation, dict):
                     continue
                 responses = operation.setdefault("responses", {})
                 for status, response_def in _ERROR_RESPONSE_SCHEMAS.items():

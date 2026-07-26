@@ -9,7 +9,8 @@ integration testing.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
+from typing import cast
 from uuid import UUID
 
 from careerops.domain.applications import (
@@ -223,38 +224,37 @@ class InMemoryJobReadRepository:
             "terms_status": terms_status,
         }
 
-    def list_companies(
-        self, *, cursor: str | None = None, limit: int = 50
-    ) -> dict[str, object]:
-        from datetime import datetime, timezone
-        _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
+    def list_companies(self, *, cursor: str | None = None, limit: int = 50) -> dict[str, object]:
+        from datetime import datetime
+
+        _EPOCH = datetime.min.replace(tzinfo=UTC)
 
         def _sort_key(c: dict[str, object]) -> tuple[datetime, UUID]:
+            cid = cast("UUID", c["id"])
             ca = c.get("created_at")
             if ca is None:
-                return (_EPOCH, c["id"])
+                return (_EPOCH, cid)
             if isinstance(ca, str):
-                return (datetime.fromisoformat(ca), c["id"])
-            return (ca, c["id"])
+                return (datetime.fromisoformat(ca), cid)
+            return (cast("datetime", ca), cid)
 
         items = sorted(self._companies.values(), key=_sort_key)
         total = len(items)
         # Apply cursor filter.
         if cursor is not None:
             import base64
+
             decoded = base64.urlsafe_b64decode(cursor.encode()).decode()
             ts_str, id_str = decoded.rsplit("|", 1)
             cur_created = datetime.fromisoformat(ts_str)
             cur_id = UUID(id_str)
-            items = [
-                c for c in items
-                if _sort_key(c) > (cur_created, cur_id)
-            ]
+            items = [c for c in items if _sort_key(c) > (cur_created, cur_id)]
         has_more = len(items) > limit
         page = items[:limit]
         next_cursor = None
         if has_more and page:
             import base64
+
             last = page[-1]
             last_key = _sort_key(last)
             next_cursor = base64.urlsafe_b64encode(
@@ -272,8 +272,9 @@ class InMemoryJobReadRepository:
         state: str | None = None,
         q: str | None = None,
     ) -> dict[str, object]:
-        from datetime import datetime, timezone
-        _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
+        from datetime import datetime
+
+        _EPOCH = datetime.min.replace(tzinfo=UTC)
 
         def _sort_key(j: CanonicalJob) -> tuple[datetime, UUID]:
             return (j.created_at or _EPOCH, j.id)
@@ -289,19 +290,18 @@ class InMemoryJobReadRepository:
         # Apply cursor filter.
         if cursor is not None:
             import base64
+
             decoded = base64.urlsafe_b64decode(cursor.encode()).decode()
             ts_str, id_str = decoded.rsplit("|", 1)
             cur_created = datetime.fromisoformat(ts_str)
             cur_id = UUID(id_str)
-            jobs = [
-                j for j in jobs
-                if _sort_key(j) > (cur_created, cur_id)
-            ]
+            jobs = [j for j in jobs if _sort_key(j) > (cur_created, cur_id)]
         has_more = len(jobs) > limit
         page = jobs[:limit]
         next_cursor = None
         if has_more and page:
             import base64
+
             last = page[-1]
             last_key = _sort_key(last)
             next_cursor = base64.urlsafe_b64encode(
@@ -623,8 +623,9 @@ class InMemoryApplicationRepository:
         cursor: str | None = None,
         limit: int = 50,
     ) -> dict[str, object]:
-        from datetime import datetime, timezone
-        _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
+        from datetime import datetime
+
+        _EPOCH = datetime.min.replace(tzinfo=UTC)
 
         def _sort_key(a: Application) -> tuple[datetime, UUID]:
             return (a.created_at or _EPOCH, a.id)
@@ -641,19 +642,18 @@ class InMemoryApplicationRepository:
         # Apply cursor filter (descending: cursor < items).
         if cursor is not None:
             import base64
+
             decoded = base64.urlsafe_b64decode(cursor.encode()).decode()
             ts_str, id_str = decoded.rsplit("|", 1)
             cur_created = datetime.fromisoformat(ts_str)
             cur_id = UUID(id_str)
-            apps = [
-                a for a in apps
-                if _sort_key(a) < (cur_created, cur_id)
-            ]
+            apps = [a for a in apps if _sort_key(a) < (cur_created, cur_id)]
         has_more = len(apps) > limit
         page = apps[:limit]
         next_cursor = None
         if has_more and page:
             import base64
+
             last = page[-1]
             last_key = _sort_key(last)
             next_cursor = base64.urlsafe_b64encode(

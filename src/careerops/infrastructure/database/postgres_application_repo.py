@@ -12,25 +12,9 @@ from typing import Any
 from uuid import UUID
 
 import sqlalchemy as sa
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import ColumnElement, and_, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
-
-
-def _encode_cursor(created_at: datetime, row_id: UUID) -> str:
-    """Encode (created_at, id) into an opaque cursor string."""
-    import base64
-    return base64.urlsafe_b64encode(
-        f"{created_at.isoformat()}|{row_id}".encode()
-    ).decode()
-
-
-def _decode_cursor(cursor: str) -> tuple[datetime, UUID]:
-    """Decode an opaque cursor back to (created_at, id)."""
-    import base64
-    decoded = base64.urlsafe_b64decode(cursor.encode()).decode()
-    ts_str, id_str = decoded.rsplit("|", 1)
-    return datetime.fromisoformat(ts_str), UUID(id_str)
 
 from careerops.domain.applications import (
     Application,
@@ -52,6 +36,22 @@ from careerops.infrastructure.database.schema import (
     follow_up_reminders,
     resume_versions,
 )
+
+
+def _encode_cursor(created_at: datetime, row_id: UUID) -> str:
+    """Encode (created_at, id) into an opaque cursor string."""
+    import base64
+
+    return base64.urlsafe_b64encode(f"{created_at.isoformat()}|{row_id}".encode()).decode()
+
+
+def _decode_cursor(cursor: str) -> tuple[datetime, UUID]:
+    """Decode an opaque cursor back to (created_at, id)."""
+    import base64
+
+    decoded = base64.urlsafe_b64decode(cursor.encode()).decode()
+    ts_str, id_str = decoded.rsplit("|", 1)
+    return datetime.fromisoformat(ts_str), UUID(id_str)
 
 
 def _row_to_application(row: sa.RowMapping) -> Application:
@@ -368,7 +368,7 @@ class PostgresApplicationRepository:
         limit: int = 50,
     ) -> dict[str, object]:
         # Build filter conditions.
-        filters = []
+        filters: list[ColumnElement[bool]] = []
         if candidate_id is not None:
             filters.append(applications.c.candidate_id == UUID(candidate_id))
         if state is not None:
@@ -407,9 +407,7 @@ class PostgresApplicationRepository:
 
         has_more = len(rows) > limit
         rows = rows[:limit]
-        next_cursor = (
-            _encode_cursor(rows[-1]["created_at"], rows[-1]["id"]) if has_more else None
-        )
+        next_cursor = _encode_cursor(rows[-1]["created_at"], rows[-1]["id"]) if has_more else None
 
         return {
             "items": [

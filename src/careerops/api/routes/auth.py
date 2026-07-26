@@ -10,9 +10,7 @@ from pydantic import BaseModel
 from careerops.api.errors import (
     DependencyNotReadyError,
     InvalidCredentialsError,
-    error_response,
 )
-from careerops.api.contracts import ErrorCode
 
 router = APIRouter(tags=["auth"])
 

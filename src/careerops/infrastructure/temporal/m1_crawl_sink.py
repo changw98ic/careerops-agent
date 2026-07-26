@@ -17,6 +17,7 @@ import json
 from collections.abc import Callable
 from datetime import UTC, datetime
 from json import JSONDecodeError, loads
+from typing import Any
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
@@ -105,9 +106,7 @@ class RealCrawlActivitySink:
         # Greenhouse list API does not include the JD body.
         detail_cache: dict[str, str] = {}
         if request.source_type == "greenhouse":
-            detail_cache = self._fetch_greenhouse_details(
-                request.base_url, result.jobs
-            )
+            detail_cache = self._fetch_greenhouse_details(request.base_url, result.jobs)
 
         for record in result.jobs:
             # Flatten to dict[str, str] — Temporal JSON converter rejects

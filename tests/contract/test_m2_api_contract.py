@@ -90,18 +90,26 @@ class TestMatchesAPI:
 
 class TestRemoteEligibilityAPI:
     def test_remote_eligibility_returns_error_without_repository(self) -> None:
+        # When the matching repository is not wired, the route raises
+        # DependencyNotReadyError → 503 with the standard ErrorResponse envelope
+        # (Phase 0 contract: dependency-not-ready MUST use the error envelope).
         job_id = str(uuid4())
         response = make_client().get(f"/api/v1/jobs/{job_id}/remote-eligibility")
-        assert response.status_code == 200
-        assert response.json() == {"error": "not_available"}
+        assert response.status_code == 503
+        body = response.json()
+        assert body["error"]["code"] == "DEPENDENCY_NOT_READY"
+        assert body["error"]["retryable"] is True
 
 
 class TestCompensationAPI:
     def test_compensation_returns_error_without_repository(self) -> None:
+        # Same dependency-not-ready contract as remote-eligibility above.
         job_id = str(uuid4())
         response = make_client().get(f"/api/v1/jobs/{job_id}/compensation")
-        assert response.status_code == 200
-        assert response.json() == {"error": "not_available"}
+        assert response.status_code == 503
+        body = response.json()
+        assert body["error"]["code"] == "DEPENDENCY_NOT_READY"
+        assert body["error"]["retryable"] is True
 
 
 class TestMatchingUI:

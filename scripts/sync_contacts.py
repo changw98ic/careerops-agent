@@ -18,7 +18,6 @@ import json
 import re
 import sys
 import uuid
-from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -36,7 +35,8 @@ def sync_contacts() -> None:
 
     with engine.connect() as conn:
         # Get all latest job_posting_versions with their company_id
-        rows = conn.execute(text("""
+        rows = conn.execute(
+            text("""
             SELECT DISTINCT ON (jpv.job_posting_id)
                    jpv.job_posting_id,
                    jpv.structured_data,
@@ -48,7 +48,8 @@ def sync_contacts() -> None:
             JOIN careerops.job_sources js ON js.id = jp.source_id
             JOIN careerops.companies c ON c.id = js.company_id
             ORDER BY jpv.job_posting_id, jpv.captured_at DESC
-        """)).fetchall()
+        """)
+        ).fetchall()
 
     print(f"Found {len(rows)} latest job posting versions")
 
@@ -60,7 +61,6 @@ def sync_contacts() -> None:
     seen: set[tuple[str, str]] = set()  # (company_id, email)
 
     for row in rows:
-        posting_id = row[0]
         structured_data = row[1] if isinstance(row[1], dict) else json.loads(row[1])
         source_url = row[2]
         company_id = str(row[3])
@@ -120,7 +120,9 @@ def sync_contacts() -> None:
                             "publicly_listed": True,
                             "domain_match": True,
                             "confidence": "high",
-                            "allowed_actions": json.dumps(["display", "review", "draft_reply", "initiate_contact"]),
+                            "allowed_actions": json.dumps(
+                                ["display", "review", "draft_reply", "initiate_contact"]
+                            ),
                         },
                     )
                 inserted += 1
@@ -129,9 +131,11 @@ def sync_contacts() -> None:
                 errors += 1
                 print(f"  ERROR {email} -> {company_name}: {e}")
 
-    print(f"\nDone: {inserted} inserted, {skipped_noise} noise filtered, "
-          f"{skipped_duplicate} duplicates, {skipped_no_context} no context, "
-          f"{errors} errors")
+    print(
+        f"\nDone: {inserted} inserted, {skipped_noise} noise filtered, "
+        f"{skipped_duplicate} duplicates, {skipped_no_context} no context, "
+        f"{errors} errors"
+    )
 
 
 if __name__ == "__main__":

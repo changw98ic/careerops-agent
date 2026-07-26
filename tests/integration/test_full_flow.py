@@ -169,26 +169,14 @@ def _settings(
             )
         )
         conn.execute(sa.text(f"GRANT careerops_api TO {login}"))
-        conn.execute(
-            sa.text(f"GRANT USAGE ON SCHEMA careerops TO {login}")
-        )
+        conn.execute(sa.text(f"GRANT USAGE ON SCHEMA careerops TO {login}"))
         conn.execute(
             sa.text(
-                f"GRANT SELECT, INSERT, UPDATE, DELETE "
-                f"ON ALL TABLES IN SCHEMA careerops TO {login}"
+                f"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA careerops TO {login}"
             )
         )
-        conn.execute(
-            sa.text(
-                f"GRANT USAGE ON ALL SEQUENCES IN SCHEMA careerops TO {login}"
-            )
-        )
-        conn.execute(
-            sa.text(
-                f"GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA careerops "
-                f"TO {login}"
-            )
-        )
+        conn.execute(sa.text(f"GRANT USAGE ON ALL SEQUENCES IN SCHEMA careerops TO {login}"))
+        conn.execute(sa.text(f"GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA careerops TO {login}"))
 
     runtime_url = parsed.set(username=login, password=password)
     # /private/tmp avoids macOS /var symlink (O_NOFOLLOW in storage layer).
@@ -353,15 +341,13 @@ def test_full_lifecycle(
 
     # 6. Job detail.
     resp = client.get(
-        f"/api/v1/jobs/{job_id}", headers=api_headers,
+        f"/api/v1/jobs/{job_id}",
+        headers=api_headers,
     )
     assert resp.status_code == 200
     detail = resp.json()
     assert detail["canonical_job"]["id"] == job_id
-    assert (
-        detail["canonical_job"]["canonical_title"]
-        == "Senior Software Engineer"
-    )
+    assert detail["canonical_job"]["canonical_title"] == "Senior Software Engineer"
     assert len(detail["canonical_job"]["postings"]) >= 1
 
     # 7. Create application.
@@ -394,7 +380,8 @@ def test_full_lifecycle(
 
     # 9. Logout.
     resp = client.post(
-        "/api/v1/auth/logout", headers=api_headers,
+        "/api/v1/auth/logout",
+        headers=api_headers,
     )
     assert resp.status_code == 200
     assert resp.json()["ok"] is True

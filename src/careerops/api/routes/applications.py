@@ -4,7 +4,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+import contextlib
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, Field
@@ -339,7 +340,7 @@ async def create_application(
     body: ApplicationCreateRequest,
     request: Request,
     response: Response,
-    principal: AuthenticatedPrincipal | None = Depends(require_api_auth),
+    principal: Annotated[AuthenticatedPrincipal | None, Depends(require_api_auth)] = None,
 ) -> ApplicationResponse | dict[str, str]:
     response.headers["Cache-Control"] = "no-store"
     service = _get_application_service(request)
@@ -481,11 +482,11 @@ async def get_email_draft(
         return {"error": "JOB_NOT_FOUND"}
 
     # Build job dict for email_drafting.generate_body
-    version_data = {}
+    version_data: dict[str, Any] = {}
     if job_detail.get("versions"):
         version_data = job_detail["versions"][0].get("structured_data", {})
 
-    job_dict = {
+    job_dict: dict[str, Any] = {
         "title": job_detail.get("canonical_title", ""),
         "company": "",
         "raw_data": version_data,
@@ -558,7 +559,9 @@ async def send_application_email(
         refresh_access_token,
     )
 
-    token_file = Path(__file__).resolve().parent.parent.parent.parent / "secrets" / "gmail_send_token.json"
+    token_file = (
+        Path(__file__).resolve().parent.parent.parent.parent / "secrets" / "gmail_send_token.json"
+    )
     if not token_file.exists():
         response.status_code = 503
         return {"error": "GMAIL_NOT_CONFIGURED"}
@@ -570,14 +573,12 @@ async def send_application_email(
 
     access_token = tok["access_token"]
     if tok.get("refresh_token"):
-        try:
+        with contextlib.suppress(Exception):
             access_token = refresh_access_token(
                 client_id=tok["client_id"],
                 client_secret=tok["client_secret"],
                 refresh_token=tok["refresh_token"],
-            )
-        except Exception:
-            pass  # use stored token
+            )  # use stored token on failure
 
     sender = GmailSender(access_token)
     email = OutgoingEmail(
@@ -587,7 +588,7 @@ async def send_application_email(
     )
 
     try:
-        send_result = sender.send(email)
+        sender.send(email)
     except Exception as e:
         response.status_code = 502
         return {"error": f"SEND_FAILED: {e}"}
@@ -597,14 +598,12 @@ async def send_application_email(
 
     app_service = _get_application_service(request)
     if app_service is not None:
-        try:
+        with contextlib.suppress(IllegalTransitionError):
             app_service.record_manual_submission(
                 application_id=_parse_uuid(application_id),
                 actor_id="email_send",
                 now=_now(),
             )
-        except IllegalTransitionError:
-            pass
 
     return _app_to_response(app)
 

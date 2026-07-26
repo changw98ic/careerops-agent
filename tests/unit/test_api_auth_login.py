@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 from uuid import uuid4
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from careerops.auth.contracts import (
     AuthRateLimited,
-    AuthRequestContext,
     InvalidCredentials,
     InvalidSession,
     SessionSecrets,

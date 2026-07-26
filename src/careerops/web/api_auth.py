@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -100,7 +101,9 @@ async def preauth(request: Request) -> JSONResponse:
     if auth_service is None:
         return JSONResponse(
             status_code=503,
-            content=PreauthResponse(ok=False, trace_id=trace_id, error="auth not configured").model_dump(),
+            content=PreauthResponse(
+                ok=False, trace_id=trace_id, error="auth not configured"
+            ).model_dump(),
         )
 
     client_host = request.client.host if request.client is not None else "unknown"
@@ -116,7 +119,9 @@ async def preauth(request: Request) -> JSONResponse:
         )
 
     response = JSONResponse(
-        content=PreauthResponse(ok=True, csrf_token=secrets.csrf_token, trace_id=trace_id).model_dump(),
+        content=PreauthResponse(
+            ok=True, csrf_token=secrets.csrf_token, trace_id=trace_id
+        ).model_dump(),
     )
     # Preauth cookies: short-lived (15 min), same as the old Jinja2 flow.
     response.set_cookie(
@@ -475,17 +480,15 @@ async def logout(request: Request) -> JSONResponse:
     now = datetime.now(UTC)
     context = AuthRequestContext(trace_id=trace_id, client_key=client_host)
 
-    try:
+    # Session already revoked or invalid -- treat as success so the
+    # frontend can always clear its state.
+    with contextlib.suppress(InvalidSession, AuthError):
         auth_service.logout(
             session_token=session_token,
             csrf_token=csrf_token,
             now=now,
             context=context,
         )
-    except (InvalidSession, AuthError):
-        # Session already revoked or invalid -- treat as success so the
-        # frontend can always clear its state.
-        pass
 
     response = JSONResponse(content=LogoutResponse(ok=True, trace_id=trace_id).model_dump())
     response.delete_cookie("careerops_session", path="/")

@@ -152,6 +152,23 @@ class RuntimeResources:
         self.crawl_plan_repo = PostgresCrawlPlanRepository(self.database)
         self.crawl_run_repo = PostgresCrawlRunRepository(self.database)
 
+        # Section 5 crawl execution service (tasks 5.1, 5.5, 5.6). Wraps the
+        # crawl adapter sink + policy evaluation + provenance ingest. The
+        # execution service is what Temporal activities (task 5.4) or a direct
+        # in-process call invokes to run a PENDING crawl run through to
+        # terminal state.
+        from careerops.adapters.http_fetcher import fetch
+        from careerops.application.crawl_execution import CrawlExecutionService
+        from careerops.infrastructure.temporal.m1_crawl_sink import RealCrawlActivitySink
+
+        crawl_sink = RealCrawlActivitySink(fetcher=fetch, engine=self.database)
+        self.crawl_execution_service = CrawlExecutionService(
+            run_repository=self.crawl_run_repo,
+            plan_repository=self.crawl_plan_repo,
+            source_repository=self.crawl_source_repo,
+            sink=crawl_sink,
+        )
+
     async def check(self) -> ReadinessReport:
         if self._closed:
             return ReadinessReport(

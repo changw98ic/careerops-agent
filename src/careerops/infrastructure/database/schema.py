@@ -317,6 +317,22 @@ job_posting_versions = sa.Table(
         nullable=False,
     ),
     sa.Column("captured_at", sa.DateTime(timezone=True), nullable=False),
+    # Section 5 provenance (migration 0016): link each version to the crawl
+    # run and plan-version snapshot that produced it. Both nullable for
+    # existing pre-Section-5 data; SET NULL on delete so a deleted run/plan
+    # does not cascade into posting version loss.
+    sa.Column(
+        "crawl_run_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.crawl_runs.id", ondelete="SET NULL"),
+        nullable=True,
+    ),
+    sa.Column(
+        "plan_version_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.crawl_plan_versions.id", ondelete="SET NULL"),
+        nullable=True,
+    ),
     sa.Column(
         "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     ),

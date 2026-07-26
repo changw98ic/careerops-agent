@@ -49,16 +49,16 @@
 
 ## 5. Crawl execution, safety, and provenance
 
-- [ ] 5.1 Bind every crawl activity to an immutable plan-version snapshot and run identity before any source request starts.
-- [ ] 5.2 Integrate existing HTTP/browser adapters with source policy evaluation, SSRF checks, redirect/DNS checks, terms/robots decisions, response limits, and per-domain rate limits.
-- [ ] 5.3 Ensure unknown or unavailable crawl policy dependencies fail closed or enter the documented safe limited-discovery state.
-- [ ] 5.4 Add Temporal workflow/activity wiring for scheduled and manual runs, retries, cancellation, progress, and durable terminal status.
-- [ ] 5.5 Make source observation ingestion idempotent by run/source/external identity and content hash.
-- [ ] 5.6 Persist crawl run, plan version, source, parser version, capture time, and content hash on each resulting posting/version.
-- [ ] 5.7 Add source-specific backoff and stop rules for 403, 429, CAPTCHA/login walls, terms blocks, parser drift, and repeated failures.
-- [ ] 5.8 Add integration tests for restart/retry, overlapping schedules, SSRF redirects, private/metadata targets, rate limits, and duplicate observations.
-- [ ] 5.9 Add metrics for active runs, duration, source failures, rate-limit denials, postings created/updated/closed, and policy denials with bounded labels.
-- [ ] 5.10 Gate the next phase on a read-only crawl slice that creates a plan, runs it, persists provenance, and renders new/updated/closed jobs in the inbox without duplicate records.
+- [x] 5.1 Bind every crawl activity to an immutable plan-version snapshot and run identity before any source request starts.
+- [x] 5.2 Integrate existing HTTP/browser adapters with source policy evaluation, SSRF checks, redirect/DNS checks, terms/robots decisions, response limits, and per-domain rate limits.
+- [x] 5.3 Ensure unknown or unavailable crawl policy dependencies fail closed or enter the documented safe limited-discovery state.
+- [x] 5.4 Add Temporal workflow/activity wiring for scheduled and manual runs, retries, cancellation, progress, and durable terminal status.
+- [x] 5.5 Make source observation ingestion idempotent by run/source/external identity and content hash.
+- [x] 5.6 Persist crawl run, plan version, source, parser version, capture time, and content hash on each resulting posting/version.
+- [x] 5.7 Add source-specific backoff and stop rules for 403, 429, CAPTCHA/login walls, terms blocks, parser drift, and repeated failures.
+- [x] 5.8 Add integration tests for restart/retry, overlapping schedules, SSRF redirects, private/metadata targets, rate limits, and duplicate observations.
+- [x] 5.9 Add metrics for active runs, duration, source failures, rate-limit denials, postings created/updated/closed, and policy denials with bounded labels.
+- [x] 5.10 Gate the next phase on a read-only crawl slice that creates a plan, runs it, persists provenance, and renders new/updated/closed jobs in the inbox without duplicate records.
 
 ## 6. Job inbox, filtering, and matching
 

@@ -225,6 +225,10 @@ def create_app(
         app.state.crawl_source_service = crawl_source_service
         app.state.crawl_plan_service = crawl_plan_service
         app.state.crawl_run_service = crawl_run_service
+        # Section 5 crawl execution service (tasks 5.1, 5.5, 5.6). Wired
+        # through RuntimeResources; reachable from API routes and Temporal
+        # activities via app.state.crawl_execution_service.
+        app.state.crawl_execution_service = probe.crawl_execution_service
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(MetricsMiddleware, metrics=metrics)
     install_error_handlers(app)

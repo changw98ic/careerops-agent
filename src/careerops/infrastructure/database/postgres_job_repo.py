@@ -9,10 +9,10 @@ Implements the same interface as ``InMemoryJobReadRepository`` using the
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import Engine, select
+from sqlalchemy import ColumnElement, Engine, and_, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from careerops.domain.jobs import (
@@ -30,6 +30,7 @@ from careerops.infrastructure.database.schema import (
     job_posting_assignments,
     job_posting_versions,
     job_postings,
+    job_sources,
 )
 
 
@@ -37,6 +38,22 @@ def _uuid(val: Any) -> UUID:
     if isinstance(val, UUID):
         return val
     return UUID(str(val))
+
+
+def _encode_cursor(created_at: datetime, row_id: UUID) -> str:
+    """Encode (created_at, id) into an opaque cursor string."""
+    import base64
+
+    return base64.urlsafe_b64encode(f"{created_at.isoformat()}|{row_id}".encode()).decode()
+
+
+def _decode_cursor(cursor: str) -> tuple[datetime, UUID]:
+    """Decode an opaque cursor back to (created_at, id)."""
+    import base64
+
+    decoded = base64.urlsafe_b64decode(cursor.encode()).decode()
+    ts_str, id_str = decoded.rsplit("|", 1)
+    return datetime.fromisoformat(ts_str), UUID(id_str)
 
 
 def _row_to_posting(row: Any) -> JobPosting:
@@ -124,24 +141,44 @@ class PostgresJobReadRepository:
                 )
             )
 
-    def list_companies(
-        self, *, cursor: str | None = None, limit: int = 50
-    ) -> list[dict[str, object]]:
+    def list_companies(self, *, cursor: str | None = None, limit: int = 50) -> dict[str, object]:
         with self._engine.begin() as conn:
-            stmt = select(companies).order_by(companies.c.created_at).limit(limit)
+            # Total count (unfiltered).
+            total = conn.execute(select(func.count()).select_from(companies)).scalar_one()
+
+            # Fetch limit+1 to detect has_more.
+            stmt = (
+                select(companies).order_by(companies.c.created_at, companies.c.id).limit(limit + 1)
+            )
             if cursor is not None:
-                stmt = stmt.where(companies.c.id > _uuid(cursor))
+                cur_created, cur_id = _decode_cursor(cursor)
+                stmt = stmt.where(
+                    or_(
+                        companies.c.created_at > cur_created,
+                        and_(companies.c.created_at == cur_created, companies.c.id > cur_id),
+                    )
+                )
             rows = conn.execute(stmt).mappings().fetchall()
-        return [
-            {
-                "id": row["id"],
-                "name": row["name"],
-                "normalized_name": row["normalized_name"],
-                "official_domains": row["official_domains"],
-                "terms_status": row["terms_status"],
-            }
-            for row in rows
-        ]
+
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+        next_cursor = _encode_cursor(rows[-1]["created_at"], rows[-1]["id"]) if has_more else None
+
+        return {
+            "items": [
+                {
+                    "id": row["id"],
+                    "name": row["name"],
+                    "normalized_name": row["normalized_name"],
+                    "official_domains": row["official_domains"],
+                    "terms_status": row["terms_status"],
+                    "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                }
+                for row in rows
+            ],
+            "total": total,
+            "next_cursor": next_cursor,
+        }
 
     # -- Canonical jobs (read) ---------------------------------------------
 
@@ -151,23 +188,157 @@ class PostgresJobReadRepository:
         cursor: str | None = None,
         limit: int = 50,
         state: str | None = None,
-    ) -> list[dict[str, object]]:
+        q: str | None = None,
+    ) -> dict[str, object]:
         with self._engine.begin() as conn:
-            stmt = select(canonical_jobs).order_by(canonical_jobs.c.created_at).limit(limit)
-            if cursor is not None:
-                stmt = stmt.where(canonical_jobs.c.id > _uuid(cursor))
+            # Build base filter conditions.
+            filters: list[ColumnElement[bool]] = []
             if state is not None:
-                stmt = stmt.where(canonical_jobs.c.aggregate_state == state)
+                filters.append(canonical_jobs.c.aggregate_state == state)
+            if q is not None and q.strip():
+                pattern = f"%{q.strip()}%"
+                filters.append(canonical_jobs.c.canonical_title.ilike(pattern))
+
+            # Total count with filters applied.
+            count_stmt = select(func.count()).select_from(canonical_jobs)
+            if filters:
+                count_stmt = count_stmt.where(*filters)
+            total = conn.execute(count_stmt).scalar_one()
+
+            # Fetch limit+1 for has_more detection.
+            stmt = (
+                select(canonical_jobs)
+                .order_by(canonical_jobs.c.created_at, canonical_jobs.c.id)
+                .limit(limit + 1)
+            )
+            if filters:
+                stmt = stmt.where(*filters)
+            if cursor is not None:
+                cur_created, cur_id = _decode_cursor(cursor)
+                stmt = stmt.where(
+                    or_(
+                        canonical_jobs.c.created_at > cur_created,
+                        and_(
+                            canonical_jobs.c.created_at == cur_created,
+                            canonical_jobs.c.id > cur_id,
+                        ),
+                    )
+                )
             rows = conn.execute(stmt).mappings().fetchall()
-        return [
-            {
-                "id": row["id"],
-                "company_id": row["company_id"],
-                "canonical_title": row["canonical_title"],
-                "aggregate_state": row["aggregate_state"],
-            }
-            for row in rows
-        ]
+
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+        next_cursor = _encode_cursor(rows[-1]["created_at"], rows[-1]["id"]) if has_more else None
+
+        # Batch-fetch postings and latest versions for all listed jobs.
+        job_ids = [row["id"] for row in rows]
+        postings_by_job: dict[Any, list[dict[str, object]]] = {}
+        apply_urls: dict[Any, str] = {}
+        statuses: dict[Any, str] = {}
+        if job_ids:
+            with self._engine.begin() as conn2:
+                # Fetch postings with source info.
+                posting_rows = (
+                    conn2.execute(
+                        select(
+                            job_posting_assignments.c.canonical_job_id,
+                            job_postings,
+                            job_sources.c.source_type,
+                            job_sources.c.source_identifier,
+                            job_sources.c.state.label("source_state_value"),
+                        )
+                        .join(
+                            job_postings,
+                            job_postings.c.id == job_posting_assignments.c.job_posting_id,
+                        )
+                        .join(
+                            job_sources,
+                            job_sources.c.id == job_postings.c.source_id,
+                        )
+                        .where(job_posting_assignments.c.canonical_job_id.in_(job_ids))
+                    )
+                    .mappings()
+                    .fetchall()
+                )
+                for r in posting_rows:
+                    cjid = r["canonical_job_id"]
+                    postings_by_job.setdefault(cjid, []).append(cast("dict[str, object]", r))
+
+                # Fetch latest version per posting to get apply_url.
+                posting_ids = [r["id"] for r in posting_rows]
+                if posting_ids:
+                    version_rows = (
+                        conn2.execute(
+                            select(
+                                job_posting_versions.c.job_posting_id,
+                                job_posting_versions.c.structured_data,
+                            )
+                            .where(job_posting_versions.c.job_posting_id.in_(posting_ids))
+                            .order_by(
+                                job_posting_versions.c.job_posting_id,
+                                job_posting_versions.c.captured_at.desc(),
+                            )
+                        )
+                        .mappings()
+                        .fetchall()
+                    )
+                    seen_postings: set[Any] = set()
+                    for vr in version_rows:
+                        pid = vr["job_posting_id"]
+                        if pid in seen_postings:
+                            continue
+                        seen_postings.add(pid)
+                        sd: dict[str, Any] = vr["structured_data"] or {}
+                        url = sd.get("apply_url", "")
+                        if url:
+                            # Find which canonical job this posting belongs to
+                            for r in posting_rows:
+                                if r["id"] == pid:
+                                    cjid = r["canonical_job_id"]
+                                    if cjid not in apply_urls:
+                                        apply_urls[cjid] = url
+                                    break
+
+            # Compute aggregate status per job.
+            for cjid, plist in postings_by_job.items():
+                states = {r["source_state_value"] for r in plist}
+                if states == {"active"}:
+                    statuses[cjid] = "active"
+                elif "active" in states:
+                    statuses[cjid] = "partial"
+                elif not states:
+                    statuses[cjid] = "unknown"
+                else:
+                    statuses[cjid] = "inactive"
+
+        return {
+            "items": [
+                {
+                    "id": row["id"],
+                    "company_id": row["company_id"],
+                    "canonical_title": row["canonical_title"],
+                    "aggregate_state": row["aggregate_state"],
+                    "current_apply_url": apply_urls.get(row["id"], ""),
+                    "aggregate_status": statuses.get(row["id"], "unknown"),
+                    "postings": [
+                        {
+                            "id": str(r["id"]),
+                            "source_id": str(r["source_id"]),
+                            "external_id": r["external_id"],
+                            "source_state": r["source_state"],
+                            "source": {
+                                "type": r["source_type"],
+                                "identifier": r["source_identifier"],
+                            },
+                        }
+                        for r in postings_by_job.get(row["id"], [])
+                    ],
+                }
+                for row in rows
+            ],
+            "total": total,
+            "next_cursor": next_cursor,
+        }
 
     def get_job_detail(self, job_id: str) -> dict[str, object] | None:
         jid = _uuid(job_id)
@@ -181,13 +352,23 @@ class PostgresJobReadRepository:
             if job_row is None:
                 return None
 
-            # Fetch associated postings via assignment table.
+            # Fetch associated postings with source info via joins.
             posting_rows = (
                 conn.execute(
-                    select(job_postings)
+                    select(
+                        job_postings,
+                        job_sources.c.source_type,
+                        job_sources.c.source_identifier,
+                        job_sources.c.base_url.label("source_base_url"),
+                        job_sources.c.state.label("source_state_value"),
+                    )
                     .join(
                         job_posting_assignments,
                         job_posting_assignments.c.job_posting_id == job_postings.c.id,
+                    )
+                    .join(
+                        job_sources,
+                        job_sources.c.id == job_postings.c.source_id,
                     )
                     .where(job_posting_assignments.c.canonical_job_id == jid)
                 )
@@ -202,9 +383,9 @@ class PostgresJobReadRepository:
             if posting_ids:
                 version_rows = list(
                     conn.execute(
-                        select(job_posting_versions).where(
-                            job_posting_versions.c.job_posting_id.in_(posting_ids)
-                        )
+                        select(job_posting_versions)
+                        .where(job_posting_versions.c.job_posting_id.in_(posting_ids))
+                        .order_by(job_posting_versions.c.captured_at.desc())
                     )
                     .mappings()
                     .fetchall()
@@ -219,11 +400,32 @@ class PostgresJobReadRepository:
                     .fetchall()
                 )
 
+        # Compute current apply URL from latest version's structured_data.
+        current_apply_url = ""
+        if version_rows:
+            sd: dict[str, Any] = version_rows[0].get("structured_data") or {}
+            current_apply_url = sd.get("apply_url", "")
+
+        # Aggregate source statuses.
+        source_states = {r["source_state_value"] for r in posting_rows}
+        if not source_states:
+            aggregate_status = "unknown"
+        elif source_states == {"active"}:
+            aggregate_status = "active"
+        elif source_states == {"blocked"}:
+            aggregate_status = "blocked"
+        elif "active" in source_states:
+            aggregate_status = "partial"
+        else:
+            aggregate_status = "inactive"
+
         return {
             "id": job_row["id"],
             "company_id": job_row["company_id"],
             "canonical_title": job_row["canonical_title"],
             "aggregate_state": job_row["aggregate_state"],
+            "current_apply_url": current_apply_url,
+            "aggregate_status": aggregate_status,
             "postings": [
                 {
                     "id": str(r["id"]),
@@ -233,6 +435,12 @@ class PostgresJobReadRepository:
                     "source_state": r["source_state"],
                     "first_seen_at": r["first_seen_at"].isoformat() if r["first_seen_at"] else None,
                     "last_seen_at": r["last_seen_at"].isoformat() if r["last_seen_at"] else None,
+                    "source": {
+                        "type": r["source_type"],
+                        "identifier": r["source_identifier"],
+                        "base_url": r["source_base_url"],
+                        "state": r["source_state_value"],
+                    },
                 }
                 for r in posting_rows
             ],
@@ -241,6 +449,7 @@ class PostgresJobReadRepository:
                     "id": str(r["id"]),
                     "posting_id": str(r["job_posting_id"]),
                     "content_hash": r["content_hash"],
+                    "source_url": r["source_url"],
                     "structured_data": r["structured_data"],
                     "captured_at": r["captured_at"].isoformat() if r["captured_at"] else None,
                 }

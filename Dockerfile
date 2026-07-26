@@ -1,3 +1,13 @@
+FROM node:20-bookworm-slim@sha256:b7502599a095bfa719e6e4e381926718848793045962e4597f594509e1a6a085 AS frontend
+
+WORKDIR /build
+
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+
+COPY frontend/ ./
+RUN npm run build
+
 FROM ghcr.io/astral-sh/uv:0.11.16@sha256:440fd6477af86a2f1b38080c539f1672cd22acb1b1a47e321dba5158ab08864d AS uv
 
 FROM python:3.12.11-slim-bookworm@sha256:519591d6871b7bc437060736b9f7456b8731f1499a57e22e6c285135ae657bf7 AS runtime
@@ -20,9 +30,12 @@ COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 COPY migrations ./migrations
 COPY alembic.ini ./alembic.ini
+COPY --from=frontend /build/dist ./frontend/dist
 
 RUN uv sync --frozen --no-dev --no-cache \
     && chown -R careerops:careerops /app
+
+ENV CAREEROPS_SERVE_SPA=true
 
 USER careerops
 

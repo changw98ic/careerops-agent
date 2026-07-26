@@ -120,6 +120,7 @@ def test_not_found_uses_stable_error_envelope_without_framework_detail() -> None
         "error": {
             "code": "NOT_FOUND",
             "message": "Resource not found",
+            "retryable": False,
             "details": None,
             "trace_id": "known-trace",
         }
@@ -144,7 +145,7 @@ def test_nonstandard_http_status_keeps_stable_fallback_error() -> None:
     response = TestClient(app).get("/api/v1/test/nonstandard")
 
     assert response.status_code == 499
-    assert response.json()["error"]["code"] == "HTTP_ERROR"
+    assert response.json()["error"]["code"] == "INTERNAL_ERROR"
     assert response.json()["error"]["message"] == "Request could not be processed"
 
 
@@ -153,9 +154,19 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
 
     assert response.status_code == 200
     assert response.json()["info"]["title"] == "CareerOps API"
+    # Declared route set covers health + jobs + matching + applications + auth
+    # (SPA session flow: preauth/session/me/login/bootstrap/logout) + email
+    # drafting (email-draft/send-email) added by the e2e-career-application-loop
+    # change, plus the Section-3 additive profile/resumes/evidence routers.
+    # ErrorResponse business codes are validated separately by the Phase 0
+    # contract freeze tests.
     assert set(response.json()["paths"]) == {
         "/api/v1/auth/login",
         "/api/v1/auth/logout",
+        "/api/v1/auth/preauth",
+        "/api/v1/auth/bootstrap",
+        "/api/v1/auth/session",
+        "/api/v1/me",
         "/api/v1/health/live",
         "/api/v1/health/ready",
         "/api/v1/companies",
@@ -174,9 +185,39 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
         "/api/v1/applications/{application_id}/transition",
         "/api/v1/applications/{application_id}/submit",
         "/api/v1/applications/{application_id}/events",
+        "/api/v1/applications/{application_id}/email-draft",
+        "/api/v1/applications/{application_id}/send-email",
         "/api/v1/resume-versions",
         "/api/v1/application-packages",
         "/api/v1/follow-ups",
+        # Section-3 additive routers (career-profile-and-resume spec).
+        "/api/v1/profile",
+        "/api/v1/profile/versions",
+        "/api/v1/profile/versions/{version_id}",
+        "/api/v1/profile/versions/{version_id}/activate",
+        "/api/v1/resumes",
+        "/api/v1/resumes/eligible",
+        "/api/v1/resumes/{version_id}",
+        "/api/v1/resumes/{version_id}/confirm",
+        "/api/v1/resumes/{version_id}/evidence",
+        "/api/v1/evidence",
+        "/api/v1/evidence/{evidence_id}",
+        "/api/v1/evidence/{evidence_id}/confirm",
+        "/api/v1/evidence/{evidence_id}/reject",
+        # Section-4 additive routers (crawl-plan-management spec).
+        "/api/v1/crawl-sources",
+        "/api/v1/crawl-sources/{source_id}",
+        "/api/v1/crawl-sources/{source_id}/pause",
+        "/api/v1/crawl-sources/{source_id}/resume",
+        "/api/v1/crawl-plans",
+        "/api/v1/crawl-plans/versions",
+        "/api/v1/crawl-plans/versions/{version_id}",
+        "/api/v1/crawl-plans/versions/{version_id}/activate",
+        "/api/v1/crawl-plans/pause",
+        "/api/v1/crawl-plans/resume",
+        "/api/v1/crawl-plans/run-now",
+        "/api/v1/crawl-runs",
+        "/api/v1/crawl-runs/{run_id}",
     }
 
 

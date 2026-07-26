@@ -75,6 +75,15 @@ def _make_app(auth_service: Any, web_settings: Any) -> FastAPI:
     ) -> dict[str, str]:
         return {"user": principal.username if principal else "anonymous"}
 
+    # CSRF protection only applies to mutating methods (see require_api_auth:
+    # "Per spec §4: GET/HEAD only check session cookie; mutating methods also
+    # check CSRF"). This POST route lets tests exercise the CSRF branch.
+    @app.post("/api/v1/jobs")
+    async def _protected_post(  # pyright: ignore[reportUnusedFunction]
+        principal: AuthenticatedPrincipal | None = Depends(require_api_auth),  # noqa: B008
+    ) -> dict[str, str]:
+        return {"user": principal.username if principal else "anonymous"}
+
     @app.get("/api/v1/health/live")
     async def _public() -> dict[str, str]:  # pyright: ignore[reportUnusedFunction]
         return {"status": "ok"}
@@ -94,7 +103,8 @@ class TestRequireApiAuth:
         app = _make_app(_make_auth_service(), _FakeSettings())
         resp = TestClient(app).get("/api/v1/jobs")
         assert resp.status_code == 401
-        assert resp.json()["detail"] == "authentication required"
+        # WIP's UnauthorizedError.message_default is title-cased ("Authentication required").
+        assert resp.json()["detail"] == "Authentication required"
 
     def test_invalid_session_token_returns_401(self) -> None:
         app = _make_app(_make_auth_service(fail_auth=True), _FakeSettings())
@@ -105,13 +115,17 @@ class TestRequireApiAuth:
         assert resp.status_code == 401
 
     def test_valid_session_missing_csrf_returns_403(self) -> None:
+        # CSRF is only enforced on mutating methods (POST/PUT/DELETE) per
+        # require_api_auth's spec §4 note. Use POST so the missing CSRF token
+        # is actually validated and rejected.
         app = _make_app(_make_auth_service(fail_csrf=True), _FakeSettings())
-        resp = TestClient(app).get(
+        resp = TestClient(app).post(
             "/api/v1/jobs",
             cookies={_SESSION_COOKIE: "valid-token"},
         )
         assert resp.status_code == 403
-        assert resp.json()["detail"] == "csrf token rejected"
+        # WIP's CSRFRejectedError.message_default is title-cased.
+        assert resp.json()["detail"] == "CSRF token rejected"
 
     def test_valid_session_and_csrf_passes(self) -> None:
         app = _make_app(_make_auth_service(), _FakeSettings())

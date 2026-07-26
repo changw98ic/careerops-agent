@@ -73,6 +73,7 @@ class ConsoleUserRecord:
     username: str
     password: PasswordRecord = field(repr=False)
     password_changed_at: datetime
+    candidate_id: UUID | None = None
     disabled_at: datetime | None = None
 
 
@@ -89,6 +90,7 @@ class SessionRecord:
     idle_expires_at: datetime
     absolute_expires_at: datetime
     revoked_at: datetime | None
+    candidate_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +128,7 @@ class AuthenticatedPrincipal:
     session_id: UUID
     csrf_token_hash: str = field(repr=False)
     absolute_expires_at: datetime
+    candidate_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)

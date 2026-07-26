@@ -9,7 +9,8 @@ from careerops.infrastructure.database.engine import create_database_engine
 
 def main() -> None:
     settings = get_settings()
-    engine = create_database_engine(settings)
+    is_prod = settings.environment.value == "production"
+    engine = create_database_engine(settings, enforce_role=is_prod)
     try:
         credential = create_console_auth_service(engine).issue_bootstrap_token(
             now=datetime.now(UTC)

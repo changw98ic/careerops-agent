@@ -46,6 +46,27 @@ class ApprovalDecision(StrEnum):
     EXPIRED = "expired"
 
 
+class ReviewState(StrEnum):
+    """Lifecycle state of a human-in-the-loop review item.
+
+    A review item is the queue entry surfaced to the user (mail-derived event
+    proposal, reply draft, package approval, unresolved thread link, etc.). It
+    is distinct from ``ApprovalDecision``, which records the outcome of a single
+    approval record inside the side-effect kernel. ``PENDING`` awaits a user
+    decision; ``APPROVED``/``REJECTED`` record that decision idempotently;
+    ``ESCALATED`` covers items that cannot be resolved in the normal queue
+    (ambiguous send reconciliation, unresolved multi-candidate thread link,
+    prompt-injection suspicion, high-risk content requiring operator handling)
+    and require manual/operator attention. Model output never sets this state
+    directly.
+    """
+
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    ESCALATED = "escalated"
+
+
 class AttemptState(StrEnum):
     STARTED = "started"
     PROVIDER_CALL_MADE = "provider_call_made"

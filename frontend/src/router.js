@@ -1,25 +1,37 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { ref } from 'vue'
-import Login from './views/Login.vue'
-import Jobs from './views/Jobs.vue'
-import JobDetail from './views/JobDetail.vue'
-import Companies from './views/Companies.vue'
-import Applications from './views/Applications.vue'
+import { status, checkSession } from './stores/session.js'
 
-// Track login state in memory (HttpOnly cookies can't be read by JS).
-export const loggedIn = ref(false)
-
-export function setLoggedIn(val) {
-  loggedIn.value = val
-}
+const Dashboard = () => import('./views/Dashboard.vue')
+const Login = () => import('./views/Login.vue')
+const Jobs = () => import('./views/Jobs.vue')
+const JobDetail = () => import('./views/JobDetail.vue')
+const Companies = () => import('./views/Companies.vue')
+const Applications = () => import('./views/Applications.vue')
+const Profile = () => import('./views/Profile.vue')
+const Resumes = () => import('./views/Resumes.vue')
+const Evidence = () => import('./views/Evidence.vue')
+const CrawlPlans = () => import('./views/CrawlPlans.vue')
+const CrawlRunHistory = () => import('./views/CrawlRunHistory.vue')
+const CrawlRunDetail = () => import('./views/CrawlRunDetail.vue')
+const NotFound = () => import('./views/NotFound.vue')
 
 const routes = [
   { path: '/login', name: 'login', component: Login },
-  { path: '/', redirect: '/jobs' },
+  { path: '/', redirect: '/dashboard' },
+  { path: '/dashboard', name: 'dashboard', component: Dashboard, meta: { auth: true, title: 'Overview' } },
   { path: '/jobs', name: 'jobs', component: Jobs, meta: { auth: true } },
   { path: '/jobs/:id', name: 'job-detail', component: JobDetail, meta: { auth: true } },
   { path: '/companies', name: 'companies', component: Companies, meta: { auth: true } },
   { path: '/applications', name: 'applications', component: Applications, meta: { auth: true } },
+  { path: '/profile', name: 'profile', component: Profile, meta: { auth: true } },
+  { path: '/resumes', name: 'resumes', component: Resumes, meta: { auth: true } },
+  { path: '/evidence', name: 'evidence', component: Evidence, meta: { auth: true } },
+  { path: '/crawl-plans', name: 'crawl-plans', component: CrawlPlans, meta: { auth: true } },
+  { path: '/crawl-runs', name: 'crawl-runs', component: CrawlRunHistory, meta: { auth: true } },
+  { path: '/crawl-runs/:id', name: 'crawl-run-detail', component: CrawlRunDetail, meta: { auth: true } },
+  { path: '/bootstrap', name: 'bootstrap', component: () => import('./views/Bootstrap.vue') },
+  { path: '/404', name: 'not-found', component: NotFound },
+  { path: '/:pathMatch(.*)*', name: 'catch-all', redirect: '/404' },
 ]
 
 const router = createRouter({
@@ -27,8 +39,22 @@ const router = createRouter({
   routes,
 })
 
-router.beforeEach((to) => {
-  if (to.meta.auth && !loggedIn.value) {
+let sessionReady = false
+
+router.beforeEach(async (to) => {
+  // Wait for session check on first navigation
+  if (!sessionReady && status.value === 'unknown') {
+    await checkSession()
+    sessionReady = true
+  }
+
+  // Authenticated user hitting /login -> redirect to dashboard
+  if (to.name === 'login' && status.value === 'authenticated') {
+    return { name: 'dashboard' }
+  }
+
+  // Protected route with no session -> redirect to login
+  if (to.meta.auth && status.value !== 'authenticated') {
     return { name: 'login' }
   }
 })

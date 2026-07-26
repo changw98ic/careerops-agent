@@ -8,8 +8,9 @@ from datetime import UTC
 from typing import Any
 
 from fastapi import APIRouter, Query, Request, Response
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+
+from careerops.api.errors import DependencyNotReadyError, NotFoundError
 
 router = APIRouter(prefix="/api/v1", tags=["matching"])
 
@@ -217,14 +218,14 @@ async def get_remote_eligibility(
     job_id: str,
     request: Request,
     response: Response,
-) -> RemoteEligibilityResponse | JSONResponse:
+) -> RemoteEligibilityResponse:
     response.headers["Cache-Control"] = "no-store"
     repo = _get_matching_repository(request)
     if repo is None:
-        return JSONResponse(content={"error": "not_available"})
+        raise DependencyNotReadyError("Matching repository not available")
     eligibility = repo.get_remote_eligibility(job_id)
     if eligibility is None:
-        return JSONResponse(status_code=404, content={"error": "not_found"})
+        raise NotFoundError(f"Remote eligibility for job {job_id} not found")
     return RemoteEligibilityResponse(
         canonical_job_id=str(eligibility["canonical_job_id"]),
         verdict=eligibility["verdict"],
@@ -349,14 +350,14 @@ async def get_compensation(
     job_id: str,
     request: Request,
     response: Response,
-) -> CompensationResponse | JSONResponse:
+) -> CompensationResponse:
     response.headers["Cache-Control"] = "no-store"
     repo = _get_matching_repository(request)
     if repo is None:
-        return JSONResponse(content={"error": "not_available"})
+        raise DependencyNotReadyError("Matching repository not available")
     comp = repo.get_compensation(job_id)
     if comp is None:
-        return JSONResponse(status_code=404, content={"error": "not_found"})
+        raise NotFoundError(f"Compensation for job {job_id} not found")
     return CompensationResponse(
         id=str(comp["id"]),
         canonical_job_id=str(comp["canonical_job_id"]),

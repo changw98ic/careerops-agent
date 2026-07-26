@@ -260,6 +260,7 @@ class ConsoleAuthService:
             session_id=record.id,
             csrf_token_hash=record.csrf_token_hash,
             absolute_expires_at=record.absolute_expires_at,
+            candidate_id=record.candidate_id,
         )
 
     def validate_csrf(self, principal: AuthenticatedPrincipal, csrf_token: str) -> None:

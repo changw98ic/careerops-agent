@@ -20,11 +20,13 @@ from careerops.infrastructure.temporal.m1_activities import (
     M1DiscoveryActivities,
     M1PurgeActivities,
 )
+from careerops.infrastructure.temporal.s5_activities import S5CrawlExecutionActivities
 from careerops.workflows.m1_workflows import (
     CompanyDiscoveryWorkflow,
     CrawlJobSourceWorkflow,
     RawDocumentPurgeWorkflow,
 )
+from careerops.workflows.s5_workflows import CrawlRunWorkflow, CrawlScheduledWorkflow
 from careerops.workflows.smoke import RecoverableSmokeWorkflow
 
 # Explicit callable type prevents pyright from inferring a broken union of
@@ -69,6 +71,7 @@ class M1ActivityBundles:
     purge: M1PurgeActivities | None = None
     outbox_drain: OutboxDrainActivities | None = None
     approval_sweeper: ApprovalSweeperActivities | None = None
+    crawl_execution: S5CrawlExecutionActivities | None = None
 
 
 def build_worker(
@@ -86,12 +89,15 @@ def build_worker(
     discovery = m1.discovery or M1DiscoveryActivities()
     crawl = m1.crawl or M1CrawlActivities(sink=crawl_sink)
     purge = m1.purge or M1PurgeActivities()
+    s5 = m1.crawl_execution or S5CrawlExecutionActivities()
 
     all_workflows = [
         RecoverableSmokeWorkflow,
         CompanyDiscoveryWorkflow,
         CrawlJobSourceWorkflow,
         RawDocumentPurgeWorkflow,
+        CrawlRunWorkflow,
+        CrawlScheduledWorkflow,
     ]
     # Explicit callable type prevents pyright from inferring a broken union of
     # incompatible activity signatures (the @activity.defn decorators produce
@@ -103,6 +109,8 @@ def build_worker(
         crawl.crawl_job_source,
         crawl.ingest_posting,
         purge.purge_raw_documents,
+        s5.execute_crawl_run,
+        s5.create_scheduled_run,
     ]
 
     if m1.outbox_drain is not None:
@@ -138,11 +146,18 @@ async def run_worker(
 
 
 def main() -> None:
+    from careerops.application.crawl_execution import CrawlExecutionService
+    from careerops.application.crawl_plan_service import CrawlRunService
     from careerops.application.outbox import OutboxPublisher
     from careerops.application.side_effect_kernel import SideEffectKernel
     from careerops.config import get_settings
     from careerops.infrastructure.database.engine import create_database_engine
     from careerops.infrastructure.database.outbox import PostgresOutboxStore
+    from careerops.infrastructure.database.postgres_crawl_repo import (
+        PostgresCrawlPlanRepository,
+        PostgresCrawlRunRepository,
+        PostgresCrawlSourceRepository,
+    )
     from careerops.infrastructure.database.side_effect_postgres import PostgresSideEffectStore
     from careerops.infrastructure.temporal.activities import (
         ApprovalSweeperActivities,
@@ -150,6 +165,7 @@ def main() -> None:
     )
     from careerops.infrastructure.temporal.internal_event_sink import LoggingInternalEventSink
     from careerops.infrastructure.temporal.m1_crawl_sink import RealCrawlActivitySink
+    from careerops.infrastructure.temporal.s5_activities import S5CrawlExecutionActivities
     from careerops.integrations.fake_side_effect_provider import FakeSideEffectProvider
 
     settings = get_settings()
@@ -169,16 +185,38 @@ def main() -> None:
         sink=LoggingInternalEventSink(),
     )
 
+    # Section 5: wire crawl execution + scheduled-run creation.
+    crawl_sink = RealCrawlActivitySink(fetcher=fetch, engine=engine)
+    run_repo = PostgresCrawlRunRepository(engine)
+    plan_repo = PostgresCrawlPlanRepository(engine)
+    source_repo = PostgresCrawlSourceRepository(engine)
+
+    executor = CrawlExecutionService(
+        run_repository=run_repo,
+        plan_repository=plan_repo,
+        source_repository=source_repo,
+        sink=crawl_sink,
+    )
+    run_creator = CrawlRunService(
+        run_repository=run_repo,
+        plan_repository=plan_repo,
+        source_repository=source_repo,
+    )
+
     m1_activities = M1ActivityBundles(
         outbox_drain=OutboxDrainActivities(publisher=outbox_publisher),
         approval_sweeper=ApprovalSweeperActivities(kernel=kernel),
+        crawl_execution=S5CrawlExecutionActivities(
+            executor=executor,
+            run_creator=run_creator,
+        ),
     )
 
     asyncio.run(
         run_worker(
             TemporalWorkerSettings.from_environment(),
             m1_activities=m1_activities,
-            crawl_sink=RealCrawlActivitySink(fetcher=fetch, engine=engine),
+            crawl_sink=crawl_sink,
         )
     )
 

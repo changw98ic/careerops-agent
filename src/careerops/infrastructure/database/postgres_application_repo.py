@@ -7,10 +7,12 @@ Satisfies ``ApplicationRepository``, ``ResumeRepository``,
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
 import sqlalchemy as sa
+from sqlalchemy import ColumnElement, and_, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 
@@ -21,11 +23,14 @@ from careerops.domain.applications import (
     ApplicationEventType,
     ApplicationPackage,
     ApplicationState,
+    ConfirmationStatus,
     FollowUpReminder,
     FollowUpState,
     PackageApprovalState,
     PackageClaim,
+    ResumeParseStatus,
     ResumeVersion,
+    SubmissionChannel,
 )
 from careerops.infrastructure.database.schema import (
     application_lifecycle_events,
@@ -36,13 +41,42 @@ from careerops.infrastructure.database.schema import (
 )
 
 
+def _encode_cursor(created_at: datetime, row_id: UUID) -> str:
+    """Encode (created_at, id) into an opaque cursor string."""
+    import base64
+
+    return base64.urlsafe_b64encode(f"{created_at.isoformat()}|{row_id}".encode()).decode()
+
+
+def _decode_cursor(cursor: str) -> tuple[datetime, UUID]:
+    """Decode an opaque cursor back to (created_at, id)."""
+    import base64
+
+    decoded = base64.urlsafe_b64decode(cursor.encode()).decode()
+    ts_str, id_str = decoded.rsplit("|", 1)
+    return datetime.fromisoformat(ts_str), UUID(id_str)
+
+
 def _row_to_application(row: sa.RowMapping) -> Application:
+    # 2.7: submission_channel may be NULL for legacy rows; coerce to None
+    # rather than letting SubmissionChannel(None) raise.
+    raw_channel = row.get("submission_channel")
+    submission_channel: SubmissionChannel | None = None
+    if raw_channel:
+        submission_channel = SubmissionChannel(str(raw_channel))
     return Application(
         id=row["id"],
         candidate_id=row["candidate_id"],
         canonical_job_id=row["canonical_job_id"],
         state=ApplicationState(row["state"]),
         apply_url=row["apply_url"],
+        # 2.6/2.7 additive linkage — all nullable for backfill.
+        cycle_id=row.get("cycle_id"),
+        submission_channel=submission_channel,
+        package_version_id=row.get("package_version_id"),
+        payload_hash=row.get("payload_hash"),
+        provider_kind=row.get("provider_kind"),
+        provider_message_id=row.get("provider_message_id"),
         submitted_at=row["submitted_at"],
         follow_up_due_at=row["follow_up_due_at"],
         version=row["version"],
@@ -76,6 +110,16 @@ def _row_to_resume(row: sa.RowMapping) -> ResumeVersion:
         content_hash=row["content_hash"],
         target_type=row["target_type"],
         human_confirmed=row["human_confirmed"],
+        # 2.4 additive lifecycle fields. Defaults keep older callers valid
+        # if they read from a row that pre-dates the columns, but the new
+        # schema always returns these.
+        parse_status=ResumeParseStatus(str(row.get("parse_status") or "pending")),
+        confirmation_status=ConfirmationStatus(
+            str(row.get("confirmation_status") or "unconfirmed")
+        ),
+        source_reference=str(row.get("source_reference") or ""),
+        parsed_at=row.get("parsed_at"),
+        confirmed_at=row.get("confirmed_at"),
         created_at=row["created_at"],
     )
 
@@ -162,6 +206,17 @@ class PostgresApplicationRepository:
             "canonical_job_id": application.canonical_job_id,
             "state": application.state.value,
             "apply_url": application.apply_url,
+            # 2.6/2.7 additive linkage. All nullable; legacy rows keep NULL.
+            "cycle_id": application.cycle_id,
+            "submission_channel": (
+                application.submission_channel.value
+                if application.submission_channel is not None
+                else None
+            ),
+            "package_version_id": application.package_version_id,
+            "payload_hash": application.payload_hash,
+            "provider_kind": application.provider_kind,
+            "provider_message_id": application.provider_message_id,
             "submitted_at": application.submitted_at,
             "follow_up_due_at": application.follow_up_due_at,
             "version": application.version,
@@ -175,6 +230,12 @@ class PostgresApplicationRepository:
                 set_={
                     "state": values["state"],
                     "apply_url": values["apply_url"],
+                    "cycle_id": values["cycle_id"],
+                    "submission_channel": values["submission_channel"],
+                    "package_version_id": values["package_version_id"],
+                    "payload_hash": values["payload_hash"],
+                    "provider_kind": values["provider_kind"],
+                    "provider_message_id": values["provider_message_id"],
                     "submitted_at": values["submitted_at"],
                     "follow_up_due_at": values["follow_up_due_at"],
                     "version": values["version"],
@@ -235,6 +296,12 @@ class PostgresApplicationRepository:
                 content_hash=version.content_hash,
                 target_type=version.target_type,
                 human_confirmed=version.human_confirmed,
+                # 2.4 lifecycle fields
+                parse_status=version.parse_status.value,
+                confirmation_status=version.confirmation_status.value,
+                source_reference=version.source_reference,
+                parsed_at=version.parsed_at,
+                confirmed_at=version.confirmed_at,
             )
             .on_conflict_do_update(
                 index_elements=[resume_versions.c.id],
@@ -244,11 +311,98 @@ class PostgresApplicationRepository:
                     "content_hash": version.content_hash,
                     "target_type": version.target_type,
                     "human_confirmed": version.human_confirmed,
+                    "parse_status": version.parse_status.value,
+                    "confirmation_status": version.confirmation_status.value,
+                    "source_reference": version.source_reference,
+                    "parsed_at": version.parsed_at,
+                    "confirmed_at": version.confirmed_at,
                 },
             )
         )
         with self._engine.begin() as conn:
             conn.execute(stmt)
+
+    # -- ResumeRepository: content-addressed dedupe (task 2.4) --------------
+
+    def find_resume_by_content_hash(
+        self, candidate_id: UUID, content_hash: str
+    ) -> ResumeVersion | None:
+        """Return the existing resume version for a content hash, if any.
+
+        Backs content-addressed dedupe (task 2.4): when the same resume bytes
+        are registered twice for the same candidate, the existing version is
+        returned instead of creating a duplicate row + duplicate blob. The
+        service layer decides whether to surface the existing version or
+        register a linked duplicate (new version_number, same file_reference).
+        """
+        if not content_hash:
+            return None
+        stmt = (
+            sa.select(resume_versions)
+            .where(
+                sa.and_(
+                    resume_versions.c.candidate_id == candidate_id,
+                    resume_versions.c.content_hash == content_hash,
+                )
+            )
+            .order_by(resume_versions.c.version_number.desc())
+            .limit(1)
+        )
+        with self._engine.begin() as conn:
+            row = conn.execute(stmt).mappings().first()
+        return _row_to_resume(row) if row else None
+
+    def find_resume_by_id(self, candidate_id: UUID, version_id: UUID) -> ResumeVersion | None:
+        """Return one resume version, scoped by candidate ownership."""
+        stmt = sa.select(resume_versions).where(
+            sa.and_(
+                resume_versions.c.id == version_id,
+                resume_versions.c.candidate_id == candidate_id,
+            )
+        )
+        with self._engine.begin() as conn:
+            row = conn.execute(stmt).mappings().first()
+        return _row_to_resume(row) if row else None
+
+    def find_eligible_resumes(self, candidate_id: UUID, *, limit: int = 50) -> list[ResumeVersion]:
+        """Return resumes eligible for application packages.
+
+        A resume is eligible only when ``parse_status = parsed`` and
+        ``confirmation_status = confirmed`` (career-profile-and-resume spec).
+        Model output cannot change either status (Iron Rule 6).
+        """
+        stmt = (
+            sa.select(resume_versions)
+            .where(
+                sa.and_(
+                    resume_versions.c.candidate_id == candidate_id,
+                    resume_versions.c.parse_status == ResumeParseStatus.PARSED.value,
+                    resume_versions.c.confirmation_status == ConfirmationStatus.CONFIRMED.value,
+                )
+            )
+            .order_by(resume_versions.c.version_number.desc())
+            .limit(limit)
+        )
+        with self._engine.begin() as conn:
+            rows = conn.execute(stmt).mappings().all()
+        return [_row_to_resume(row) for row in rows]
+
+    def list_resumes(self, candidate_id: UUID, *, limit: int = 50) -> list[ResumeVersion]:
+        """Return all resume versions for the candidate, newest version_number first.
+
+        Additive read (Section 3 task 3.3) consumed by the resume service's
+        history view; scoped by the server-resolved ``candidate_id`` like every
+        other resume read.
+        """
+        stmt = (
+            sa.select(resume_versions)
+            .where(resume_versions.c.candidate_id == candidate_id)
+            .order_by(resume_versions.c.version_number.desc())
+            .limit(limit)
+        )
+        with self._engine.begin() as conn:
+            rows = conn.execute(stmt).mappings().all()
+        return [_row_to_resume(row) for row in rows]
 
     # -- PackageRepository protocol ----------------------------------------
 
@@ -348,29 +502,65 @@ class PostgresApplicationRepository:
         state: str | None = None,
         cursor: str | None = None,
         limit: int = 50,
-    ) -> list[dict[str, object]]:
-        stmt = sa.select(applications)
+    ) -> dict[str, object]:
+        # Build filter conditions.
+        filters: list[ColumnElement[bool]] = []
         if candidate_id is not None:
-            stmt = stmt.where(applications.c.candidate_id == UUID(candidate_id))
+            filters.append(applications.c.candidate_id == UUID(candidate_id))
         if state is not None:
-            stmt = stmt.where(applications.c.state == state)
-        stmt = stmt.order_by(applications.c.created_at.desc()).limit(limit)
+            filters.append(applications.c.state == state)
 
         with self._engine.begin() as conn:
+            # Total count with filters.
+            count_stmt = select(func.count()).select_from(applications)
+            if filters:
+                count_stmt = count_stmt.where(*filters)
+            total = conn.execute(count_stmt).scalar_one()
+
+            # Fetch limit+1 for has_more detection.
+            # Descending order: created_at DESC, id DESC.  Cursor encodes
+            # (created_at, id) of the last row; next page is rows strictly
+            # "less than" the cursor in the same ordering.
+            stmt = (
+                select(applications)
+                .order_by(applications.c.created_at.desc(), applications.c.id.desc())
+                .limit(limit + 1)
+            )
+            if filters:
+                stmt = stmt.where(*filters)
+            if cursor is not None:
+                cur_created, cur_id = _decode_cursor(cursor)
+                stmt = stmt.where(
+                    or_(
+                        applications.c.created_at < cur_created,
+                        and_(
+                            applications.c.created_at == cur_created,
+                            applications.c.id < cur_id,
+                        ),
+                    )
+                )
             rows = conn.execute(stmt).mappings().all()
 
-        return [
-            {
-                "id": r["id"],
-                "candidate_id": r["candidate_id"],
-                "canonical_job_id": r["canonical_job_id"],
-                "state": r["state"],
-                "apply_url": r["apply_url"],
-                "submitted_at": r["submitted_at"].isoformat() if r["submitted_at"] else None,
-                "follow_up_due_at": (
-                    r["follow_up_due_at"].isoformat() if r["follow_up_due_at"] else None
-                ),
-                "version": r["version"],
-            }
-            for r in rows
-        ]
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+        next_cursor = _encode_cursor(rows[-1]["created_at"], rows[-1]["id"]) if has_more else None
+
+        return {
+            "items": [
+                {
+                    "id": r["id"],
+                    "candidate_id": r["candidate_id"],
+                    "canonical_job_id": r["canonical_job_id"],
+                    "state": r["state"],
+                    "apply_url": r["apply_url"],
+                    "submitted_at": r["submitted_at"].isoformat() if r["submitted_at"] else None,
+                    "follow_up_due_at": (
+                        r["follow_up_due_at"].isoformat() if r["follow_up_due_at"] else None
+                    ),
+                    "version": r["version"],
+                }
+                for r in rows
+            ],
+            "total": total,
+            "next_cursor": next_cursor,
+        }

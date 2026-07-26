@@ -14,15 +14,30 @@ Two dependencies are provided:
 
 Routes that must remain public (health, metrics) simply do not include either
 dependency.
+
+Server-side candidate ownership (end-to-end-career-application-loop Iron Rule
+2): ``require_candidate_id`` resolves the active candidate from the
+authenticated principal's ``candidate_id`` (populated from
+``console_users.candidate_id`` via the session). Client-supplied
+``candidate_id`` values in query or body parameters are NEVER honored for
+ownership scoping — Section-3+ routes receive the server-resolved id through
+this dependency and MUST ignore any client-provided substitute.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Annotated
+from uuid import UUID
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, Request
 from fastapi.security import APIKeyCookie
 
+from careerops.api.errors import (
+    CandidateProfileRequiredError,
+    CSRFRejectedError,
+    UnauthorizedError,
+)
 from careerops.auth.contracts import AuthenticatedPrincipal, AuthError
 
 _COOKIE_NAME = "careerops_session"
@@ -51,21 +66,23 @@ async def require_api_auth(
     if auth_service is None or web_settings is None:
         if auth_service is None and web_settings is None:
             return None
-        raise HTTPException(status_code=401, detail="authentication required")
+        raise UnauthorizedError()
 
     if not session_token:
-        raise HTTPException(status_code=401, detail="authentication required")
+        raise UnauthorizedError()
 
     try:
         principal = auth_service.authenticate(session_token, now=_now())
     except (AuthError, ValueError):
-        raise HTTPException(status_code=401, detail="authentication required") from None
+        raise UnauthorizedError() from None
 
-    csrf_token = request.headers.get(_csrf_header, "")
-    try:
-        auth_service.validate_csrf(principal, csrf_token)
-    except (AuthError, ValueError):
-        raise HTTPException(status_code=403, detail="csrf token rejected") from None
+    # Per spec §4: GET/HEAD only check session cookie; mutating methods also check CSRF.
+    if request.method not in ("GET", "HEAD"):
+        csrf_token = request.headers.get(_csrf_header, "")
+        try:
+            auth_service.validate_csrf(principal, csrf_token)
+        except (AuthError, ValueError):
+            raise CSRFRejectedError() from None
 
     return principal
 
@@ -87,15 +104,70 @@ async def require_web_auth(
     if auth_service is None or web_settings is None:
         if auth_service is None and web_settings is None:
             return None
-        raise HTTPException(status_code=401, detail="authentication required")
+        raise UnauthorizedError()
 
     if not session_token:
-        raise HTTPException(status_code=401, detail="authentication required")
+        raise UnauthorizedError()
 
     try:
         return auth_service.authenticate(session_token, now=_now())
     except (AuthError, ValueError):
-        raise HTTPException(status_code=401, detail="authentication required") from None
+        raise UnauthorizedError() from None
+
+
+async def require_candidate_id(
+    principal: Annotated[AuthenticatedPrincipal | None, Depends(require_api_auth)],
+) -> UUID:
+    """Resolve the active candidate_id SERVER-SIDE from the session (Iron Rule 2).
+
+    The candidate is read from the authenticated principal, which carries the
+    ``candidate_id`` linked to the console user at bootstrap/login time
+    (``console_users.candidate_id``). A request with no authenticated session,
+    or a session whose user has no linked candidate, raises
+    :class:`CandidateProfileRequiredError` (HTTP 403).
+
+    Section-3+ routes consume the returned id via ``Depends(require_candidate_id)``
+    and MUST NOT read a ``candidate_id`` from the request body or query string
+    for ownership scoping. Any client-supplied candidate value is by definition
+    a substitution attempt and is rejected by simply not being read. Use
+    :func:`reject_candidate_substitution` for routes that historically accepted
+    a candidate_id field and need to assert it matches the server-resolved id.
+    """
+    if principal is None or principal.candidate_id is None:
+        raise CandidateProfileRequiredError()
+    return principal.candidate_id
+
+
+def reject_candidate_substitution(*, provided: object, resolved: UUID) -> None:
+    """Defense-in-depth guard for routes that still receive a client candidate_id.
+
+    Routes that accept a candidate-shaped field in their body/query (e.g. legacy
+    M3 endpoints kept for backward compatibility) MUST call this with the
+    client value and the server-resolved id. A non-empty client value that
+    differs from the server-resolved id raises
+    :class:`CandidateProfileRequiredError` — the request is treated as an
+    ownership-substitution attempt regardless of whether the target row exists.
+
+    An empty/``None`` client value is allowed: "not supplied" is not a
+    substitution. The server-resolved id always wins.
+    """
+    if provided is None:
+        return
+    if isinstance(provided, str):
+        if not provided:
+            return
+        try:
+            provided_id = UUID(provided)
+        except ValueError:
+            raise CandidateProfileRequiredError("candidate_id is not a valid uuid") from None
+    elif isinstance(provided, UUID):
+        provided_id = provided
+    else:
+        raise CandidateProfileRequiredError("candidate_id has unsupported type")
+    if provided_id != resolved:
+        raise CandidateProfileRequiredError(
+            "client-supplied candidate_id does not match the authenticated user"
+        )
 
 
 def _now() -> datetime:

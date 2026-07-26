@@ -8,15 +8,21 @@ fetching the source URL via ``http_fetcher.fetch`` and running the matching
 ``ingest_posting`` writes to ``job_postings`` + ``job_posting_versions``
 with dedup by ``source_id + external_id`` (posting) and
 ``job_posting_id + content_hash`` (version).
+
+Section 5 extends the sink with ``crawl_source_with_signals`` which returns
+a ``CrawlSourceResult`` carrying postings plus HTTP status, body prefix, and
+parse-drift signals for the backoff policy (task 5.7).
 """
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 from collections.abc import Callable
 from datetime import UTC, datetime
 from json import JSONDecodeError, loads
+from typing import Any
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
@@ -40,6 +46,27 @@ from careerops.workflows.m1_contracts import (
 )
 
 FetcherFn = Callable[[str], FetchedResponse]
+
+# Expected fields that every adapter should produce in structured_data.
+# If these are missing and zero jobs were found, it signals parse drift.
+_EXPECTED_POSTING_FIELDS = ("title",)
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class CrawlSourceResult:
+    """Extended result from ``crawl_source_with_signals``.
+
+    Carries the postings plus HTTP-level and parse-level signals the backoff
+    policy (task 5.7) needs to evaluate 403/429/CAPTCHA/parse-drift.
+    The existing ``crawl_source`` method is unchanged — callers that do not
+    need signals continue to use it.
+    """
+
+    postings: tuple[CrawledPostingRecord, ...]
+    status_code: int = 0
+    body_prefix: str = ""
+    expected_fields_missing: tuple[str, ...] = ()
+
 
 _ADAPTER_REGISTRY: dict[str, JobSourceAdapter] = {
     "greenhouse": GreenhouseAdapter(),
@@ -100,12 +127,22 @@ class RealCrawlActivitySink:
 
         fetched_at = resp.fetched_at.isoformat()
         postings: list[CrawledPostingRecord] = []
+
+        # For Greenhouse: fetch detail endpoint for each job to get description (content).
+        # Greenhouse list API does not include the JD body.
+        detail_cache: dict[str, str] = {}
+        if request.source_type == "greenhouse":
+            detail_cache = self._fetch_greenhouse_details(request.base_url, result.jobs)
+
         for record in result.jobs:
             # Flatten to dict[str, str] — Temporal JSON converter rejects
             # ``object`` values; stringify non-string scalars.
             raw: dict[str, str] = {}
             for k, v in record.raw_data.items():
                 raw[k] = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
+
+            description = record.description or detail_cache.get(record.external_id, "")
+
             postings.append(
                 CrawledPostingRecord(
                     source_id=request.source_id,
@@ -115,7 +152,8 @@ class RealCrawlActivitySink:
                     structured_data={
                         "title": record.title or "",
                         "location": record.location or "",
-                        "description": record.description or "",
+                        "description": description,
+                        "apply_url": record.url or "",
                         **raw,
                     },
                     parser_version=adapter.parser_version,
@@ -124,7 +162,125 @@ class RealCrawlActivitySink:
             )
         return postings
 
-    async def ingest_posting(self, record: CrawledPostingRecord) -> dict[str, bool]:
+    async def crawl_source_with_signals(self, request: CrawlJobSourceInput) -> CrawlSourceResult:
+        """Fetch and parse a source, returning postings plus backoff signals.
+
+        Section 5 extension (task 5.7): wraps the same fetch + adapter logic
+        as ``crawl_source`` but captures HTTP status code, body prefix (for
+        CAPTCHA/login-wall detection), and expected-field parse-drift signals.
+        The existing ``crawl_source`` method is unchanged — callers that do
+        not need signals continue to use it.
+
+        If the adapter is not found, returns an empty result with status 0.
+        If the fetch raises, the exception propagates to the caller (the
+        execution service catches it and increments the failed counter).
+        """
+        adapter = self._adapters.get(request.source_type)
+        if adapter is None:
+            return CrawlSourceResult(postings=())
+
+        resp: FetchedResponse = self._fetch(request.base_url)
+        result = adapter.list_jobs(_parse_body(resp.body))
+
+        fetched_at = resp.fetched_at.isoformat()
+        postings: list[CrawledPostingRecord] = []
+
+        # For Greenhouse: fetch detail endpoint for each job to get description.
+        detail_cache: dict[str, str] = {}
+        if request.source_type == "greenhouse":
+            detail_cache = self._fetch_greenhouse_details(request.base_url, result.jobs)
+
+        for record in result.jobs:
+            raw: dict[str, str] = {}
+            for k, v in record.raw_data.items():
+                raw[k] = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
+
+            description = record.description or detail_cache.get(record.external_id, "")
+
+            postings.append(
+                CrawledPostingRecord(
+                    source_id=request.source_id,
+                    external_id=record.external_id,
+                    canonical_url=record.url or request.base_url,
+                    source_url=resp.final_url or request.base_url,
+                    structured_data={
+                        "title": record.title or "",
+                        "location": record.location or "",
+                        "description": description,
+                        "apply_url": record.url or "",
+                        **raw,
+                    },
+                    parser_version=adapter.parser_version,
+                    fetched_at=fetched_at,
+                )
+            )
+
+        # Detect parse drift: expected fields missing across all postings.
+        missing_fields: list[str] = []
+        if postings:
+            # Check the first posting for expected fields.
+            sample = postings[0].structured_data
+            for field_name in _EXPECTED_POSTING_FIELDS:
+                if not sample.get(field_name):
+                    missing_fields.append(field_name)
+        elif result.jobs:
+            # Jobs were found by the adapter but produced no postings — unusual.
+            missing_fields.extend(_EXPECTED_POSTING_FIELDS)
+
+        return CrawlSourceResult(
+            postings=tuple(postings),
+            status_code=resp.status_code,
+            body_prefix=resp.body[:4096],
+            expected_fields_missing=tuple(missing_fields),
+        )
+
+    def _fetch_greenhouse_details(
+        self,
+        base_url: str,
+        jobs: tuple[Any, ...],
+        *,
+        batch_size: int = 10,
+    ) -> dict[str, str]:
+        """Fetch Greenhouse detail endpoint for each job to get description.
+
+        Constructs detail URL by appending /{id} to the list URL.
+        Returns a map of external_id -> description (HTML content).
+        """
+        from careerops.adapters.job_sources import GreenhouseDetailAdapter
+
+        detail_adapter = GreenhouseDetailAdapter()
+        descriptions: dict[str, str] = {}
+
+        # Process in batches to stay within timeout
+        job_list = list(jobs)
+        for i in range(0, len(job_list), batch_size):
+            batch = job_list[i : i + batch_size]
+            for record in batch:
+                ext_id = record.external_id
+                if not ext_id:
+                    continue
+                detail_url = f"{base_url.rstrip('/')}/{ext_id}"
+                try:
+                    detail_resp = self._fetch(detail_url)
+                    detail_data = _parse_body(detail_resp.body)
+                    detail_record = detail_adapter.fetch_job(
+                        detail_data,
+                        source_url=detail_url,
+                        fetched_at=detail_resp.fetched_at,
+                    )
+                    if detail_record.description:
+                        descriptions[ext_id] = detail_record.description
+                except Exception:
+                    pass  # Skip failed detail fetches; list data is still useful
+        return descriptions
+
+    async def ingest_posting(
+        self,
+        record: CrawledPostingRecord,
+        *,
+        crawl_run_id: UUID | None = None,
+        plan_version_id: UUID | None = None,
+    ) -> dict[str, bool]:
         """Insert into job_postings + job_posting_versions with idempotent dedup.
 
         Dedup rules:
@@ -133,6 +289,14 @@ class RealCrawlActivitySink:
 
         Returns ``is_new_posting`` / ``is_new_version`` flags matching the
         workflow contract.
+
+        Section 5 provenance (tasks 5.1, 5.5, 5.6): when
+        ``crawl_run_id`` / ``plan_version_id`` are supplied they are recorded
+        on the version row so every ingested posting is traceable to the run
+        and plan-version snapshot that produced it. Both are optional and
+        nullable so pre-Section-5 callers (Temporal M1 workflows) continue to
+        work unchanged. The idempotent ON CONFLICT DO NOTHING dedup logic is
+        NOT modified — provenance columns only appear in the VALUES clause.
         """
         if self._engine is None:
             raise RuntimeError("ingest_posting requires an Engine")
@@ -177,17 +341,26 @@ class RealCrawlActivitySink:
                 ).scalar_one()
 
             # --- Upsert job_posting_versions ---
+            # Provenance columns (crawl_run_id, plan_version_id) are added
+            # to the VALUES clause only when provided; they are nullable so
+            # existing callers that do not supply them continue to work.
+            version_values: dict[str, object] = {
+                "id": uuid4(),
+                "job_posting_id": posting_id,
+                "content_hash": content_hash,
+                "source_url": record.source_url,
+                "parser_version": record.parser_version,
+                "structured_data": record.structured_data,
+                "captured_at": fetched_at,
+            }
+            if crawl_run_id is not None:
+                version_values["crawl_run_id"] = crawl_run_id
+            if plan_version_id is not None:
+                version_values["plan_version_id"] = plan_version_id
+
             insert_version = (
                 pg_insert(job_posting_versions)
-                .values(
-                    id=uuid4(),
-                    job_posting_id=posting_id,
-                    content_hash=content_hash,
-                    source_url=record.source_url,
-                    parser_version=record.parser_version,
-                    structured_data=record.structured_data,
-                    captured_at=fetched_at,
-                )
+                .values(**version_values)
                 .on_conflict_do_nothing(
                     index_elements=[
                         job_posting_versions.c.job_posting_id,

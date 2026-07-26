@@ -1,6 +1,6 @@
 # ADR 0001: Freeze the single-user MVP scope
 
-- Status: Accepted
+- Status: Accepted (scope widened by [ADR 0011](0011-application-centered-scope.md); the MVP exclusions below remain authoritative and are not reopened by 0011)
 - Date: 2026-07-17
 - Owners: repository owner; security decisions require independent review before M7
 

@@ -21,6 +21,7 @@ x-careerops-environment: &careerops-environment
   CAREEROPS_CONSOLE_ALLOWED_HOSTS: '["127.0.0.1:${CAREEROPS_API_PORT:-8000}","localhost:${CAREEROPS_API_PORT:-8000}"]'
   CAREEROPS_CONSOLE_ALLOWED_ORIGINS: '["http://127.0.0.1:${CAREEROPS_API_PORT:-8000}","http://localhost:${CAREEROPS_API_PORT:-8000}"]'
   CAREEROPS_CONSOLE_COOKIE_SECURE: "false"
+  CAREEROPS_SERVE_SPA: "true"
 
 x-app-service: &app-service
   build:
@@ -156,12 +157,10 @@ services:
       - object-data:/app/data
     healthcheck:
       test:
-        - CMD
-        - python
-        - -c
+        - CMD-SHELL
         - >-
-          import urllib.request;
-          urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=2)
+          python -c "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=2)" &&
+          python -c "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/', timeout=2); assert b'id=\"app\"' in r.read(), 'Vue SPA not served'"
       interval: 10s
       timeout: 5s
       retries: 20

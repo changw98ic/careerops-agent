@@ -69,6 +69,24 @@ job_sources = sa.Table(
     sa.Column("state", sa.String(24), server_default="pending_review", nullable=False),
     sa.Column("verified_at", sa.DateTime(timezone=True)),
     sa.Column("last_discovery_at", sa.DateTime(timezone=True)),
+    # 4.2/4.3 (end-to-end-career-application-loop Section 4): additive source
+    # control columns. Sources declare scope only; the crawl policy layer stays
+    # authoritative (Iron Rule 6). ``enabled`` is the user on/off toggle;
+    # ``state`` above is the operational lifecycle. ``last_run_metadata`` is a
+    # bounded safe summary (counts, next eligible time) — never raw sensitive
+    # content.
+    sa.Column("trust_status", sa.String(16), server_default="unknown", nullable=False),
+    sa.Column("terms_status", sa.String(16), server_default="unknown", nullable=False),
+    sa.Column("robots_status", sa.String(16), server_default="unknown", nullable=False),
+    sa.Column("adapter_version", sa.Text(), server_default="", nullable=False),
+    sa.Column("enabled", sa.Boolean(), server_default=sa.text("false"), nullable=False),
+    sa.Column("last_run_at", sa.DateTime(timezone=True)),
+    sa.Column(
+        "last_run_metadata",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
     sa.Column(
         "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     ),
@@ -84,6 +102,18 @@ job_sources = sa.Table(
     sa.CheckConstraint(
         "state IN ('pending_review', 'active', 'paused', 'blocked')",
         name="state_values",
+    ),
+    sa.CheckConstraint(
+        "trust_status IN ('unknown', 'allowed', 'blocked')",
+        name="trust_status_values",
+    ),
+    sa.CheckConstraint(
+        "terms_status IN ('unknown', 'allowed', 'blocked')",
+        name="terms_status_values",
+    ),
+    sa.CheckConstraint(
+        "robots_status IN ('unknown', 'allowed', 'blocked')",
+        name="robots_status_values",
     ),
 )
 
@@ -287,6 +317,22 @@ job_posting_versions = sa.Table(
         nullable=False,
     ),
     sa.Column("captured_at", sa.DateTime(timezone=True), nullable=False),
+    # Section 5 provenance (migration 0016): link each version to the crawl
+    # run and plan-version snapshot that produced it. Both nullable for
+    # existing pre-Section-5 data; SET NULL on delete so a deleted run/plan
+    # does not cascade into posting version loss.
+    sa.Column(
+        "crawl_run_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.crawl_runs.id", ondelete="SET NULL"),
+        nullable=True,
+    ),
+    sa.Column(
+        "plan_version_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.crawl_plan_versions.id", ondelete="SET NULL"),
+        nullable=True,
+    ),
     sa.Column(
         "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     ),
@@ -467,12 +513,43 @@ evidence_items = sa.Table(
     sa.Column("content_hash", sa.String(64), server_default="", nullable=False),
     sa.Column("source_url", sa.Text(), server_default="", nullable=False),
     sa.Column("verified", sa.Boolean(), server_default=sa.text("false"), nullable=False),
+    # 2.5 resume-derived evidence columns (additive). The repository/commit/
+    # path/symbol path stays untouched; resume-extracted claims additionally
+    # carry a bounded source_span, extractor_version, confirmation_status,
+    # evidence_hash, and an optional link to the resume version they came from.
+    sa.Column("extractor_version", sa.Text(), server_default="", nullable=False),
+    sa.Column("source_span", sa.Text(), server_default="", nullable=False),
+    sa.Column(
+        "confirmation_status",
+        sa.String(16),
+        server_default="unconfirmed",
+        nullable=False,
+    ),
+    sa.Column("evidence_hash", sa.String(64), server_default="", nullable=False),
+    sa.Column(
+        "resume_version_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.resume_versions.id", ondelete="SET NULL"),
+        nullable=True,
+    ),
     sa.Column(
         "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     ),
     sa.CheckConstraint(
         "kind IN ('skill', 'project', 'experience', 'certification', 'education')",
         name="kind_values",
+    ),
+    sa.CheckConstraint(
+        "confirmation_status IN ('unconfirmed', 'confirmed', 'rejected')",
+        name="confirmation_status_values",
+    ),
+    sa.CheckConstraint(
+        "char_length(source_span) <= 8192",
+        name="source_span_bounded",
+    ),
+    sa.CheckConstraint(
+        "evidence_hash = '' OR char_length(evidence_hash) = 64",
+        name="evidence_hash_length",
     ),
     sa.UniqueConstraint(
         "candidate_id",
@@ -998,6 +1075,17 @@ console_users = sa.Table(
     "console_users",
     metadata,
     sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "candidate_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.candidates.id", ondelete="RESTRICT"),
+    ),
+    # 2.1: the active candidate is resolved from the authenticated user. The
+    # column stays nullable so bootstrap can create both rows in one txn, but
+    # once set it is unique (single-user runtime). PostgreSQL UNIQUE allows
+    # multiple NULLs, so a plain constraint preserves the nullable bootstrap
+    # window while forbidding two users from claiming the same candidate.
+    sa.UniqueConstraint("candidate_id", name="uq_console_users_candidate_id"),
     sa.Column("singleton_key", sa.SmallInteger(), server_default="1", nullable=False, unique=True),
     sa.Column("username", sa.String(64), nullable=False, unique=True),
     sa.Column("password_hash", sa.Text(), nullable=False),
@@ -1202,8 +1290,27 @@ applications = sa.Table(
         sa.ForeignKey(f"{DATABASE_SCHEMA}.canonical_jobs.id", ondelete="RESTRICT"),
         nullable=False,
     ),
+    # 2.6: link to the active application cycle. Nullable for backfill; the
+    # service layer makes it required for new rows in a later stage. The
+    # candidate/job UQ below stays as a safety net (design Decision 8) while
+    # one-active-cycle is enforced at the service layer.
+    sa.Column(
+        "cycle_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.application_cycles.id", ondelete="SET NULL"),
+        nullable=True,
+    ),
     sa.Column("state", sa.String(24), server_default="favorited", nullable=False),
     sa.Column("apply_url", sa.Text(), server_default="", nullable=False),
+    # 2.7: submission channel / package version / payload / provider linkage.
+    # All nullable and additive. submission_channel mirrors the Phase 0
+    # SubmissionChannel enum; payload_hash binds the approved package version
+    # (any mutation invalidates the prior approval — design Decision 4/5).
+    sa.Column("submission_channel", sa.String(16), nullable=True),
+    sa.Column("package_version_id", sa.Uuid(), nullable=True),
+    sa.Column("payload_hash", sa.String(64), nullable=True),
+    sa.Column("provider_kind", sa.String(24), nullable=True),
+    sa.Column("provider_message_id", sa.Text(), nullable=True),
     sa.Column("submitted_at", sa.DateTime(timezone=True)),
     sa.Column("follow_up_due_at", sa.DateTime(timezone=True)),
     sa.Column("version", sa.Integer(), server_default="1", nullable=False),
@@ -1220,6 +1327,14 @@ applications = sa.Table(
         name="state_values",
     ),
     sa.CheckConstraint("version > 0", name="version_positive"),
+    sa.CheckConstraint(
+        "submission_channel IS NULL OR submission_channel IN ('email', 'external_form', 'manual')",
+        name="submission_channel_values",
+    ),
+    sa.CheckConstraint(
+        "payload_hash IS NULL OR char_length(payload_hash) = 64",
+        name="payload_hash_length",
+    ),
 )
 
 sa.Index(
@@ -1287,6 +1402,22 @@ resume_versions = sa.Table(
     sa.Column("content_hash", sa.String(64), nullable=False),
     sa.Column("target_type", sa.Text(), server_default="general", nullable=False),
     sa.Column("human_confirmed", sa.Boolean(), server_default=sa.text("false"), nullable=False),
+    # 2.4 lifecycle columns (additive; defaults keep existing rows valid).
+    sa.Column(
+        "parse_status",
+        sa.String(16),
+        server_default="pending",
+        nullable=False,
+    ),
+    sa.Column(
+        "confirmation_status",
+        sa.String(16),
+        server_default="unconfirmed",
+        nullable=False,
+    ),
+    sa.Column("source_reference", sa.Text(), server_default="", nullable=False),
+    sa.Column("parsed_at", sa.DateTime(timezone=True)),
+    sa.Column("confirmed_at", sa.DateTime(timezone=True)),
     sa.Column(
         "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     ),
@@ -1295,6 +1426,14 @@ resume_versions = sa.Table(
     ),
     sa.CheckConstraint("version_number > 0", name="version_number_positive"),
     sa.CheckConstraint("char_length(content_hash) = 64", name="content_hash_length"),
+    sa.CheckConstraint(
+        "parse_status IN ('pending', 'parsed', 'failed')",
+        name="parse_status_values",
+    ),
+    sa.CheckConstraint(
+        "confirmation_status IN ('unconfirmed', 'confirmed', 'rejected')",
+        name="confirmation_status_values",
+    ),
 )
 
 application_packages = sa.Table(
@@ -1376,6 +1515,173 @@ sa.Index(
         follow_up_reminders.c.state == "active",
     ),
     unique=True,
+)
+
+# ---------------------------------------------------------------------------
+# End-to-end career loop: versioned profile preferences + application cycles
+# (end-to-end-career-application-loop, Section 2). Additive; the matching and
+# application projections above continue to work unchanged.
+# ---------------------------------------------------------------------------
+
+profile_versions = sa.Table(
+    "profile_versions",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "candidate_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.candidates.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column("version", sa.Integer(), nullable=False),
+    sa.Column(
+        "is_active",
+        sa.Boolean(),
+        server_default=sa.text("false"),
+        nullable=False,
+    ),
+    # Structured preference columns (jsonb). Shape guards below keep each
+    # column unambiguous so the service layer can decode them into the frozen
+    # domain types in careerops/domain/profiles.py without type fallbacks.
+    sa.Column(
+        "target_roles",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "locations",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "remote_rules",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "compensation",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column("seniority", sa.Text(), server_default="", nullable=False),
+    # Column is ``authorization_rules`` (not ``authorization``) because
+    # ``AUTHORIZATION`` is a PostgreSQL keyword and parsing it unquoted inside
+    # CHECK expressions fails (jsonb_typeof(authorization) is ambiguous). The
+    # name mirrors the sibling jsonb-rules columns remote_rules / hard_exclusions.
+    sa.Column(
+        "authorization_rules",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "include_keywords",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "exclude_keywords",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "hard_exclusions",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column("rules_version", sa.Text(), server_default="", nullable=False),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.Column(
+        "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.UniqueConstraint("candidate_id", "version", name="uq_profile_versions_candidate_version"),
+    # 2.3 shape guards backing service-level contradictory-preference /
+    # invalid-compensation validation (service layer arrives in stage 3).
+    sa.CheckConstraint("version > 0", name="version_positive"),
+    sa.CheckConstraint("jsonb_typeof(target_roles) = 'array'", name="target_roles_array"),
+    sa.CheckConstraint("jsonb_typeof(locations) = 'array'", name="locations_array"),
+    sa.CheckConstraint("jsonb_typeof(remote_rules) = 'object'", name="remote_rules_object"),
+    sa.CheckConstraint("jsonb_typeof(compensation) = 'object'", name="compensation_object"),
+    sa.CheckConstraint(
+        "jsonb_typeof(authorization_rules) = 'object'", name="authorization_rules_object"
+    ),
+    sa.CheckConstraint("jsonb_typeof(include_keywords) = 'array'", name="include_keywords_array"),
+    sa.CheckConstraint("jsonb_typeof(exclude_keywords) = 'array'", name="exclude_keywords_array"),
+    sa.CheckConstraint("jsonb_typeof(hard_exclusions) = 'object'", name="hard_exclusions_object"),
+    sa.CheckConstraint(
+        "jsonb_typeof(compensation->'amount_min') IS DISTINCT FROM 'number' "
+        "OR jsonb_typeof(compensation->'amount_max') IS DISTINCT FROM 'number' "
+        "OR (compensation->'amount_min')::numeric <= (compensation->'amount_max')::numeric",
+        name="compensation_range",
+    ),
+)
+
+sa.Index(
+    "ix_profile_versions_candidate_active",
+    profile_versions.c.candidate_id,
+    unique=True,
+    postgresql_where=profile_versions.c.is_active == sa.true(),
+)
+
+application_cycles = sa.Table(
+    "application_cycles",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "candidate_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.candidates.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column(
+        "canonical_job_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.canonical_jobs.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column(
+        "active",
+        sa.Boolean(),
+        server_default=sa.text("true"),
+        nullable=False,
+    ),
+    # Self-reference: an explicit re-application opens a new cycle linked to
+    # the prior one, preserving history (design Decision 8). Inline self-FK
+    # (PostgreSQL handles it); use_alter=True silently dropped the constraint
+    # under op.create_table and broke alembic check.
+    sa.Column("prior_cycle_id", sa.Uuid()),
+    sa.Column("reason", sa.Text(), server_default="", nullable=False),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.Column("closed_at", sa.DateTime(timezone=True)),
+    sa.ForeignKeyConstraint(
+        ["prior_cycle_id"],
+        [f"{DATABASE_SCHEMA}.application_cycles.id"],
+        name="fk_application_cycles_prior_cycle",
+        ondelete="SET NULL",
+    ),
+    sa.CheckConstraint(
+        "(active = true AND closed_at IS NULL) OR (active = false AND closed_at IS NOT NULL)",
+        name="active_closed_consistent",
+    ),
+)
+
+sa.Index(
+    "ix_application_cycles_candidate_job_active",
+    application_cycles.c.candidate_id,
+    application_cycles.c.canonical_job_id,
+    unique=True,
+    postgresql_where=application_cycles.c.active == sa.true(),
 )
 
 # ---------------------------------------------------------------------------
@@ -2043,4 +2349,211 @@ APPEND_ONLY_TABLES = (
     "job_posting_versions",
     "policy_decisions",
     "provider_receipts",
+)
+
+# ---------------------------------------------------------------------------
+# End-to-end career loop Section 4: crawl sources control columns (additive,
+# declared above on ``job_sources``) + versioned crawl plans + run records.
+# (crawl-plan-management spec, tasks 4.1-4.4.) Plan versions are immutable
+# copy-on-write (design Decision 2); runs bind to one plan-version snapshot
+# + source set + run identity (Iron Rule 4). The crawl policy layer stays
+# authoritative — these tables declare scope only (Iron Rule 6).
+# ---------------------------------------------------------------------------
+
+crawl_plan_versions = sa.Table(
+    "crawl_plan_versions",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    # ``owner_id`` is the server-resolved candidate id (Iron Rule 2). Named
+    # ``owner_id`` (not ``owner``) to avoid the PostgreSQL keyword and match
+    # the FK ``*_id`` convention used elsewhere; semantically identical to
+    # ``candidate_id`` on the sibling ``profile_versions`` table.
+    sa.Column(
+        "owner_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.candidates.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column("version", sa.Integer(), nullable=False),
+    sa.Column(
+        "is_active",
+        sa.Boolean(),
+        server_default=sa.text("false"),
+        nullable=False,
+    ),
+    sa.Column(
+        "sources",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "themes",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "include_keywords",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "exclude_keywords",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "role_families",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "locations",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "remote_rules",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "seniority",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "compensation",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column("content_scope", sa.Text(), server_default="", nullable=False),
+    # Schedule (Iron Rule 5: bounded intervals + IANA timezone validated by the
+    # service layer in task 4.6; the DB stores the declared values).
+    sa.Column("interval_seconds", sa.Integer(), nullable=False),
+    sa.Column("timezone", sa.Text(), server_default="UTC", nullable=False),
+    sa.Column(
+        "per_run_limits",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column("rules_version", sa.Text(), server_default="", nullable=False),
+    sa.Column(
+        "created_at",
+        sa.DateTime(timezone=True),
+        server_default=sa.func.now(),
+        nullable=False,
+    ),
+    sa.UniqueConstraint("owner_id", "version", name="uq_crawl_plan_versions_owner_version"),
+    # Shape guards mirroring ``profile_versions`` (Section 2) so the jsonb
+    # columns decode unambiguously into the frozen domain types in
+    # ``careerops.domain.crawl_plans``. Short names expand to
+    # ``ck_crawl_plan_versions_<short>`` via the naming convention.
+    sa.CheckConstraint("version > 0", name="version_positive"),
+    sa.CheckConstraint("interval_seconds >= 0", name="interval_seconds_nonnegative"),
+    sa.CheckConstraint("jsonb_typeof(sources) = 'array'", name="sources_array"),
+    sa.CheckConstraint("jsonb_typeof(themes) = 'array'", name="themes_array"),
+    sa.CheckConstraint("jsonb_typeof(include_keywords) = 'array'", name="include_keywords_array"),
+    sa.CheckConstraint("jsonb_typeof(exclude_keywords) = 'array'", name="exclude_keywords_array"),
+    sa.CheckConstraint("jsonb_typeof(role_families) = 'array'", name="role_families_array"),
+    sa.CheckConstraint("jsonb_typeof(locations) = 'array'", name="locations_array"),
+    sa.CheckConstraint("jsonb_typeof(remote_rules) = 'object'", name="remote_rules_object"),
+    sa.CheckConstraint("jsonb_typeof(seniority) = 'array'", name="seniority_array"),
+    sa.CheckConstraint("jsonb_typeof(compensation) = 'object'", name="compensation_object"),
+    sa.CheckConstraint("jsonb_typeof(per_run_limits) = 'object'", name="per_run_limits_object"),
+)
+
+# Exactly one active plan version per owner (partial unique index). The plan
+# repo performs the deactivate-prior + activate-new pair inside a single
+# transaction so this index is never transiently violated (mirrors
+# ``ix_profile_versions_candidate_active``).
+sa.Index(
+    "ix_crawl_plan_versions_owner_active",
+    crawl_plan_versions.c.owner_id,
+    unique=True,
+    postgresql_where=crawl_plan_versions.c.is_active == sa.true(),
+)
+
+crawl_runs = sa.Table(
+    "crawl_runs",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "plan_version_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.crawl_plan_versions.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    # ``run_identity`` is the idempotency key (Iron Rule 4): a worker retry
+    # that reuses the same identity MUST NOT create duplicate postings or
+    # versions. The unique constraint below makes the DB the final authority.
+    sa.Column("run_identity", sa.Text(), nullable=False, unique=True),
+    sa.Column(
+        "source_set",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "state",
+        sa.String(24),
+        server_default="pending",
+        nullable=False,
+    ),
+    sa.Column("started_at", sa.DateTime(timezone=True)),
+    sa.Column("ended_at", sa.DateTime(timezone=True)),
+    sa.Column(
+        "limits",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "counters",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    # ``error_category`` is a SAFE, non-sensitive label (e.g. ``terms_blocked``,
+    # ``rate_limited``, ``parser_drift``); the service layer never persists raw
+    # error payloads or PII here (crawl-plan-management spec: "Operational
+    # failures SHALL be actionable without exposing credentials or raw
+    # sensitive content").
+    sa.Column("error_category", sa.Text(), server_default="", nullable=False),
+    sa.Column("next_eligible_at", sa.DateTime(timezone=True)),
+    sa.Column(
+        "created_at",
+        sa.DateTime(timezone=True),
+        server_default=sa.func.now(),
+        nullable=False,
+    ),
+    sa.CheckConstraint(
+        "state IN ('pending', 'running', 'succeeded', 'failed', 'cancelled', 'timeout')",
+        name="state_values",
+    ),
+    sa.CheckConstraint("jsonb_typeof(source_set) = 'array'", name="source_set_array"),
+    sa.CheckConstraint("jsonb_typeof(limits) = 'object'", name="limits_object"),
+    sa.CheckConstraint("jsonb_typeof(counters) = 'object'", name="counters_object"),
+)
+
+# Ownership of a run is transitive via its plan version; list-for-owner queries
+# join through ``plan_version_id``. Index the FK column + state so the "active
+# runs for owner" and "terminal history for plan" projections stay cheap.
+sa.Index(
+    "ix_crawl_runs_plan_version_state",
+    crawl_runs.c.plan_version_id,
+    crawl_runs.c.state,
+)
+sa.Index(
+    "ix_crawl_runs_created_at",
+    crawl_runs.c.created_at,
 )

@@ -10,6 +10,10 @@ Public API surface for v1:
 
 from __future__ import annotations
 
+from careerops.orchestration.capability_resolver import (
+    CapabilityDecision,
+    CapabilityKind,
+)
 from careerops.orchestration.graph import build_graph
 from careerops.orchestration.kernel_adapter import (
     Capability,
@@ -55,6 +59,8 @@ from careerops.orchestration.state import (
 
 __all__ = [
     "Capability",
+    "CapabilityDecision",
+    "CapabilityKind",
     "CapabilityResolver",
     "CareerOpsState",
     "ContactDTO",

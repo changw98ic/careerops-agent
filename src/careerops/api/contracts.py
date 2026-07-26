@@ -27,9 +27,44 @@ class ReadinessResponse(StrictContract):
     checks: dict[str, CheckStatus]
 
 
+# ---------------------------------------------------------------------------
+# Error codes — canonical set used across all API endpoints
+# ---------------------------------------------------------------------------
+
+
+class ErrorCode(StrEnum):
+    """Canonical error codes for the CareerOps API."""
+
+    UNAUTHORIZED = "UNAUTHORIZED"
+    CSRF_REJECTED = "CSRF_REJECTED"
+    INVALID_CREDENTIALS = "INVALID_CREDENTIALS"
+    RATE_LIMITED = "RATE_LIMITED"
+    BOOTSTRAP_CLOSED = "BOOTSTRAP_CLOSED"
+    CANDIDATE_PROFILE_REQUIRED = "CANDIDATE_PROFILE_REQUIRED"
+    NOT_FOUND = "NOT_FOUND"
+    CONFLICT = "CONFLICT"
+    DEPENDENCY_NOT_READY = "DEPENDENCY_NOT_READY"
+    VALIDATION_ERROR = "VALIDATION_ERROR"
+    BAD_REQUEST = "BAD_REQUEST"
+    FORBIDDEN = "FORBIDDEN"
+    METHOD_NOT_ALLOWED = "METHOD_NOT_ALLOWED"
+    INTERNAL_ERROR = "INTERNAL_ERROR"
+    # Business-lifecycle error codes (end-to-end-career-application-loop, task 1.5).
+    # Each code maps to a fixed HTTP status via the matching CareerOpsHTTPException
+    # subclass in careerops/api/errors.py.
+    INVALID_STATE = "INVALID_STATE"
+    STALE_PAYLOAD = "STALE_PAYLOAD"
+    UNAVAILABLE_DEPENDENCY = "UNAVAILABLE_DEPENDENCY"
+    DENIED_POLICY = "DENIED_POLICY"
+    UNRESOLVED_EMAIL_LINK = "UNRESOLVED_EMAIL_LINK"
+    RECONCILIATION_REQUIRED = "RECONCILIATION_REQUIRED"
+    PAYLOAD_TOO_LARGE = "PAYLOAD_TOO_LARGE"
+
+
 class ErrorBody(StrictContract):
-    code: str = Field(pattern=r"^[A-Z][A-Z0-9_]*$")
+    code: ErrorCode
     message: str
+    retryable: bool = False
     details: JsonValue = None
     trace_id: str
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import Any, cast
 from uuid import UUID
 
 from fastapi import Depends, FastAPI
@@ -12,10 +13,16 @@ from careerops.api.errors import install_error_handlers
 from careerops.api.metrics_middleware import MetricsMiddleware
 from careerops.api.middleware import RequestIdMiddleware
 from careerops.api.routes.applications import router as applications_router
+from careerops.api.routes.crawl_plans import router as crawl_plans_router
+from careerops.api.routes.crawl_runs import router as crawl_runs_router
+from careerops.api.routes.crawl_sources import router as crawl_sources_router
+from careerops.api.routes.evidence import router as evidence_router
 from careerops.api.routes.health import router as health_router
 from careerops.api.routes.jobs import router as jobs_router
 from careerops.api.routes.matching import router as matching_router
 from careerops.api.routes.metrics import router as metrics_router
+from careerops.api.routes.profile import router as profile_router
+from careerops.api.routes.resumes import router as resumes_router
 from careerops.api.routes.review import install_review_endpoint
 from careerops.application.dashboard import DashboardSnapshotProvider
 from careerops.application.ports.readiness import ReadinessProbe
@@ -143,10 +150,21 @@ def create_app(
     if isinstance(probe, RuntimeResources):
         from careerops.application.applications import ApplicationService
         from careerops.application.contacts import ContactService
+        from careerops.application.crawl_plan_service import (
+            CrawlPlanService,
+            CrawlRunService,
+            CrawlSourceService,
+        )
+        from careerops.application.evidence_service import (
+            EvidenceService,
+            LoggingEvidenceAuditSink,
+        )
         from careerops.application.matching import (
             EvidenceImportService,
             MatchOrchestrator,
         )
+        from careerops.application.profile_service import ProfileService
+        from careerops.application.resume_service import ResumeService
 
         app.state.matching_repository = probe.matching_read_repo
         app.state.evidence_import_service = EvidenceImportService(probe.matching_read_repo)
@@ -161,6 +179,56 @@ def create_app(
             package_repo=_PackageRepoAdapter(probe.application_repo),
             follow_up_repo=_FollowUpRepoAdapter(probe.application_repo),
         )
+        # Section-2 server-side-candidate-owned repos + shared capability
+        # resolver (end-to-end-career-application-loop tasks 2.2/2.5/2.6/2.11).
+        # These are exposed on app.state so Section-3+ routes can pull them via
+        # ``require_repository``; the helper raises DependencyNotReadyError
+        # (503) if a repo is ever absent rather than silently degrading. The
+        # capability resolver backs both the LangGraph review stack and the
+        # ``require_capability`` external-effect gate.
+        app.state.profile_repository = probe.profile_repo
+        app.state.evidence_repository = probe.evidence_repo
+        app.state.application_cycle_repository = probe.application_cycle_repo
+        app.state.capability_resolver = probe.capability_resolver
+        # Section-3 application services (tasks 3.1 / 3.3 / 3.6). Each wraps a
+        # Section-2 repository; routes pull them through ``require_repository``
+        # so a missing service surfaces as 503 rather than a silent empty
+        # response. The resume service reuses the content-addressed store on
+        # the runtime (``probe.storage``) and the per-candidate byte cap from
+        # settings. The evidence service gets a structured-log audit sink by
+        # default; a durable Postgres sink can be wired in a later stage
+        # without changing the service contract.
+        app.state.profile_service = ProfileService(probe.profile_repo)
+        app.state.resume_service = ResumeService(
+            probe.application_repo,
+            probe.evidence_repo,
+            probe.storage,
+            max_bytes=resolved.storage_max_object_bytes,
+        )
+        app.state.evidence_service = EvidenceService(
+            probe.evidence_repo, audit_sink=LoggingEvidenceAuditSink()
+        )
+        # Section-4 crawl services (tasks 4.4-4.7). Each wraps a Section-4
+        # repository; routes pull them through ``require_repository`` so a
+        # missing service surfaces as 503. The run service composes all three
+        # repos so it can resolve the eligible source set + active plan version
+        # when recording a manual run. Capability gating for
+        # CRAWL_PLAN_MANAGEMENT is applied at each router; the resolver is
+        # already on app.state.
+        crawl_source_service = CrawlSourceService(probe.crawl_source_repo)
+        crawl_plan_service = CrawlPlanService(probe.crawl_plan_repo)
+        crawl_run_service = CrawlRunService(
+            probe.crawl_run_repo,
+            plan_repository=probe.crawl_plan_repo,
+            source_repository=probe.crawl_source_repo,
+        )
+        app.state.crawl_source_service = crawl_source_service
+        app.state.crawl_plan_service = crawl_plan_service
+        app.state.crawl_run_service = crawl_run_service
+        # Section 5 crawl execution service (tasks 5.1, 5.5, 5.6). Wired
+        # through RuntimeResources; reachable from API routes and Temporal
+        # activities via app.state.crawl_execution_service.
+        app.state.crawl_execution_service = probe.crawl_execution_service
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(MetricsMiddleware, metrics=metrics)
     install_error_handlers(app)
@@ -177,11 +245,11 @@ def create_app(
         )
         app.state.web_settings = web_settings
 
-    # Auth API (login/logout for Vue SPA).
+    # Auth API for Vue SPA (session/login/bootstrap/logout).
     import os
     from pathlib import Path
 
-    from careerops.api.routes.auth import router as auth_router
+    from careerops.web.api_auth import router as auth_router
 
     serve_spa = os.environ.get("CAREEROPS_SERVE_SPA", "").lower() in ("1", "true", "yes")
     frontend_dist = Path(__file__).resolve().parent.parent.parent.parent / "frontend" / "dist"
@@ -192,6 +260,19 @@ def create_app(
     app.include_router(jobs_router, dependencies=[Depends(require_api_auth)])
     app.include_router(matching_router, dependencies=[Depends(require_api_auth)])
     app.include_router(applications_router, dependencies=[Depends(require_api_auth)])
+    # Section-3 additive routers (profile / resumes / evidence). Same auth
+    # guard as the existing v1 routers; candidate ownership is resolved
+    # server-side inside each handler via ``require_candidate_id``.
+    app.include_router(profile_router, dependencies=[Depends(require_api_auth)])
+    app.include_router(resumes_router, dependencies=[Depends(require_api_auth)])
+    app.include_router(evidence_router, dependencies=[Depends(require_api_auth)])
+    # Section-4 additive routers (crawl sources / plans / runs). Same auth
+    # guard as the existing v1 routers; candidate ownership is resolved
+    # server-side inside each handler via ``require_candidate_id``. The
+    # CRAWL_PLAN_MANAGEMENT capability gate is composed inside each router.
+    app.include_router(crawl_sources_router, dependencies=[Depends(require_api_auth)])
+    app.include_router(crawl_plans_router, dependencies=[Depends(require_api_auth)])
+    app.include_router(crawl_runs_router, dependencies=[Depends(require_api_auth)])
 
     # Check if Vue SPA is enabled; if so, skip old Jinja2 UI routes.
     if not serve_spa:
@@ -234,13 +315,280 @@ def create_app(
 
         @app.get("/{full_path:path}", include_in_schema=False)
         async def spa_fallback(full_path: str) -> FileResponse:  # pyright: ignore[reportUnusedFunction]
+            # API routes should not be caught by SPA fallback
+            if full_path.startswith("api/"):
+                from fastapi import HTTPException
+
+                raise HTTPException(status_code=404, detail="Not found")
             # Serve the file if it exists, otherwise serve index.html for SPA routing.
             file_path = frontend_dist / full_path
             if file_path.is_file():
                 return FileResponse(file_path)
             return FileResponse(frontend_dist / "index.html")
 
+    # -----------------------------------------------------------------------
+    # OpenAPI: declare standard error responses on every path
+    # -----------------------------------------------------------------------
+    _install_openapi_error_responses(app)
+
     return app
+
+
+# ---------------------------------------------------------------------------
+# OpenAPI customisation
+# ---------------------------------------------------------------------------
+
+_ERROR_RESPONSE_SCHEMAS: dict[str, dict[str, object]] = {
+    "401": {
+        "description": "Unauthorized — missing or invalid credentials",
+        "content": {
+            "application/json": {
+                "schema": {"$ref": "#/components/schemas/ErrorResponse"},
+                "examples": {
+                    "unauthorized": {
+                        "summary": "UNAUTHORIZED",
+                        "value": {
+                            "error": {
+                                "code": "UNAUTHORIZED",
+                                "message": "Authentication required",
+                                "retryable": False,
+                                "details": None,
+                                "trace_id": "abc123",
+                            }
+                        },
+                    },
+                    "invalid_credentials": {
+                        "summary": "INVALID_CREDENTIALS",
+                        "value": {
+                            "error": {
+                                "code": "INVALID_CREDENTIALS",
+                                "message": "Invalid credentials",
+                                "retryable": False,
+                                "details": None,
+                                "trace_id": "abc123",
+                            }
+                        },
+                    },
+                },
+            }
+        },
+    },
+    "403": {
+        "description": "Forbidden — CSRF, bootstrap, profile requirement, or policy denial",
+        "content": {
+            "application/json": {
+                "schema": {"$ref": "#/components/schemas/ErrorResponse"},
+                "examples": {
+                    "csrf_rejected": {
+                        "summary": "CSRF_REJECTED",
+                        "value": {
+                            "error": {
+                                "code": "CSRF_REJECTED",
+                                "message": "CSRF token rejected",
+                                "retryable": False,
+                                "details": None,
+                                "trace_id": "abc123",
+                            }
+                        },
+                    },
+                    "bootstrap_closed": {
+                        "summary": "BOOTSTRAP_CLOSED",
+                        "value": {
+                            "error": {
+                                "code": "BOOTSTRAP_CLOSED",
+                                "message": "Bootstrap is no longer available",
+                                "retryable": False,
+                                "details": None,
+                                "trace_id": "abc123",
+                            }
+                        },
+                    },
+                    "candidate_profile_required": {
+                        "summary": "CANDIDATE_PROFILE_REQUIRED",
+                        "value": {
+                            "error": {
+                                "code": "CANDIDATE_PROFILE_REQUIRED",
+                                "message": "Candidate profile is required",
+                                "retryable": False,
+                                "details": None,
+                                "trace_id": "abc123",
+                            }
+                        },
+                    },
+                    "denied_policy": {
+                        "summary": "DENIED_POLICY",
+                        "value": {
+                            "error": {
+                                "code": "DENIED_POLICY",
+                                "message": "Action denied by policy",
+                                "retryable": False,
+                                "details": None,
+                                "trace_id": "abc123",
+                            }
+                        },
+                    },
+                },
+            }
+        },
+    },
+    "404": {
+        "description": "Resource not found",
+        "content": {
+            "application/json": {
+                "schema": {"$ref": "#/components/schemas/ErrorResponse"},
+                "example": {
+                    "error": {
+                        "code": "NOT_FOUND",
+                        "message": "Resource not found",
+                        "retryable": False,
+                        "details": None,
+                        "trace_id": "abc123",
+                    }
+                },
+            }
+        },
+    },
+    "409": {
+        "description": "Conflict — resource already exists or state conflict",
+        "content": {
+            "application/json": {
+                "schema": {"$ref": "#/components/schemas/ErrorResponse"},
+                "example": {
+                    "error": {
+                        "code": "CONFLICT",
+                        "message": "Resource conflict",
+                        "retryable": False,
+                        "details": None,
+                        "trace_id": "abc123",
+                    }
+                },
+            }
+        },
+    },
+    "422": {
+        "description": "Validation error — request body failed schema validation",
+        "content": {
+            "application/json": {
+                "schema": {"$ref": "#/components/schemas/ErrorResponse"},
+                "example": {
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": "Request validation failed",
+                        "retryable": False,
+                        "details": {"issues": []},
+                        "trace_id": "abc123",
+                    }
+                },
+            }
+        },
+    },
+    "429": {
+        "description": "Rate limited — too many requests (retryable)",
+        "content": {
+            "application/json": {
+                "schema": {"$ref": "#/components/schemas/ErrorResponse"},
+                "example": {
+                    "error": {
+                        "code": "RATE_LIMITED",
+                        "message": "Too many requests",
+                        "retryable": True,
+                        "details": None,
+                        "trace_id": "abc123",
+                    }
+                },
+            }
+        },
+    },
+    "503": {
+        "description": "Service unavailable — dependency not ready (retryable)",
+        "content": {
+            "application/json": {
+                "schema": {"$ref": "#/components/schemas/ErrorResponse"},
+                "example": {
+                    "error": {
+                        "code": "DEPENDENCY_NOT_READY",
+                        "message": "Service dependency is not ready",
+                        "retryable": True,
+                        "details": None,
+                        "trace_id": "abc123",
+                    }
+                },
+            }
+        },
+    },
+}
+
+
+def _install_openapi_error_responses(app: FastAPI) -> None:
+    """Inject standard error response declarations into every OpenAPI path."""
+    original_openapi = app.openapi
+
+    def custom_openapi() -> dict[str, object]:
+        schema = original_openapi()
+        if "openapi_error_responses_installed" in schema:
+            return schema
+
+        # Ensure ErrorResponse schema exists in components
+        components = schema.setdefault("components", {})  # type: ignore[arg-type]
+        schemas = components.setdefault("schemas", {})  # type: ignore[arg-type]
+        if "ErrorResponse" not in schemas:
+            schemas["ErrorResponse"] = {
+                "type": "object",
+                "required": ["error"],
+                "properties": {
+                    "error": {
+                        "type": "object",
+                        "required": ["code", "message", "retryable", "trace_id"],
+                        "properties": {
+                            "code": {
+                                "type": "string",
+                                "enum": [
+                                    "UNAUTHORIZED",
+                                    "CSRF_REJECTED",
+                                    "INVALID_CREDENTIALS",
+                                    "RATE_LIMITED",
+                                    "BOOTSTRAP_CLOSED",
+                                    "CANDIDATE_PROFILE_REQUIRED",
+                                    "NOT_FOUND",
+                                    "CONFLICT",
+                                    "DEPENDENCY_NOT_READY",
+                                    "VALIDATION_ERROR",
+                                    "BAD_REQUEST",
+                                    "FORBIDDEN",
+                                    "METHOD_NOT_ALLOWED",
+                                    "INTERNAL_ERROR",
+                                    "INVALID_STATE",
+                                    "STALE_PAYLOAD",
+                                    "UNAVAILABLE_DEPENDENCY",
+                                    "DENIED_POLICY",
+                                    "UNRESOLVED_EMAIL_LINK",
+                                    "RECONCILIATION_REQUIRED",
+                                ],
+                            },
+                            "message": {"type": "string"},
+                            "retryable": {"type": "boolean", "default": False},
+                            "details": {},
+                            "trace_id": {"type": "string"},
+                        },
+                    }
+                },
+            }
+
+        # Inject error responses into every path/operation
+        paths = cast("dict[str, dict[str, dict[str, Any]]]", schema.get("paths", {}))
+        for _path, methods in paths.items():
+            for method, operation in methods.items():
+                if method in ("parameters", "summary", "description", "servers"):
+                    continue
+                responses = operation.setdefault("responses", {})
+                for status, response_def in _ERROR_RESPONSE_SCHEMAS.items():
+                    if status not in responses:
+                        responses[status] = response_def  # type: ignore[assignment]
+
+        schema["openapi_error_responses_installed"] = True  # type: ignore[assignment]
+        return schema
+
+    app.openapi = custom_openapi  # type: ignore[method-assign]
 
 
 app = create_app()

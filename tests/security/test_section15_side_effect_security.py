@@ -318,10 +318,7 @@ def _public_classes_in(module_name: str) -> Iterable[tuple[str, object]]:
         module = __import__(module_name, fromlist=["__name__"])
     except ModuleNotFoundError:
         return iter(())
-    return (
-        (name, obj)
-        for name, obj in inspect.getmembers(module, inspect.isclass)
-    )
+    return ((name, obj) for name, obj in inspect.getmembers(module, inspect.isclass))
 
 
 class TestNoLiveProviderWired:

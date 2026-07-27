@@ -113,9 +113,7 @@ def upgrade() -> None:
             server_default=sa.func.now(),
             nullable=False,
         ),
-        sa.UniqueConstraint(
-            "idempotency_key", name="uq_email_event_proposals_idempotency"
-        ),
+        sa.UniqueConstraint("idempotency_key", name="uq_email_event_proposals_idempotency"),
         sa.CheckConstraint(
             "state IN ('pending', 'accepted', 'rejected', 'superseded')",
             name="ck_email_event_proposals_state_values",

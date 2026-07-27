@@ -377,9 +377,7 @@ class _FakeThreadLinkRepo:
         ]
         return {"items": items[:limit], "next_cursor": None, "has_more": False}
 
-    def list_unresolved(
-        self, candidate_id: UUID, *, cursor, limit
-    ) -> dict[str, object]:
+    def list_unresolved(self, candidate_id: UUID, *, cursor, limit) -> dict[str, object]:
         items = [
             {
                 "link_id": str(u.link_id),
@@ -554,9 +552,7 @@ class TestRevokeAndError:
         assert invalidator.invalidated == [summary.account_id]
         # A sync request on a revoked account is refused.
         with pytest.raises(AccountNotConnectedError):
-            service.request_sync(
-                candidate_id=candidate_id, account_id=summary.account_id, now=now
-            )
+            service.request_sync(candidate_id=candidate_id, account_id=summary.account_id, now=now)
 
     def test_revoke_is_idempotent(self, now, candidate_id):
         service, *_ = _make_service()
@@ -580,9 +576,7 @@ class TestRevokeAndError:
         )
         assert errored.connection_state is MailConnectionState.ERROR
         with pytest.raises(AccountNotConnectedError):
-            service.request_sync(
-                candidate_id=candidate_id, account_id=summary.account_id, now=now
-            )
+            service.request_sync(candidate_id=candidate_id, account_id=summary.account_id, now=now)
 
 
 # ---------------------------------------------------------------------------
@@ -660,9 +654,7 @@ class TestSyncRunDedupAndRestart:
         )
         assert result.messages_processed == 1  # only m3
         assert result.messages_skipped == 2
-        assert threads.provider_ids_for_account(summary.account_id) == frozenset(
-            {"m1", "m2", "m3"}
-        )
+        assert threads.provider_ids_for_account(summary.account_id) == frozenset({"m1", "m2", "m3"})
 
     def test_cursor_advances_to_last_history_id(self, now, candidate_id):
         service, _accounts, runs, *_ = _make_service()
@@ -918,6 +910,4 @@ class TestPaginationAndOwnership:
     def test_owned_account_required_for_sync(self, now, candidate_id):
         service, *_ = _make_service()
         with pytest.raises(AccountNotOwnedError):
-            service.request_sync(
-                candidate_id=candidate_id, account_id=uuid4(), now=now
-            )
+            service.request_sync(candidate_id=candidate_id, account_id=uuid4(), now=now)

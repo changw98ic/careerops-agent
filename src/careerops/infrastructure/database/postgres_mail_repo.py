@@ -64,9 +64,7 @@ def _extraction_to_row(extraction: MailExtraction) -> dict[str, Any]:
         "sender_email": extraction.sender_email,
         "sender_name": extraction.sender_name,
         "sender_domain": extraction.sender_domain,
-        "interview_at": extraction.interview_at.isoformat()
-        if extraction.interview_at
-        else None,
+        "interview_at": extraction.interview_at.isoformat() if extraction.interview_at else None,
         "timezone": extraction.timezone,
         "deadline": extraction.deadline.isoformat() if extraction.deadline else None,
         "requested_materials": list(extraction.requested_materials),
@@ -160,9 +158,7 @@ class PostgresEmailEventProposalRepository:
         self._engine = engine
 
     def find_by_id(self, proposal_id: UUID) -> EmailEventProposal | None:
-        stmt = sa.select(email_event_proposals).where(
-            email_event_proposals.c.id == proposal_id
-        )
+        stmt = sa.select(email_event_proposals).where(email_event_proposals.c.id == proposal_id)
         with self._engine.connect() as conn:
             row = conn.execute(stmt).mappings().first()
         return _row_to_proposal(row) if row else None
@@ -175,9 +171,7 @@ class PostgresEmailEventProposalRepository:
             row = conn.execute(stmt).mappings().first()
         return _row_to_proposal(row) if row else None
 
-    def find_active_for_message(
-        self, message_id: UUID
-    ) -> EmailEventProposal | None:
+    def find_active_for_message(self, message_id: UUID) -> EmailEventProposal | None:
         stmt = (
             sa.select(email_event_proposals)
             .where(email_event_proposals.c.message_id == message_id)
@@ -216,7 +210,8 @@ class PostgresEmailEventProposalRepository:
         with self._engine.begin() as conn:
             pg_insert = sa.dialects.postgresql.insert(email_event_proposals)
             stmt = pg_insert.values(**values).on_conflict_do_update(
-                index_elements=["id"], set_={  # type: ignore[arg-type]
+                index_elements=["id"],
+                set_={  # type: ignore[arg-type]
                     "application_id": values["application_id"],
                     "state": values["state"],
                     "decided_at": values["decided_at"],
@@ -294,9 +289,7 @@ class PostgresMailMessageRepository:
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
 
-    def find_message(
-        self, message_id: UUID, candidate_id: UUID
-    ) -> MailMessageInput | None:
+    def find_message(self, message_id: UUID, candidate_id: UUID) -> MailMessageInput | None:
         # Join messages → threads → applications to enforce candidate ownership.
         stmt = (
             sa.select(

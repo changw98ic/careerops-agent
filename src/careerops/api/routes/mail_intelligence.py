@@ -216,9 +216,7 @@ def _extraction_to_item(extraction: object) -> ExtractionItem:
         summary=getattr(extraction, "summary", ""),
         confidence=getattr(extraction, "confidence", 0.0),
         evidence_spans=[
-            EvidenceSpanItem(
-                label=s.label, text=s.text, start=s.start, end=s.end
-            )
+            EvidenceSpanItem(label=s.label, text=s.text, start=s.start, end=s.end)
             for s in getattr(extraction, "evidence_spans", ())
         ],
         source=extraction.source.value,
@@ -240,9 +238,7 @@ def _proposal_to_response(p: object) -> ProposalResponse:
         thread_id=str(p.thread_id) if p.thread_id else None,
         account_id=str(p.account_id) if p.account_id else None,
         candidate_id=str(p.candidate_id),
-        application_id=str(p.application_id)
-        if p.application_id
-        else None,
+        application_id=str(p.application_id) if p.application_id else None,
         extraction=_extraction_to_item(p.extraction),
         proposed_state=getattr(p, "proposed_state", None),
         idempotency_key=getattr(p, "idempotency_key", ""),
@@ -260,9 +256,7 @@ def _translate_decision_error(exc: Exception) -> HTTPException:
     if isinstance(exc, ProposedStateIllegalError):
         return HTTPException(
             status_code=422,
-            detail=(
-                f"Illegal transition: {exc.current_state} -> {exc.proposed_state}"
-            ),
+            detail=(f"Illegal transition: {exc.current_state} -> {exc.proposed_state}"),
         )
     if isinstance(exc, ProposalAlreadyDecidedError):
         # Repeat decision: surface as 409 with the recorded state.
@@ -372,9 +366,7 @@ def get_proposal(
     """Return a proposal detail (ownership-scoped)."""
     service = _service(request)
     try:
-        proposal = service.get_proposal(
-            proposal_id=UUID(proposal_id), candidate_id=candidate_id
-        )
+        proposal = service.get_proposal(proposal_id=UUID(proposal_id), candidate_id=candidate_id)
     except MailIntelligenceError as e:
         raise _translate_decision_error(e) from e
     return _proposal_to_response(proposal)

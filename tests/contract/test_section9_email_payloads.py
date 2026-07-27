@@ -71,9 +71,7 @@ class _FakePackageRepo:
     def __init__(self, version: ApplicationPackageVersion | None) -> None:
         self._version = version
 
-    def find_latest_package_version(
-        self, application_id: UUID
-    ) -> ApplicationPackageVersion | None:
+    def find_latest_package_version(self, application_id: UUID) -> ApplicationPackageVersion | None:
         if self._version is None or self._version.application_id != application_id:
             return None
         return self._version
@@ -83,9 +81,7 @@ class _FakeOwnershipReader:
     def __init__(self, owned: set[tuple[UUID, UUID]]) -> None:
         self._owned = owned
 
-    def find_owned_application(
-        self, *, application_id: UUID, candidate_id: UUID
-    ) -> object | None:
+    def find_owned_application(self, *, application_id: UUID, candidate_id: UUID) -> object | None:
         if (application_id, candidate_id) in self._owned:
             return object()  # presence is all the preview needs
         return None
@@ -272,9 +268,7 @@ class TestRecipientRejection:
         )
         assert not verdict.eligible
         assert RecipientDenialReason.MISSING_SOURCE_EVIDENCE in verdict.denial_reasons
-        assert (
-            RecipientDenialReason.GUESSED_EMPLOYEE_ADDRESS in verdict.denial_reasons
-        )
+        assert RecipientDenialReason.GUESSED_EMPLOYEE_ADDRESS in verdict.denial_reasons
 
     def test_model_only_recipient_denied(self) -> None:
         # No resolver evidence at all → the recipient is model-only.
@@ -284,9 +278,7 @@ class TestRecipientRejection:
             candidates=[],
         )
         assert not verdict.eligible
-        assert (
-            RecipientDenialReason.MODEL_ONLY_RECIPIENT in verdict.denial_reasons
-        )
+        assert RecipientDenialReason.MODEL_ONLY_RECIPIENT in verdict.denial_reasons
         assert RecipientDenialReason.UNVERIFIED_DOMAIN in verdict.denial_reasons
 
     def test_missing_source_evidence_denied(self) -> None:
@@ -297,9 +289,7 @@ class TestRecipientRejection:
             candidates=[_candidate()],
         )
         assert not verdict.eligible
-        assert (
-            RecipientDenialReason.MISSING_SOURCE_EVIDENCE in verdict.denial_reasons
-        )
+        assert RecipientDenialReason.MISSING_SOURCE_EVIDENCE in verdict.denial_reasons
 
     def test_invalid_address_denied(self) -> None:
         verdict = EmailPayloadService.validate_recipient(
@@ -342,12 +332,18 @@ class TestPayloadHashMutation:
     def test_subject_change_changes_hash(self) -> None:
         s = _slice()
         verdict = s.svc.resolve_trusted_contact(
-            candidate_id=s.cid, application_id=s.app_id, canonical_job_id=s.job_id,
+            candidate_id=s.cid,
+            application_id=s.app_id,
+            canonical_job_id=s.job_id,
             recipient_email=TRUSTED_EMAIL,
         )
         kwargs = dict(
-            candidate_id=s.cid, application_id=s.app_id, account=s.acct,
-            recipient=verdict, body="Body", now=NOW,
+            candidate_id=s.cid,
+            application_id=s.app_id,
+            account=s.acct,
+            recipient=verdict,
+            body="Body",
+            now=NOW,
         )
         p1 = s.svc.build_payload(subject="Subject A", **kwargs)
         p2 = s.svc.build_payload(subject="Subject B", **kwargs)
@@ -356,12 +352,18 @@ class TestPayloadHashMutation:
     def test_body_change_changes_hash(self) -> None:
         s = _slice()
         verdict = s.svc.resolve_trusted_contact(
-            candidate_id=s.cid, application_id=s.app_id, canonical_job_id=s.job_id,
+            candidate_id=s.cid,
+            application_id=s.app_id,
+            canonical_job_id=s.job_id,
             recipient_email=TRUSTED_EMAIL,
         )
         kwargs = dict(
-            candidate_id=s.cid, application_id=s.app_id, account=s.acct,
-            recipient=verdict, subject="Subject", now=NOW,
+            candidate_id=s.cid,
+            application_id=s.app_id,
+            account=s.acct,
+            recipient=verdict,
+            subject="Subject",
+            now=NOW,
         )
         p1 = s.svc.build_payload(body="Body one", **kwargs)
         p2 = s.svc.build_payload(body="Body two", **kwargs)
@@ -370,20 +372,31 @@ class TestPayloadHashMutation:
     def test_attachment_change_changes_hash(self) -> None:
         s = _slice()
         verdict = s.svc.resolve_trusted_contact(
-            candidate_id=s.cid, application_id=s.app_id, canonical_job_id=s.job_id,
+            candidate_id=s.cid,
+            application_id=s.app_id,
+            canonical_job_id=s.job_id,
             recipient_email=TRUSTED_EMAIL,
         )
         att1 = EmailAttachment(
-            name="resume.pdf", content_hash="a" * 64,
-            media_type="application/pdf", size_bytes=100,
+            name="resume.pdf",
+            content_hash="a" * 64,
+            media_type="application/pdf",
+            size_bytes=100,
         )
         att2 = EmailAttachment(
-            name="resume.pdf", content_hash="b" * 64,
-            media_type="application/pdf", size_bytes=100,
+            name="resume.pdf",
+            content_hash="b" * 64,
+            media_type="application/pdf",
+            size_bytes=100,
         )
         kwargs = dict(
-            candidate_id=s.cid, application_id=s.app_id, account=s.acct,
-            recipient=verdict, subject="Subject", body="Body", now=NOW,
+            candidate_id=s.cid,
+            application_id=s.app_id,
+            account=s.acct,
+            recipient=verdict,
+            subject="Subject",
+            body="Body",
+            now=NOW,
         )
         p1 = s.svc.build_payload(attachments=(att1,), **kwargs)
         p2 = s.svc.build_payload(attachments=(att2,), **kwargs)
@@ -392,15 +405,19 @@ class TestPayloadHashMutation:
     def test_account_change_changes_hash(self) -> None:
         s = _slice()
         verdict = s.svc.resolve_trusted_contact(
-            candidate_id=s.cid, application_id=s.app_id, canonical_job_id=s.job_id,
+            candidate_id=s.cid,
+            application_id=s.app_id,
+            canonical_job_id=s.job_id,
             recipient_email=TRUSTED_EMAIL,
         )
-        acct_b = EmailAccountSummary(
-            account_id=uuid4(), email_address="other@careerops.example"
-        )
+        acct_b = EmailAccountSummary(account_id=uuid4(), email_address="other@careerops.example")
         kwargs = dict(
-            candidate_id=s.cid, application_id=s.app_id, recipient=verdict,
-            subject="Subject", body="Body", now=NOW,
+            candidate_id=s.cid,
+            application_id=s.app_id,
+            recipient=verdict,
+            subject="Subject",
+            body="Body",
+            now=NOW,
         )
         p1 = s.svc.build_payload(account=s.acct, **kwargs)
         p2 = s.svc.build_payload(account=acct_b, **kwargs)
@@ -415,7 +432,8 @@ class TestPayloadHashMutation:
 class TestAttachmentValidation:
     def test_valid_pdf_passes(self) -> None:
         att = validate_attachment(
-            name="resume.pdf", content_hash="a" * 64,
+            name="resume.pdf",
+            content_hash="a" * 64,
             declared_media_type="application/pdf",
             detected_media_type="application/pdf",
             size_bytes=2048,
@@ -426,7 +444,8 @@ class TestAttachmentValidation:
     def test_mime_mismatch_denied(self) -> None:
         with pytest.raises(AttachmentValidationError) as exc:
             validate_attachment(
-                name="resume.pdf", content_hash="a" * 64,
+                name="resume.pdf",
+                content_hash="a" * 64,
                 declared_media_type="application/pdf",
                 detected_media_type="application/zip",
                 size_bytes=2048,
@@ -436,7 +455,8 @@ class TestAttachmentValidation:
     def test_executable_denied(self) -> None:
         with pytest.raises(AttachmentValidationError):
             validate_attachment(
-                name="evil.exe", content_hash="a" * 64,
+                name="evil.exe",
+                content_hash="a" * 64,
                 declared_media_type="application/x-msdownload",
                 detected_media_type="application/x-msdownload",
                 size_bytes=2048,
@@ -445,7 +465,8 @@ class TestAttachmentValidation:
     def test_archive_denied(self) -> None:
         with pytest.raises(AttachmentValidationError):
             validate_attachment(
-                name="payload.zip", content_hash="a" * 64,
+                name="payload.zip",
+                content_hash="a" * 64,
                 declared_media_type="application/zip",
                 detected_media_type="application/zip",
                 size_bytes=2048,
@@ -454,7 +475,8 @@ class TestAttachmentValidation:
     def test_oversize_denied(self) -> None:
         with pytest.raises(AttachmentValidationError) as exc:
             validate_attachment(
-                name="big.pdf", content_hash="a" * 64,
+                name="big.pdf",
+                content_hash="a" * 64,
                 declared_media_type="application/pdf",
                 detected_media_type="application/pdf",
                 size_bytes=ATTACHMENT_MAX_BYTES + 1,
@@ -464,7 +486,8 @@ class TestAttachmentValidation:
     def test_quarantined_denied(self) -> None:
         with pytest.raises(AttachmentValidationError):
             validate_attachment(
-                name="resume.pdf", content_hash="a" * 64,
+                name="resume.pdf",
+                content_hash="a" * 64,
                 declared_media_type="application/pdf",
                 detected_media_type="application/pdf",
                 size_bytes=2048,
@@ -474,7 +497,8 @@ class TestAttachmentValidation:
     def test_expired_denied(self) -> None:
         with pytest.raises(AttachmentValidationError):
             validate_attachment(
-                name="resume.pdf", content_hash="a" * 64,
+                name="resume.pdf",
+                content_hash="a" * 64,
                 declared_media_type="application/pdf",
                 detected_media_type="application/pdf",
                 size_bytes=2048,
@@ -484,7 +508,8 @@ class TestAttachmentValidation:
     def test_password_protected_denied(self) -> None:
         with pytest.raises(AttachmentValidationError):
             validate_attachment(
-                name="secret.pdf", content_hash="a" * 64,
+                name="secret.pdf",
+                content_hash="a" * 64,
                 declared_media_type="application/pdf",
                 detected_media_type="application/pdf",
                 size_bytes=2048,
@@ -494,16 +519,18 @@ class TestAttachmentValidation:
     def test_bad_hash_length_denied(self) -> None:
         with pytest.raises(AttachmentValidationError):
             validate_attachment(
-                name="resume.pdf", content_hash="tooshort",
+                name="resume.pdf",
+                content_hash="tooshort",
                 declared_media_type="application/pdf",
                 detected_media_type="application/pdf",
                 size_bytes=2048,
             )
 
     def test_allowed_set_is_conservative(self) -> None:
-        assert frozenset(
-            {"application/pdf", "text/plain", "text/calendar"}
-        ) == ALLOWED_ATTACHMENT_MEDIA_TYPES
+        assert (
+            frozenset({"application/pdf", "text/plain", "text/calendar"})
+            == ALLOWED_ATTACHMENT_MEDIA_TYPES
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -520,9 +547,14 @@ class TestPreviewWithoutSend:
         """
         s = _slice()
         preview = s.svc.preview_submission(
-            candidate_id=s.cid, application_id=s.app_id, canonical_job_id=s.job_id,
-            account_id=s.acct.account_id, recipient_email=TRUSTED_EMAIL,
-            subject="Application for SWE", body="Hello", now=NOW,
+            candidate_id=s.cid,
+            application_id=s.app_id,
+            canonical_job_id=s.job_id,
+            account_id=s.acct.account_id,
+            recipient_email=TRUSTED_EMAIL,
+            subject="Application for SWE",
+            body="Hello",
+            now=NOW,
         )
         assert preview.sendable
         assert preview.payload is not None
@@ -532,9 +564,14 @@ class TestPreviewWithoutSend:
     def test_preview_missing_approved_package_returns_errors(self) -> None:
         s = _slice(approved=False)
         preview = s.svc.preview_submission(
-            candidate_id=s.cid, application_id=s.app_id, canonical_job_id=s.job_id,
-            account_id=s.acct.account_id, recipient_email=TRUSTED_EMAIL,
-            subject="Subject", body="Body", now=NOW,
+            candidate_id=s.cid,
+            application_id=s.app_id,
+            canonical_job_id=s.job_id,
+            account_id=s.acct.account_id,
+            recipient_email=TRUSTED_EMAIL,
+            subject="Subject",
+            body="Body",
+            now=NOW,
         )
         assert not preview.sendable
         assert preview.payload is None
@@ -543,9 +580,14 @@ class TestPreviewWithoutSend:
     def test_preview_not_owned_returns_error(self) -> None:
         s = _slice(owned=False)
         preview = s.svc.preview_submission(
-            candidate_id=s.cid, application_id=s.app_id, canonical_job_id=s.job_id,
-            account_id=s.acct.account_id, recipient_email=TRUSTED_EMAIL,
-            subject="Subject", body="Body", now=NOW,
+            candidate_id=s.cid,
+            application_id=s.app_id,
+            canonical_job_id=s.job_id,
+            account_id=s.acct.account_id,
+            recipient_email=TRUSTED_EMAIL,
+            subject="Subject",
+            body="Body",
+            now=NOW,
         )
         assert not preview.sendable
         assert any("not found" in e for e in preview.errors)
@@ -554,11 +596,14 @@ class TestPreviewWithoutSend:
         """A recipient mismatch AND an unapproved package both surface."""
         s = _slice(approved=False)
         preview = s.svc.preview_submission(
-            candidate_id=s.cid, application_id=s.app_id, canonical_job_id=s.job_id,
+            candidate_id=s.cid,
+            application_id=s.app_id,
+            canonical_job_id=s.job_id,
             account_id=s.acct.account_id,
             recipient_email="stranger@other.example",  # domain mismatch
             subject="",  # missing subject
-            body="Body", now=NOW,
+            body="Body",
+            now=NOW,
         )
         assert not preview.sendable
         joined = " ".join(preview.errors)
@@ -577,10 +622,15 @@ class TestPreviewWithoutSend:
         }
         s = _slice(attachment_specs=specs)
         preview = s.svc.preview_submission(
-            candidate_id=s.cid, application_id=s.app_id, canonical_job_id=s.job_id,
-            account_id=s.acct.account_id, recipient_email=TRUSTED_EMAIL,
-            subject="Subject", body="Body",
-            attachment_hashes=(bad_hash,), now=NOW,
+            candidate_id=s.cid,
+            application_id=s.app_id,
+            canonical_job_id=s.job_id,
+            account_id=s.acct.account_id,
+            recipient_email=TRUSTED_EMAIL,
+            subject="Subject",
+            body="Body",
+            attachment_hashes=(bad_hash,),
+            now=NOW,
         )
         assert not preview.sendable
         assert any("attachment" in e.lower() for e in preview.errors)
@@ -601,9 +651,14 @@ class TestPreviewSendParity:
         """
         s = _slice()
         kwargs = dict(
-            candidate_id=s.cid, application_id=s.app_id, canonical_job_id=s.job_id,
-            account_id=s.acct.account_id, recipient_email=TRUSTED_EMAIL,
-            subject="Application", body="Hello there", now=NOW,
+            candidate_id=s.cid,
+            application_id=s.app_id,
+            canonical_job_id=s.job_id,
+            account_id=s.acct.account_id,
+            recipient_email=TRUSTED_EMAIL,
+            subject="Application",
+            body="Hello there",
+            now=NOW,
         )
         p1 = s.svc.preview_submission(**kwargs)
         p2 = s.svc.preview_submission(**kwargs)
@@ -632,11 +687,13 @@ class TestPreviewSendParity:
         acct = _account()
         app_id = uuid4()
         idem_a = compute_idempotency_key(
-            account_email=acct.email_address, application_id=app_id,
+            account_email=acct.email_address,
+            application_id=app_id,
             payload_hash="a" * 64,
         )
         idem_b = compute_idempotency_key(
-            account_email=acct.email_address, application_id=app_id,
+            account_email=acct.email_address,
+            application_id=app_id,
             payload_hash="b" * 64,
         )
         assert idem_a != idem_b
@@ -667,15 +724,20 @@ class TestEmailPayloadSlice:
 
         # (a) Resolve a trusted contact → eligible verdict.
         verdict = s.svc.resolve_trusted_contact(
-            candidate_id=s.cid, application_id=s.app_id, canonical_job_id=s.job_id,
+            candidate_id=s.cid,
+            application_id=s.app_id,
+            canonical_job_id=s.job_id,
             recipient_email=TRUSTED_EMAIL,
         )
         assert verdict.eligible
 
         # (b) Preview builds the exact payload, no side effects.
         preview = s.svc.preview_submission(
-            candidate_id=s.cid, application_id=s.app_id, canonical_job_id=s.job_id,
-            account_id=s.acct.account_id, recipient_email=TRUSTED_EMAIL,
+            candidate_id=s.cid,
+            application_id=s.app_id,
+            canonical_job_id=s.job_id,
+            account_id=s.acct.account_id,
+            recipient_email=TRUSTED_EMAIL,
             subject="Application for Backend Engineer",
             body="Dear Acme, I'd like to apply.",
             attachment_hashes=(good_hash,),
@@ -693,8 +755,11 @@ class TestEmailPayloadSlice:
 
         # (c) Parity: rebuild and compare hashes.
         rebuilt = s.svc.preview_submission(
-            candidate_id=s.cid, application_id=s.app_id, canonical_job_id=s.job_id,
-            account_id=s.acct.account_id, recipient_email=TRUSTED_EMAIL,
+            candidate_id=s.cid,
+            application_id=s.app_id,
+            canonical_job_id=s.job_id,
+            account_id=s.acct.account_id,
+            recipient_email=TRUSTED_EMAIL,
             subject="Application for Backend Engineer",
             body="Dear Acme, I'd like to apply.",
             attachment_hashes=(good_hash,),
@@ -708,15 +773,18 @@ class TestEmailPayloadSlice:
         """A recipient on a different domain never reaches a payload."""
         s = _slice()
         preview = s.svc.preview_submission(
-            candidate_id=s.cid, application_id=s.app_id, canonical_job_id=s.job_id,
+            candidate_id=s.cid,
+            application_id=s.app_id,
+            canonical_job_id=s.job_id,
             account_id=s.acct.account_id,
             recipient_email="careers@not-acme.example",
-            subject="Subject", body="Body", now=NOW,
+            subject="Subject",
+            body="Body",
+            now=NOW,
         )
         assert not preview.sendable
         assert preview.recipient_verdict is not None
         assert not preview.recipient_verdict.eligible
-        assert (
-            RecipientDenialReason.DOMAIN_MISMATCH.value
-            in " ".join(preview.recipient_verdict.denial_reasons)
+        assert RecipientDenialReason.DOMAIN_MISMATCH.value in " ".join(
+            preview.recipient_verdict.denial_reasons
         )

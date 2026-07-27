@@ -346,9 +346,7 @@ def _translate(exc: Exception) -> HTTPException:
     if isinstance(exc, IllegalReplyTransitionError):
         return HTTPException(
             status_code=409,
-            detail=(
-                f"Illegal reply transition: {exc.from_state.value} -> {exc.to_state.value}"
-            ),
+            detail=(f"Illegal reply transition: {exc.from_state.value} -> {exc.to_state.value}"),
         )
     if isinstance(exc, RecipientMutationError):
         return HTTPException(status_code=422, detail=str(exc))
@@ -629,9 +627,7 @@ def get_send_status(
     """Idempotent read of the reply send phase (task 13.6 / 13.10)."""
     service = _draft_service(request)
     try:
-        outcome = service.get_send_status(
-            draft_id=UUID(draft_id), candidate_id=candidate_id
-        )
+        outcome = service.get_send_status(draft_id=UUID(draft_id), candidate_id=candidate_id)
     except ReplyDraftError as e:
         raise _translate(e) from e
     return _send_outcome_to_response(UUID(draft_id), outcome)

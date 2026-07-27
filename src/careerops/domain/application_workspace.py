@@ -158,9 +158,7 @@ class JobEvidenceChannelResolver(ChannelEligibilityResolver):
                 channel=SubmissionChannel.EXTERNAL_FORM,
                 eligible=bool(trusted_url),
                 reason=(
-                    ""
-                    if trusted_url
-                    else ChannelIneligibilityReason.NO_OFFICIAL_APPLY_URL.value
+                    "" if trusted_url else ChannelIneligibilityReason.NO_OFFICIAL_APPLY_URL.value
                 ),
                 evidence_refs={"apply_url": trusted_url} if trusted_url else {},
             ),

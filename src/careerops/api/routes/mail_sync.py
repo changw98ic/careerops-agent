@@ -378,9 +378,7 @@ def confirm_link(
     return ConfirmLinkResponse(
         link_id=str(decision.link_id),
         confirmed_application_id=(
-            str(decision.confirmed_application_id)
-            if decision.confirmed_application_id
-            else None
+            str(decision.confirmed_application_id) if decision.confirmed_application_id else None
         ),
         decided_at=decision.decided_at.isoformat(),
     )

@@ -78,10 +78,7 @@ class TestBoundedLabelVocabulary:
         assert "gpt-4-long-output" not in body
         metrics.record_mail_proposal(decision="accepted", source="model")
         body = _text(registry)
-        assert (
-            'careerops_mail_proposals_total{decision="accepted",source="model"} 1.0'
-            in body
-        )
+        assert 'careerops_mail_proposals_total{decision="accepted",source="model"} 1.0' in body
 
     def test_send_intent_phase_closed_vocab(self) -> None:
         metrics, registry = _metrics()
@@ -103,7 +100,7 @@ class TestBoundedLabelVocabulary:
         assert "careerops_review_latency_seconds_count" in body
         assert 'review_kind="mail_proposal"' in body
         # Negative/zero observations must not create spurious series.
-        assert "le=\"-5" not in body
+        assert 'le="-5' not in body
 
 
 class TestGauges:

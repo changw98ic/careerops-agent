@@ -54,9 +54,7 @@ class _FakePackageRepo:
         self._versions: dict[UUID, ApplicationPackageVersion] = {}
         self._by_app: dict[UUID, list[UUID]] = {}
 
-    def find_latest_package_version(
-        self, application_id: UUID
-    ) -> ApplicationPackageVersion | None:
+    def find_latest_package_version(self, application_id: UUID) -> ApplicationPackageVersion | None:
         ids = self._by_app.get(application_id, [])
         if not ids:
             return None
@@ -87,9 +85,7 @@ class _FakeResumeRepo:
     def __init__(self, resume: ResumeVersion | None) -> None:
         self.resume = resume
 
-    def find_resume_by_id(
-        self, candidate_id: UUID, version_id: UUID
-    ) -> ResumeVersion | None:
+    def find_resume_by_id(self, candidate_id: UUID, version_id: UUID) -> ResumeVersion | None:
         if self.resume is None:
             return None
         if self.resume.id != version_id or self.resume.candidate_id != candidate_id:
@@ -141,9 +137,7 @@ class TestDraftCreation:
             job_version_id=job_v,
             profile_version_id=prof_v,
             cover_letter_text="I am a great fit.",
-            claims=(
-                PackageClaimVersion("Python engineer", evidence_ids=(uuid4(),)),
-            ),
+            claims=(PackageClaimVersion("Python engineer", evidence_ids=(uuid4(),)),),
             attachments=(PackageAttachment(name="resume.pdf", content_hash="b" * 64),),
             now=now,
         )
@@ -183,31 +177,41 @@ class TestEvidenceAndResumeGates:
     def test_draft_rejects_unconfirmed_resume(self) -> None:
         cid = uuid4()
         resume = ResumeVersion(
-            id=uuid4(), candidate_id=cid, version_number=1,
-            file_reference="x", content_hash="a" * 64,
+            id=uuid4(),
+            candidate_id=cid,
+            version_number=1,
+            file_reference="x",
+            content_hash="a" * 64,
             parse_status=ResumeParseStatus.PARSED,
             confirmation_status=ConfirmationStatus.UNCONFIRMED,
         )
         svc, _ = _make_service(resume=resume)
         with pytest.raises(ResumeNotEligibleError):
             svc.create_draft(
-                application_id=uuid4(), candidate_id=cid,
-                resume_version_id=resume.id, now=datetime.now(tz=UTC),
+                application_id=uuid4(),
+                candidate_id=cid,
+                resume_version_id=resume.id,
+                now=datetime.now(tz=UTC),
             )
 
     def test_draft_rejects_unparsed_resume(self) -> None:
         cid = uuid4()
         resume = ResumeVersion(
-            id=uuid4(), candidate_id=cid, version_number=1,
-            file_reference="x", content_hash="a" * 64,
+            id=uuid4(),
+            candidate_id=cid,
+            version_number=1,
+            file_reference="x",
+            content_hash="a" * 64,
             parse_status=ResumeParseStatus.FAILED,
             confirmation_status=ConfirmationStatus.CONFIRMED,
         )
         svc, _ = _make_service(resume=resume)
         with pytest.raises(ResumeNotEligibleError):
             svc.create_draft(
-                application_id=uuid4(), candidate_id=cid,
-                resume_version_id=resume.id, now=datetime.now(tz=UTC),
+                application_id=uuid4(),
+                candidate_id=cid,
+                resume_version_id=resume.id,
+                now=datetime.now(tz=UTC),
             )
 
 
@@ -223,8 +227,11 @@ class TestRequirementComparison:
         svc, _ = _make_service(resume=resume)
         evidence = [
             EvidenceItem(
-                id=uuid4(), candidate_id=cid, kind=EvidenceKind.SKILL,
-                name="Python", confirmation_status=ConfirmationStatus.CONFIRMED,
+                id=uuid4(),
+                candidate_id=cid,
+                kind=EvidenceKind.SKILL,
+                name="Python",
+                confirmation_status=ConfirmationStatus.CONFIRMED,
             )
         ]
         gaps = svc.compare_requirements(
@@ -249,8 +256,10 @@ class TestTailoringReviewOnly:
         svc, _ = _make_service(resume=resume)
         now = datetime.now(tz=UTC)
         draft = svc.create_draft(
-            application_id=uuid4(), candidate_id=cid,
-            resume_version_id=resume.id, now=now,
+            application_id=uuid4(),
+            candidate_id=cid,
+            resume_version_id=resume.id,
+            now=now,
         )
         suggestions = svc.suggest_tailoring(
             application_id=draft.application_id,
@@ -269,6 +278,7 @@ class TestTailoringReviewOnly:
             def decide(self, kind: object) -> object:
                 class _D:
                     released = True
+
                 return _D()
 
         def _suggest(
@@ -281,13 +291,17 @@ class TestTailoringReviewOnly:
             )
 
         svc = PackageService(  # type: ignore[arg-type]
-            repo, _FakeResumeRepo(resume),
-            capability_resolver=_Enabled(), model_suggester=_suggest,
+            repo,
+            _FakeResumeRepo(resume),
+            capability_resolver=_Enabled(),
+            model_suggester=_suggest,
         )
         now = datetime.now(tz=UTC)
         draft = svc.create_draft(
-            application_id=uuid4(), candidate_id=cid,
-            resume_version_id=resume.id, now=now,
+            application_id=uuid4(),
+            candidate_id=cid,
+            resume_version_id=resume.id,
+            now=now,
         )
         suggestions = svc.suggest_tailoring(
             application_id=draft.application_id, version_id=draft.id, confirmed_evidence=[]
@@ -313,8 +327,11 @@ class TestDiffAndVersions:
         )
         edits = (PackageDiffEntry(section="summary", proposed_text="Tailored text"),)
         v2 = svc.apply_edits(
-            application_id=app, candidate_id=cid, base_version_id=v1.id,
-            edits=edits, now=now,
+            application_id=app,
+            candidate_id=cid,
+            base_version_id=v1.id,
+            edits=edits,
+            now=now,
         )
         assert v2.version_number == 2
         assert v2.id != v1.id
@@ -339,12 +356,18 @@ class TestApproval:
         now = datetime(2026, 7, 20, tzinfo=UTC)
         ev = uuid4()
         draft = svc.create_draft(
-            application_id=uuid4(), candidate_id=cid, resume_version_id=resume.id,
-            claims=(PackageClaimVersion("Python", evidence_ids=(ev,)),), now=now,
+            application_id=uuid4(),
+            candidate_id=cid,
+            resume_version_id=resume.id,
+            claims=(PackageClaimVersion("Python", evidence_ids=(ev,)),),
+            now=now,
         )
         approved = svc.approve(
-            application_id=draft.application_id, candidate_id=cid,
-            version_id=draft.id, actor_id=str(cid), now=now,
+            application_id=draft.application_id,
+            candidate_id=cid,
+            version_id=draft.id,
+            actor_id=str(cid),
+            now=now,
         )
         assert approved.approval_state is PackageApprovalState.APPROVED
         assert approved.approved_at == now
@@ -368,14 +391,19 @@ class TestApproval:
         # Simulate the bound resume later becoming unconfirmed.
         resume_repo.resume = _replace(resume, confirmation_status=ConfirmationStatus.UNCONFIRMED)
         reasons = svc.validate_for_approval(
-            application_id=draft.application_id, candidate_id=cid,
-            version_id=draft.id, now=now,
+            application_id=draft.application_id,
+            candidate_id=cid,
+            version_id=draft.id,
+            now=now,
         )
         assert any("not eligible" in r for r in reasons)
         with pytest.raises(PackageApprovalValidationError):
             svc.approve(
-                application_id=draft.application_id, candidate_id=cid,
-                version_id=draft.id, actor_id=str(cid), now=now,
+                application_id=draft.application_id,
+                candidate_id=cid,
+                version_id=draft.id,
+                actor_id=str(cid),
+                now=now,
             )
 
     def test_approve_rejected_when_source_stale(self) -> None:
@@ -388,14 +416,19 @@ class TestApproval:
             application_id=uuid4(), candidate_id=cid, resume_version_id=resume.id, now=old
         )
         reasons = svc.validate_for_approval(
-            application_id=draft.application_id, candidate_id=cid,
-            version_id=draft.id, now=now,
+            application_id=draft.application_id,
+            candidate_id=cid,
+            version_id=draft.id,
+            now=now,
         )
         assert any("stale" in r for r in reasons)
         with pytest.raises(PackageApprovalValidationError):
             svc.approve(
-                application_id=draft.application_id, candidate_id=cid,
-                version_id=draft.id, actor_id=str(cid), now=now,
+                application_id=draft.application_id,
+                candidate_id=cid,
+                version_id=draft.id,
+                actor_id=str(cid),
+                now=now,
             )
 
     def test_approve_idempotent_for_already_approved(self) -> None:
@@ -404,12 +437,18 @@ class TestApproval:
         svc, _ = _make_service(resume=resume)
         now = datetime.now(tz=UTC)
         draft = svc.create_draft(
-            application_id=uuid4(), candidate_id=cid, resume_version_id=resume.id,
-            claims=(PackageClaimVersion("Python", evidence_ids=(uuid4(),)),), now=now,
+            application_id=uuid4(),
+            candidate_id=cid,
+            resume_version_id=resume.id,
+            claims=(PackageClaimVersion("Python", evidence_ids=(uuid4(),)),),
+            now=now,
         )
         approve_kwargs = dict(
-            application_id=draft.application_id, candidate_id=cid,
-            version_id=draft.id, actor_id="u", now=now,
+            application_id=draft.application_id,
+            candidate_id=cid,
+            version_id=draft.id,
+            actor_id="u",
+            now=now,
         )
         a1 = svc.approve(**approve_kwargs)
         a2 = svc.approve(**approve_kwargs)
@@ -432,19 +471,28 @@ class TestInvalidationOnMutation:
         now = datetime(2026, 7, 20, tzinfo=UTC)
         app = uuid4()
         v1 = svc.create_draft(
-            application_id=app, candidate_id=cid, resume_version_id=resume.id,
-            claims=(PackageClaimVersion("Python", evidence_ids=(uuid4(),)),), now=now,
+            application_id=app,
+            candidate_id=cid,
+            resume_version_id=resume.id,
+            claims=(PackageClaimVersion("Python", evidence_ids=(uuid4(),)),),
+            now=now,
         )
         v1_approved = svc.approve(
-            application_id=app, candidate_id=cid, version_id=v1.id,
-            actor_id=str(cid), now=now,
+            application_id=app,
+            candidate_id=cid,
+            version_id=v1.id,
+            actor_id=str(cid),
+            now=now,
         )
         assert v1_approved.is_approved
 
         # Mutation: user edits → new version
         v2 = svc.apply_edits(
-            application_id=app, candidate_id=cid, base_version_id=v1.id,
-            edits=(PackageDiffEntry(section="summary", proposed_text="new text"),), now=now,
+            application_id=app,
+            candidate_id=cid,
+            base_version_id=v1.id,
+            edits=(PackageDiffEntry(section="summary", proposed_text="new text"),),
+            now=now,
         )
         # Latest version is v2, which is a DRAFT (not approved)
         latest = svc.get_latest(app)
@@ -472,7 +520,10 @@ class TestPackageSlice:
         cid = uuid4()
         resume = _confirmed_resume(candidate_id=cid)
         ev = EvidenceItem(
-            id=uuid4(), candidate_id=cid, kind=EvidenceKind.SKILL, name="Python",
+            id=uuid4(),
+            candidate_id=cid,
+            kind=EvidenceKind.SKILL,
+            name="Python",
             confirmation_status=ConfirmationStatus.CONFIRMED,
         )
         svc, repo = _make_service(resume=resume)
@@ -482,8 +533,11 @@ class TestPackageSlice:
         # (a) Draft with a job-specific diff bound to exact inputs + a claim
         # bound to evidence.
         draft = svc.create_draft(
-            application_id=app, candidate_id=cid, resume_version_id=resume.id,
-            job_version_id=uuid4(), profile_version_id=uuid4(),
+            application_id=app,
+            candidate_id=cid,
+            resume_version_id=resume.id,
+            job_version_id=uuid4(),
+            profile_version_id=uuid4(),
             claims=(PackageClaimVersion("5 years Python", evidence_ids=(ev.id,)),),
             cover_letter_text="Tailored for this role.",
             job_structured_data={"skills": ["Python", "Kubernetes"]},
@@ -500,8 +554,11 @@ class TestPackageSlice:
 
         # (c) Approve the exact payload.
         approved = svc.approve(
-            application_id=app, candidate_id=cid, version_id=draft.id,
-            actor_id=str(cid), now=now,
+            application_id=app,
+            candidate_id=cid,
+            version_id=draft.id,
+            actor_id=str(cid),
+            now=now,
         )
         frozen_hash = approved.payload_hash
         assert approved.is_approved
@@ -509,8 +566,11 @@ class TestPackageSlice:
         # (d) Any input mutation (here: an edit) creates a new draft version and
         # invalidates the current approval.
         svc.apply_edits(
-            application_id=app, candidate_id=cid, base_version_id=draft.id,
-            edits=(PackageDiffEntry(section="summary", proposed_text="edited"),), now=now,
+            application_id=app,
+            candidate_id=cid,
+            base_version_id=draft.id,
+            edits=(PackageDiffEntry(section="summary", proposed_text="edited"),),
+            now=now,
         )
         latest = svc.get_latest(app)
         assert latest is not None and not latest.is_approved
@@ -545,12 +605,18 @@ class TestBindingStoreCoherence:
         assert store.get_binding(app) is None
 
         draft = svc.create_draft(
-            application_id=app, candidate_id=cid, resume_version_id=resume.id,
-            claims=(PackageClaimVersion("Python", evidence_ids=(ev,)),), now=now,
+            application_id=app,
+            candidate_id=cid,
+            resume_version_id=resume.id,
+            claims=(PackageClaimVersion("Python", evidence_ids=(ev,)),),
+            now=now,
         )
         svc.approve(
-            application_id=app, candidate_id=cid, version_id=draft.id,
-            actor_id=str(cid), now=now,
+            application_id=app,
+            candidate_id=cid,
+            version_id=draft.id,
+            actor_id=str(cid),
+            now=now,
         )
         binding = store.get_binding(app)
         assert binding is not None
@@ -560,8 +626,11 @@ class TestBindingStoreCoherence:
 
         # Edit -> new draft version -> binding reflects DRAFT (invalidated).
         svc.apply_edits(
-            application_id=app, candidate_id=cid, base_version_id=draft.id,
-            edits=(PackageDiffEntry(section="summary", proposed_text="x"),), now=now,
+            application_id=app,
+            candidate_id=cid,
+            base_version_id=draft.id,
+            edits=(PackageDiffEntry(section="summary", proposed_text="x"),),
+            now=now,
         )
         invalidated = store.get_binding(app)
         assert invalidated is not None

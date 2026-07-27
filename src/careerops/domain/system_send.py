@@ -148,7 +148,6 @@ def compute_system_send_idempotency_key(
     produce at most one provider effect (tasks 10.6, 10.7).
     """
     canonical = (
-        f"system_send:{application_id}:{account_email}:{recipient}:"
-        f"{normalized_payload_hash}"
+        f"system_send:{application_id}:{account_email}:{recipient}:{normalized_payload_hash}"
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

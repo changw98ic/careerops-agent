@@ -76,9 +76,7 @@ _READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 
 
 def _encode_cursor(created_at: datetime, row_id: UUID) -> str:
-    return base64.urlsafe_b64encode(
-        f"{created_at.isoformat()}|{row_id}".encode()
-    ).decode()
+    return base64.urlsafe_b64encode(f"{created_at.isoformat()}|{row_id}".encode()).decode()
 
 
 def _decode_cursor(cursor: str) -> tuple[datetime, UUID]:
@@ -161,9 +159,7 @@ class PostgresMailAccountRepository:
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
 
-    def get_account(
-        self, candidate_id: UUID, account_id: UUID
-    ) -> EmailAccount | None:
+    def get_account(self, candidate_id: UUID, account_id: UUID) -> EmailAccount | None:
         stmt = sa.select(email_accounts).where(
             sa.and_(
                 email_accounts.c.id == account_id,
@@ -385,10 +381,9 @@ class PostgresSyncRunRepository:
                     ),
                 )
             )
-        stmt = (
-            base.order_by(email_sync_runs.c.created_at.desc(), email_sync_runs.c.id.desc())
-            .limit(limit + 1)
-        )
+        stmt = base.order_by(
+            email_sync_runs.c.created_at.desc(), email_sync_runs.c.id.desc()
+        ).limit(limit + 1)
         with self._engine.begin() as conn:
             rows = list(conn.execute(stmt).mappings())
         has_more = len(rows) > limit
@@ -417,9 +412,7 @@ class PostgresSyncRunRepository:
         }
 
     def get_cursor(self, account_id: UUID) -> MailSyncCursor | None:
-        stmt = sa.select(email_sync_cursors).where(
-            email_sync_cursors.c.account_id == account_id
-        )
+        stmt = sa.select(email_sync_cursors).where(email_sync_cursors.c.account_id == account_id)
         with self._engine.begin() as conn:
             row = conn.execute(stmt).mappings().first()
         if row is None:
@@ -431,9 +424,7 @@ class PostgresSyncRunRepository:
             updated_at=row["updated_at"],
         )
 
-    def advance_cursor(
-        self, account_id: UUID, cursor: MailSyncCursor, *, now: datetime
-    ) -> None:
+    def advance_cursor(self, account_id: UUID, cursor: MailSyncCursor, *, now: datetime) -> None:
         stmt = pg_insert(email_sync_cursors).values(
             account_id=account_id,
             history_id=cursor.history_id,
@@ -539,9 +530,7 @@ class PostgresThreadLinkRepository:
 
     # -- links -------------------------------------------------------------
 
-    def get_link(
-        self, candidate_id: UUID, thread_id: UUID
-    ) -> ThreadLinkSnapshot | None:
+    def get_link(self, candidate_id: UUID, thread_id: UUID) -> ThreadLinkSnapshot | None:
         stmt = sa.select(email_thread_links).where(
             sa.and_(
                 email_thread_links.c.thread_id == thread_id,
@@ -671,9 +660,8 @@ class PostgresThreadLinkRepository:
                     ),
                 )
             )
-        stmt = (
-            base.order_by(email_threads.c.updated_at.desc(), email_threads.c.id.desc())
-            .limit(limit + 1)
+        stmt = base.order_by(email_threads.c.updated_at.desc(), email_threads.c.id.desc()).limit(
+            limit + 1
         )
         with self._engine.begin() as conn:
             rows = list(conn.execute(stmt).mappings())
@@ -711,9 +699,8 @@ class PostgresThreadLinkRepository:
                     ),
                 )
             )
-        stmt = (
-            base.order_by(email_messages.c.received_at.desc(), email_messages.c.id.desc())
-            .limit(limit + 1)
+        stmt = base.order_by(email_messages.c.received_at.desc(), email_messages.c.id.desc()).limit(
+            limit + 1
         )
         with self._engine.begin() as conn:
             rows = list(conn.execute(stmt).mappings())
@@ -743,10 +730,9 @@ class PostgresThreadLinkRepository:
                     ),
                 )
             )
-        stmt = (
-            base.order_by(email_thread_links.c.created_at.desc(), email_thread_links.c.id.desc())
-            .limit(limit + 1)
-        )
+        stmt = base.order_by(
+            email_thread_links.c.created_at.desc(), email_thread_links.c.id.desc()
+        ).limit(limit + 1)
         with self._engine.begin() as conn:
             rows = list(conn.execute(stmt).mappings())
         has_more = len(rows) > limit
@@ -771,9 +757,7 @@ class PostgresThreadLinkRepository:
             )
         return {"items": items, "next_cursor": next_cursor, "has_more": has_more}
 
-    def get_unresolved(
-        self, candidate_id: UUID, link_id: UUID
-    ) -> UnresolvedThreadLink | None:
+    def get_unresolved(self, candidate_id: UUID, link_id: UUID) -> UnresolvedThreadLink | None:
         link_cols = (
             email_thread_links,
             email_threads.c.provider_thread_id,

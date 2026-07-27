@@ -106,9 +106,7 @@ class PackageVersionRepository(Protocol):
 
 
 class ResumeReadRepository(Protocol):
-    def find_resume_by_id(
-        self, candidate_id: UUID, version_id: UUID
-    ) -> ResumeVersion | None: ...
+    def find_resume_by_id(self, candidate_id: UUID, version_id: UUID) -> ResumeVersion | None: ...
 
 
 class PackageNotFoundError(Exception):
@@ -175,9 +173,7 @@ class PackageService:
     def get_latest(self, application_id: UUID) -> ApplicationPackageVersion | None:
         return self._packages.find_latest_package_version(application_id)
 
-    def get_version(
-        self, application_id: UUID, version_id: UUID
-    ) -> ApplicationPackageVersion:
+    def get_version(self, application_id: UUID, version_id: UUID) -> ApplicationPackageVersion:
         version = self._packages.find_package_version(application_id, version_id)
         if version is None:
             raise PackageNotFoundError(str(version_id))
@@ -385,9 +381,7 @@ class PackageService:
             if not eligible:
                 reasons.append(f"bound resume not eligible: {why}")
         if self._is_source_stale(version, now):
-            reasons.append(
-                f"job source is stale beyond {self._stale_threshold_days} days policy"
-            )
+            reasons.append(f"job source is stale beyond {self._stale_threshold_days} days policy")
         return reasons
 
     def approve(
@@ -508,9 +502,7 @@ class PackageService:
             return False
         return bool(decision.released)
 
-    def _is_source_stale(
-        self, version: ApplicationPackageVersion, now: datetime
-    ) -> bool:
+    def _is_source_stale(self, version: ApplicationPackageVersion, now: datetime) -> bool:
         """A source is stale if the version was created longer ago than the
         threshold AND no newer version exists. Created_at proximity to now is a
         proxy for source freshness when the job version capture time is not

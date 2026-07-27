@@ -95,9 +95,7 @@ class ApprovedPackageRequiredError(EmailPayloadServiceError):
     """No approved package version is currently bound to the application."""
 
     def __init__(self, application_id: UUID) -> None:
-        super().__init__(
-            f"application {application_id} has no currently-approved package version"
-        )
+        super().__init__(f"application {application_id} has no currently-approved package version")
 
 
 class AccountLookupError(EmailPayloadServiceError):
@@ -195,9 +193,7 @@ class AttachmentProvider(Protocol):
     underlying content is unknown/expired — the attachment is then denied.
     """
 
-    def describe(
-        self, content_hash: str
-    ) -> dict[str, object] | None: ...
+    def describe(self, content_hash: str) -> dict[str, object] | None: ...
 
 
 class _DefaultContactResolver:
@@ -315,9 +311,7 @@ class EmailPayloadService:
         )
         return self.validate_recipient(
             recipient_email=recipient_email,
-            company_domain=(
-                candidates[0].company_domain if candidates else ""
-            ),
+            company_domain=(candidates[0].company_domain if candidates else ""),
             candidates=candidates,
         )
 
@@ -428,9 +422,7 @@ class EmailPayloadService:
         instead, but a direct build call must fail closed).
         """
         if not recipient.eligible:
-            raise RecipientIneligibleError(
-                recipient.email, list(recipient.denial_reasons)
-            )
+            raise RecipientIneligibleError(recipient.email, list(recipient.denial_reasons))
         if not account.is_active:
             raise AccountLookupError(f"account {account.account_id} is not active")
         package = self._require_approved_package(
@@ -479,9 +471,7 @@ class EmailPayloadService:
     # 9.5 — attachment validation helper
     # ------------------------------------------------------------------
 
-    def validate_attachment(
-        self, *, content_hash: str
-    ) -> EmailAttachment:
+    def validate_attachment(self, *, content_hash: str) -> EmailAttachment:
         """Validate one attachment against the safe-material policy (9.5).
 
         Looks up the attachment's declared/detected media type, size, retention
@@ -491,9 +481,7 @@ class EmailPayloadService:
         """
         provider = self._attachment_provider
         if provider is None:
-            raise AttachmentValidationError(
-                "<unknown>", "attachment provider not wired"
-            )
+            raise AttachmentValidationError("<unknown>", "attachment provider not wired")
         spec = provider.describe(content_hash)
         if spec is None:
             raise AttachmentValidationError(
@@ -586,17 +574,13 @@ class EmailPayloadService:
             recipient_email=recipient_email,
         )
         if not verdict.eligible:
-            errors.extend(
-                f"recipient denied: {r.value}" for r in verdict.denial_reasons
-            )
+            errors.extend(f"recipient denied: {r.value}" for r in verdict.denial_reasons)
 
         # 5. attachments (9.5)
         validated_attachments: list[EmailAttachment] = []
         for h in attachment_hashes:
             try:
-                validated_attachments.append(
-                    self.validate_attachment(content_hash=h)
-                )
+                validated_attachments.append(self.validate_attachment(content_hash=h))
             except AttachmentValidationError as exc:
                 errors.append(str(exc))
 
@@ -646,9 +630,7 @@ class EmailPayloadService:
             raise ApprovedPackageRequiredError(application_id)
         return latest
 
-    def _require_owned(
-        self, *, application_id: UUID, candidate_id: UUID
-    ) -> object:
+    def _require_owned(self, *, application_id: UUID, candidate_id: UUID) -> object:
         owned = self._ownership.find_owned_application(
             application_id=application_id, candidate_id=candidate_id
         )

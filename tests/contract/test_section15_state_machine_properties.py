@@ -60,6 +60,12 @@ from careerops.domain.send import ReconciliationStatus
 NOW = datetime(2026, 7, 26, 12, 0, 0, tzinfo=UTC)
 
 
+def _test_recipient_eligible(req: object) -> bool:
+    """Test resolver: allow well-formed emails (contains @)."""
+    r = getattr(req, "recipient", "").strip()
+    return bool(r) and "@" in r and not r.endswith("@")
+
+
 # ---------------------------------------------------------------------------
 # Application lifecycle state machine
 # ---------------------------------------------------------------------------
@@ -352,9 +358,9 @@ class TestOutboxPublisherProperties:
         # attempt_count already at max -> terminal.
         at_max = _event(attempt_count=5)
         store = _RecordingStore((at_max,))
-        result = OutboxPublisher(
-            store, _FailSink(retryable=True), max_attempts=5
-        ).publish_batch(owner="w1", now=NOW)
+        result = OutboxPublisher(store, _FailSink(retryable=True), max_attempts=5).publish_batch(
+            owner="w1", now=NOW
+        )
         assert result.failed == 1
         assert result.deferred == 0
         assert store.released[-1][2] is True  # terminal flag set
@@ -362,18 +368,18 @@ class TestOutboxPublisherProperties:
         # Below max -> deferred (not terminal).
         below = _event(attempt_count=1)
         store2 = _RecordingStore((below,))
-        result2 = OutboxPublisher(
-            store2, _FailSink(retryable=True), max_attempts=5
-        ).publish_batch(owner="w1", now=NOW)
+        result2 = OutboxPublisher(store2, _FailSink(retryable=True), max_attempts=5).publish_batch(
+            owner="w1", now=NOW
+        )
         assert result2.deferred == 1
         assert result2.failed == 0
         assert store2.released[-1][2] is False
 
     def test_non_retryable_error_is_always_terminal(self) -> None:
         store = _RecordingStore((_event(attempt_count=1),))
-        result = OutboxPublisher(
-            store, _FailSink(retryable=False)
-        ).publish_batch(owner="w1", now=NOW)
+        result = OutboxPublisher(store, _FailSink(retryable=False)).publish_batch(
+            owner="w1", now=NOW
+        )
         assert result.failed == 1
         assert store.released[-1][2] is True
 
@@ -452,7 +458,7 @@ class TestReconciliationProperties:
             FakeSideEffectProvider(),
             audit_writer=InMemoryAuditWriter(),
         )
-        svc = SystemManagedSendService(kernel, repo)  # type: ignore[arg-type]
+        svc = SystemManagedSendService(kernel, repo, recipient_eligible=_test_recipient_eligible)  # type: ignore[arg-type]
 
         request = SystemSendRequest(
             application_id=app_id,

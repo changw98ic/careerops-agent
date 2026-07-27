@@ -112,9 +112,7 @@ class AccountNotConnectedError(MailSyncError):
 
     def __init__(self, account_id: UUID, state: MailConnectionState) -> None:
         self.state = state
-        super().__init__(
-            f"mail account {account_id} is not connected (state={state.value})"
-        )
+        super().__init__(f"mail account {account_id} is not connected (state={state.value})")
 
 
 class DuplicateSyncRequestError(MailSyncError):
@@ -257,9 +255,7 @@ class ThreadLinkRepository(Protocol):
         cursor: str | None,
         limit: int,
     ) -> dict[str, object]: ...
-    def get_unresolved(
-        self, candidate_id: UUID, link_id: UUID
-    ) -> UnresolvedThreadLink | None: ...
+    def get_unresolved(self, candidate_id: UUID, link_id: UUID) -> UnresolvedThreadLink | None: ...
     def record_confirmation(
         self, decision: LinkConfirmationDecision, *, now: datetime
     ) -> ThreadLinkSnapshot | None: ...
@@ -463,9 +459,7 @@ class MailSyncService:
         """
         account = self._require_owned_account(candidate_id, account_id)
         if self._connection_state(account) is not MailConnectionState.CONNECTED:
-            raise AccountNotConnectedError(
-                account_id, self._connection_state(account)
-            )
+            raise AccountNotConnectedError(account_id, self._connection_state(account))
         open_run = self._runs.get_open_run(account_id)
         if open_run is not None:
             return open_run
@@ -509,9 +503,7 @@ class MailSyncService:
             raise MailSyncError(f"sync run not found: {run_id}")
         account = self._require_owned_account(candidate_id, run.account_id)
         if self._connection_state(account) is not MailConnectionState.CONNECTED:
-            raise AccountNotConnectedError(
-                run.account_id, self._connection_state(account)
-            )
+            raise AccountNotConnectedError(run.account_id, self._connection_state(account))
         # Dedup set is mutable across the batch: a provider message id
         # processed earlier in THIS batch (or in a prior run) is a duplicate
         # and is skipped (task 11.4). The DB unique constraint is the durable
@@ -806,9 +798,7 @@ class MailSyncService:
         limit: int,
     ) -> dict[str, object]:
         self._require_owned_account(candidate_id, account_id)
-        return self._threads.list_threads(
-            candidate_id, account_id, cursor=cursor, limit=limit
-        )
+        return self._threads.list_threads(candidate_id, account_id, cursor=cursor, limit=limit)
 
     def list_messages(
         self,
@@ -821,9 +811,7 @@ class MailSyncService:
         thread = self._threads.get_thread(candidate_id, thread_id)
         if thread is None:
             raise ThreadNotFoundError(thread_id)
-        return self._threads.list_messages(
-            candidate_id, thread_id, cursor=cursor, limit=limit
-        )
+        return self._threads.list_messages(candidate_id, thread_id, cursor=cursor, limit=limit)
 
     def list_unresolved_links(
         self,
@@ -838,17 +826,13 @@ class MailSyncService:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _find_account_by_email(
-        self, candidate_id: UUID, email_address: str
-    ) -> EmailAccount | None:
+    def _find_account_by_email(self, candidate_id: UUID, email_address: str) -> EmailAccount | None:
         account = self._accounts.get_account_for_candidate(candidate_id)
         if account is not None and account.email_address.lower() == email_address.lower():
             return account
         return None
 
-    def _require_owned_account(
-        self, candidate_id: UUID, account_id: UUID
-    ) -> EmailAccount:
+    def _require_owned_account(self, candidate_id: UUID, account_id: UUID) -> EmailAccount:
         account = self._accounts.get_account(candidate_id, account_id)
         if account is None:
             raise AccountNotOwnedError(account_id)
@@ -917,7 +901,9 @@ def _to_summary(
     """Build a :class:`MailAccountSummary` from a legacy ``EmailAccount``."""
     # Default the granted scopes to the canonical readonly set when the repo
     # did not hand back an explicit tuple (the column is additive).
-    granted = scopes if scopes else tuple(sorted({"https://www.googleapis.com/auth/gmail.readonly"}))
+    granted = (
+        scopes if scopes else tuple(sorted({"https://www.googleapis.com/auth/gmail.readonly"}))
+    )
     state = _connection_state_for(account)
     return MailAccountSummary(
         account_id=account.id,

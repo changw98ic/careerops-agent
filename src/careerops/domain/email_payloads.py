@@ -210,8 +210,7 @@ class RecipientIneligibleError(EmailPayloadError):
         self.recipient = recipient
         self.reasons = list(reasons)
         super().__init__(
-            f"recipient {recipient!r} is ineligible: "
-            + ", ".join(r.value for r in reasons)
+            f"recipient {recipient!r} is ineligible: " + ", ".join(r.value for r in reasons)
         )
 
 
@@ -287,13 +286,9 @@ class TrustedContactVerdict:
         # explain why no evidence is present.
         if self.eligible:
             if not self.company_domain:
-                raise ValueError(
-                    "an eligible verdict requires the trusted company_domain"
-                )
+                raise ValueError("an eligible verdict requires the trusted company_domain")
             if not self.source_evidence_url:
-                raise ValueError(
-                    "an eligible verdict requires source_evidence_url (9.1)"
-                )
+                raise ValueError("an eligible verdict requires source_evidence_url (9.1)")
         if self.eligible and self.denial_reasons:
             raise ValueError("an eligible verdict must carry no denial reasons")
 
@@ -366,15 +361,11 @@ class InitialApplicationEmailPayload:
         if not self.subject.strip():
             raise ValueError("subject is required")
         if not self.recipient.eligible:
-            raise ValueError(
-                "recipient verdict must be eligible to build a payload (9.2)"
-            )
+            raise ValueError("recipient verdict must be eligible to build a payload (9.2)")
         if not self.payload_hash:
             raise ValueError("payload_hash is required (compute via compute_payload_hash)")
         if not self.idempotency_key or not self.reconciliation_key:
-            raise ValueError(
-                "idempotency_key and reconciliation_key are required (9.4)"
-            )
+            raise ValueError("idempotency_key and reconciliation_key are required (9.4)")
 
     @property
     def attachment_hashes(self) -> tuple[str, ...]:
@@ -424,9 +415,7 @@ def compute_payload_hash(
     return hashlib.sha256(encoded).hexdigest()
 
 
-def compute_idempotency_key(
-    *, account_email: str, application_id: UUID, payload_hash: str
-) -> str:
+def compute_idempotency_key(*, account_email: str, application_id: UUID, payload_hash: str) -> str:
     """Stable idempotency key for an initial application send (task 9.4).
 
     Binds the sending account + the application + the exact payload hash. The
@@ -490,22 +479,16 @@ def validate_attachment(
         )
     for prefix in _DENIED_MEDIA_PREFIXES:
         if declared == prefix or declared.startswith(prefix):
-            raise AttachmentValidationError(
-                name, f"media type {declared!r} is on the deny list"
-            )
+            raise AttachmentValidationError(name, f"media type {declared!r} is on the deny list")
     if declared not in ALLOWED_ATTACHMENT_MEDIA_TYPES:
-        raise AttachmentValidationError(
-            name, f"media type {declared!r} is not in the allowed set"
-        )
+        raise AttachmentValidationError(name, f"media type {declared!r} is not in the allowed set")
     if size_bytes > ATTACHMENT_MAX_BYTES:
         raise AttachmentValidationError(
             name,
             f"size {size_bytes} exceeds max {ATTACHMENT_MAX_BYTES}",
         )
     if len(content_hash) != 64:
-        raise AttachmentValidationError(
-            name, "content_hash must be a 64-char sha256 hex"
-        )
+        raise AttachmentValidationError(name, "content_hash must be a 64-char sha256 hex")
     if retention_state is not AttachmentRetentionState.RETAINED:
         raise AttachmentValidationError(
             name, f"retention state is {retention_state.value} (not retained)"

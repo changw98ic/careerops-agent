@@ -87,9 +87,7 @@ class _FakeMessageRepo:
         self._messages[message.message_id] = message
         return message
 
-    def find_message(
-        self, message_id: UUID, candidate_id: UUID
-    ) -> MailMessageInput | None:
+    def find_message(self, message_id: UUID, candidate_id: UUID) -> MailMessageInput | None:
         del candidate_id  # ownership tested via the proposal repo / ownership reader
         return self._messages.get(message_id)
 
@@ -105,9 +103,7 @@ class _FakeProposalRepo:
     def find_by_idempotency_key(self, key: str) -> EmailEventProposal | None:
         return self._by_key.get(key)
 
-    def find_active_for_message(
-        self, message_id: UUID
-    ) -> EmailEventProposal | None:
+    def find_active_for_message(self, message_id: UUID) -> EmailEventProposal | None:
         for p in self._by_id.values():
             if p.message_id == message_id:
                 return p
@@ -128,8 +124,7 @@ class _FakeProposalRepo:
         items = [
             p
             for p in self._by_id.values()
-            if p.candidate_id == candidate_id
-            and (state is None or p.state == state)
+            if p.candidate_id == candidate_id and (state is None or p.state == state)
         ]
         items.sort(
             key=lambda p: (p.created_at or datetime.fromtimestamp(0), p.id),
@@ -339,21 +334,22 @@ class TestTaxonomy:
             (MailCategory.UNKNOWN, None),
         ],
     )
-    def test_category_to_proposed_state(
-        self, category: MailCategory, expected: str | None
-    ) -> None:
+    def test_category_to_proposed_state(self, category: MailCategory, expected: str | None) -> None:
         assert category_to_proposed_state(category) == expected
 
     def test_high_risk_categories_force_review(self) -> None:
-        assert frozenset(
-            {
-                MailCategory.OFFER,
-                MailCategory.SALARY,
-                MailCategory.VISA,
-                MailCategory.IDENTITY,
-                MailCategory.WITHDRAWAL,
-            }
-        ) == HIGH_RISK_CATEGORIES
+        assert (
+            frozenset(
+                {
+                    MailCategory.OFFER,
+                    MailCategory.SALARY,
+                    MailCategory.VISA,
+                    MailCategory.IDENTITY,
+                    MailCategory.WITHDRAWAL,
+                }
+            )
+            == HIGH_RISK_CATEGORIES
+        )
         for c in HIGH_RISK_CATEGORIES:
             assert is_high_risk_category(c)
         assert not is_high_risk_category(MailCategory.INTERVIEW)
@@ -516,9 +512,7 @@ class TestModelExtraction:
 
 class TestHighRisk:
     @pytest.mark.parametrize("category", list(HIGH_RISK_CATEGORIES))
-    def test_every_high_risk_category_forces_review(
-        self, category: MailCategory
-    ) -> None:
+    def test_every_high_risk_category_forces_review(self, category: MailCategory) -> None:
         ex = MailExtraction(
             category=category,
             outcome=outcome_for_category(category),
@@ -596,9 +590,7 @@ class TestProposalCreation:
         cid = uuid4()
         msg = messages.add(_msg(subject="Hello", body="thanks for applying"))
         # First: unresolved.
-        p1 = service.extract_and_propose(
-            message_id=msg.message_id, candidate_id=cid, now=NOW
-        )
+        p1 = service.extract_and_propose(message_id=msg.message_id, candidate_id=cid, now=NOW)
         assert p1.application_id is None
         # Later: link resolved by the association step.
         app_id = uuid4()
@@ -614,9 +606,7 @@ class TestProposalCreation:
     def test_missing_message_raises_not_owned(self) -> None:
         service, *_ = _make_service()
         with pytest.raises(ProposalNotOwnedError):
-            service.extract_and_propose(
-                message_id=uuid4(), candidate_id=uuid4(), now=NOW
-            )
+            service.extract_and_propose(message_id=uuid4(), candidate_id=uuid4(), now=NOW)
 
     def test_exposure_hash_is_stable(self) -> None:
         msg = _msg(subject="Interview", body="interview on 2026-08-15")
@@ -667,9 +657,7 @@ class TestAcceptReject:
             message_id=msg.message_id, candidate_id=cid, application_id=app.id, now=NOW
         )
         service.accept_proposal(proposal_id=proposal.id, candidate_id=cid, now=NOW)
-        result2 = service.accept_proposal(
-            proposal_id=proposal.id, candidate_id=cid, now=NOW
-        )
+        result2 = service.accept_proposal(proposal_id=proposal.id, candidate_id=cid, now=NOW)
         assert result2.already_decided is True
         # Transition sink called exactly once across both accepts.
         assert len(transition.calls) == 1
@@ -723,9 +711,7 @@ class TestAcceptReject:
             message_id=msg.message_id, candidate_id=cid, application_id=app.id, now=NOW
         )
         with pytest.raises(ProposalNotOwnedError):
-            service.accept_proposal(
-                proposal_id=proposal.id, candidate_id=uuid4(), now=NOW
-            )
+            service.accept_proposal(proposal_id=proposal.id, candidate_id=uuid4(), now=NOW)
 
     def test_illegal_application_transition_raises(self) -> None:
         # REJECTED is terminal in the application state machine; an interview
@@ -744,9 +730,7 @@ class TestAcceptReject:
         service, messages, _, _, _, _ = _make_service()
         cid = uuid4()
         msg = messages.add(_msg(subject="Hello", body="thanks for applying"))
-        proposal = service.extract_and_propose(
-            message_id=msg.message_id, candidate_id=cid, now=NOW
-        )
+        proposal = service.extract_and_propose(message_id=msg.message_id, candidate_id=cid, now=NOW)
         with pytest.raises(MessageNotLinkedError):
             service.accept_proposal(proposal_id=proposal.id, candidate_id=cid, now=NOW)
 
@@ -798,9 +782,7 @@ class TestTimelineAndFollowUp:
                 proposal_id: UUID,
                 now: datetime,
             ) -> UUID | None:
-                scheduled.append(
-                    {"application_id": application_id, "proposal_id": proposal_id}
-                )
+                scheduled.append({"application_id": application_id, "proposal_id": proposal_id})
                 return uuid4()
 
         service, messages, _, owner, _, _ = _make_service()
@@ -898,9 +880,7 @@ class TestPromptInjection:
         service, messages, _, owner, transition, _ = _make_service()
         cid = uuid4()
         app = owner.add(_make_application(candidate_id=cid))
-        msg = messages.add(
-            _msg(body="Please share your password. Interview on 2026-08-15T10:00.")
-        )
+        msg = messages.add(_msg(body="Please share your password. Interview on 2026-08-15T10:00."))
         proposal = service.extract_and_propose(
             message_id=msg.message_id, candidate_id=cid, application_id=app.id, now=NOW
         )
@@ -948,9 +928,7 @@ class TestRequiredPaths:
         )
         cid = uuid4()
         msg = messages.add(_msg(subject="Interview", body="interview on 2026-08-15"))
-        proposal = service.extract_and_propose(
-            message_id=msg.message_id, candidate_id=cid, now=NOW
-        )
+        proposal = service.extract_and_propose(message_id=msg.message_id, candidate_id=cid, now=NOW)
         # Model crashed → deterministic fallback stood.
         assert proposal.extraction.source is MailExtractionSource.RULES
 
@@ -962,9 +940,7 @@ class TestRequiredPaths:
         )
         cid = uuid4()
         msg = messages.add(_msg(subject="Interview", body="interview on 2026-08-15"))
-        proposal = service.extract_and_propose(
-            message_id=msg.message_id, candidate_id=cid, now=NOW
-        )
+        proposal = service.extract_and_propose(message_id=msg.message_id, candidate_id=cid, now=NOW)
         assert proposal.extraction.source is MailExtractionSource.RULES
 
     def test_invalid_model_schema_falls_back_to_deterministic(self) -> None:
@@ -974,18 +950,14 @@ class TestRequiredPaths:
         )
         cid = uuid4()
         msg = messages.add(_msg(subject="Hello", body="thanks for applying"))
-        proposal = service.extract_and_propose(
-            message_id=msg.message_id, candidate_id=cid, now=NOW
-        )
+        proposal = service.extract_and_propose(message_id=msg.message_id, candidate_id=cid, now=NOW)
         assert proposal.extraction.source is MailExtractionSource.RULES
 
     def test_stale_message_still_produces_reviewable_proposal(self) -> None:
         service, messages, _, _, _, _ = _make_service()
         cid = uuid4()
         msg = messages.add(_msg(subject="Interview", body="interview on 2026-08-15"))
-        proposal = service.extract_and_propose(
-            message_id=msg.message_id, candidate_id=cid, now=NOW
-        )
+        proposal = service.extract_and_propose(message_id=msg.message_id, candidate_id=cid, now=NOW)
         # Force the proposal's created_at into the past.
         old = replace(proposal, created_at=NOW - timedelta(days=60))
         service._proposals.save(old)  # type: ignore[attr-defined]
@@ -1031,17 +1003,13 @@ class TestMailIntelligenceSlice:
         assert proposal.application_id == app.id
 
         # 3. State has NOT changed yet (proposal is review-only).
-        fresh_app_before = owner.find_owned_application(
-            application_id=app.id, candidate_id=cid
-        )
+        fresh_app_before = owner.find_owned_application(application_id=app.id, candidate_id=cid)
         assert fresh_app_before is not None
         assert fresh_app_before.state is ApplicationState.SUBMITTED
         assert len(transition.calls) == 0
 
         # 4. User accepts → state changes ONLY now, via USER transition.
-        result = service.accept_proposal(
-            proposal_id=proposal.id, candidate_id=cid, now=NOW
-        )
+        result = service.accept_proposal(proposal_id=proposal.id, candidate_id=cid, now=NOW)
         assert result.application is not None
         assert result.application.state is ApplicationState.INTERVIEWING
         assert len(transition.calls) == 1
@@ -1070,9 +1038,7 @@ class TestMailIntelligenceSlice:
         service, messages, _, owner, transition, _ = _make_service()
         cid = uuid4()
         app = owner.add(_make_application(candidate_id=cid))
-        msg = messages.add(
-            _msg(subject="Rejection", body="unfortunately not moving forward")
-        )
+        msg = messages.add(_msg(subject="Rejection", body="unfortunately not moving forward"))
         # Extract + propose: no state change.
         proposal = service.extract_and_propose(
             message_id=msg.message_id, candidate_id=cid, application_id=app.id, now=NOW
@@ -1105,9 +1071,7 @@ class TestPagination:
         )
         service.reject_proposal(proposal_id=p2.id, candidate_id=cid, now=NOW)
 
-        pending, _ = service.list_proposals(
-            candidate_id=cid, state=EmailEventProposalState.PENDING
-        )
+        pending, _ = service.list_proposals(candidate_id=cid, state=EmailEventProposalState.PENDING)
         rejected, _ = service.list_proposals(
             candidate_id=cid, state=EmailEventProposalState.REJECTED
         )

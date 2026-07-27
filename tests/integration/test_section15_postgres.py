@@ -43,9 +43,7 @@ def engine() -> sa.Engine:
     return sa.create_engine(url)
 
 
-def _seed_app_fk_rows(
-    conn: sa.Connection, candidate_id: UUID, job_id: UUID | None = None
-) -> UUID:
+def _seed_app_fk_rows(conn: sa.Connection, candidate_id: UUID, job_id: UUID | None = None) -> UUID:
     """Insert the FK dependency rows needed to create an application.
 
     Returns the canonical_job_id (newly generated if not supplied).
@@ -84,6 +82,7 @@ def _run_migrations(engine: sa.Engine) -> None:
     import sys
 
     from alembic.config import main as alembic_main
+
     old_argv = sys.argv
     sys.argv = ["alembic", "upgrade", "head"]
     try:
@@ -226,8 +225,7 @@ class TestAppendOnlyEvents:
             # Verify it exists.
             result = conn.execute(
                 sa.text(
-                    "SELECT COUNT(*) FROM careerops.application_lifecycle_events "
-                    "WHERE id = :eid"
+                    "SELECT COUNT(*) FROM careerops.application_lifecycle_events WHERE id = :eid"
                 ),
                 {"eid": eid},
             )
@@ -336,10 +334,7 @@ class TestOwnershipFilters:
             )
             # Query scoped by cid1 returns only cid1's application.
             result = conn.execute(
-                sa.text(
-                    "SELECT COUNT(*) FROM careerops.applications "
-                    "WHERE candidate_id = :cid"
-                ),
+                sa.text("SELECT COUNT(*) FROM careerops.applications WHERE candidate_id = :cid"),
                 {"cid": cid1},
             )
             assert result.scalar() == 1

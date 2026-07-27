@@ -580,9 +580,7 @@ class IllegalReplyTransitionError(ReplyDraftError):
     ) -> None:
         self.from_state = from_state
         self.to_state = to_state
-        super().__init__(
-            f"illegal reply-draft transition: {from_state.value} -> {to_state.value}"
-        )
+        super().__init__(f"illegal reply-draft transition: {from_state.value} -> {to_state.value}")
 
 
 class ReplyDraftAlreadyDecidedError(ReplyDraftError):

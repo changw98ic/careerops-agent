@@ -137,9 +137,7 @@ def _to_status_response(status: object) -> SystemSendStatusResponse:
     )
 
 
-def _to_request(
-    application_id: UUID, candidate_id: UUID, body: SystemSendConfirmRequest
-) -> object:
+def _to_request(application_id: UUID, candidate_id: UUID, body: SystemSendConfirmRequest) -> object:
     from careerops.domain.system_send import SystemSendRequest
 
     return SystemSendRequest(

@@ -53,8 +53,7 @@ def _context_to_row(ctx: ReplyDraftContext) -> dict[str, Any]:
         "application_id": str(ctx.application_id) if ctx.application_id else None,
         "thread_excerpt": ctx.thread_excerpt,
         "application_facts": [
-            {"label": f.label, "value": f.value, "source": f.source}
-            for f in ctx.application_facts
+            {"label": f.label, "value": f.value, "source": f.source} for f in ctx.application_facts
         ],
         "evidence_refs": [str(e) for e in ctx.evidence_refs],
         "intent": ctx.intent.value,
@@ -79,9 +78,7 @@ def _row_to_context(row: dict[str, Any]) -> ReplyDraftContext:
             )
             for f in raw.get("application_facts", [])
         ),
-        evidence_refs=tuple(
-            UUID(e) for e in raw.get("evidence_refs", []) if e
-        ),
+        evidence_refs=tuple(UUID(e) for e in raw.get("evidence_refs", []) if e),
         intent=ReplyIntent(raw.get("intent", "acknowledge")),
         risk_category=ReplyRiskCategory(raw.get("risk_category", "low_risk")),
         mail_category=raw.get("mail_category", ""),
@@ -155,16 +152,12 @@ class PostgresReplyDraftRepository:
         self._engine = engine
 
     def find_by_id(self, draft_id: UUID) -> ReplyDraft | None:
-        stmt = sa.select(reply_draft_versions).where(
-            reply_draft_versions.c.id == draft_id
-        )
+        stmt = sa.select(reply_draft_versions).where(reply_draft_versions.c.id == draft_id)
         with self._engine.connect() as conn:
             row = conn.execute(stmt).mappings().first()
         return _row_to_draft(row) if row else None
 
-    def find_latest_for_thread(
-        self, thread_id: UUID, candidate_id: UUID
-    ) -> ReplyDraft | None:
+    def find_latest_for_thread(self, thread_id: UUID, candidate_id: UUID) -> ReplyDraft | None:
         stmt = (
             sa.select(reply_draft_versions)
             .where(
@@ -181,9 +174,7 @@ class PostgresReplyDraftRepository:
     def find_by_idempotency_key(self, key: str) -> ReplyDraft | None:
         # Idempotency is keyed on payload_hash (the canonical content hash).
         # Kept for protocol parity; the service uses find_latest_for_thread.
-        stmt = sa.select(reply_draft_versions).where(
-            reply_draft_versions.c.payload_hash == key
-        )
+        stmt = sa.select(reply_draft_versions).where(reply_draft_versions.c.payload_hash == key)
         with self._engine.connect() as conn:
             row = conn.execute(stmt).mappings().first()
         return _row_to_draft(row) if row else None
@@ -251,13 +242,9 @@ class PostgresReplyDraftRepository:
             reply_draft_versions.c.candidate_id == candidate_id
         )
         if application_id is not None:
-            stmt = stmt.where(
-                reply_draft_versions.c.application_id == application_id
-            )
+            stmt = stmt.where(reply_draft_versions.c.application_id == application_id)
         if state is not None:
-            stmt = stmt.where(
-                reply_draft_versions.c.approval_state == state.value
-            )
+            stmt = stmt.where(reply_draft_versions.c.approval_state == state.value)
         if cursor is not None:
             cursor_time, cursor_id = cursor
             stmt = stmt.where(

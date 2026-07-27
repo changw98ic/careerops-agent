@@ -77,9 +77,7 @@ def upgrade() -> None:
         sa.Column("subject", sa.Text(), server_default="", nullable=False),
         sa.Column("body_text", sa.Text(), server_default="", nullable=False),
         sa.Column("intent", sa.String(24), server_default="acknowledge", nullable=False),
-        sa.Column(
-            "risk_category", sa.String(24), server_default="low_risk", nullable=False
-        ),
+        sa.Column("risk_category", sa.String(24), server_default="low_risk", nullable=False),
         sa.Column("mail_category", sa.Text(), server_default="", nullable=False),
         # Context + claims + validation findings (JSONB).
         sa.Column(
@@ -101,9 +99,7 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("payload_hash", sa.String(64), nullable=False),
-        sa.Column(
-            "approval_state", sa.String(24), server_default="draft", nullable=False
-        ),
+        sa.Column("approval_state", sa.String(24), server_default="draft", nullable=False),
         sa.Column("decided_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("decided_by", sa.Text(), server_default="", nullable=False),
         sa.Column("send_intent_id", sa.Uuid(), nullable=True),

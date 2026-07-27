@@ -1804,9 +1804,7 @@ email_accounts = sa.Table(
         server_default=sa.text("'[]'::jsonb"),
         nullable=False,
     ),
-    sa.Column(
-        "connection_state", sa.String(16), server_default="disconnected", nullable=False
-    ),
+    sa.Column("connection_state", sa.String(16), server_default="disconnected", nullable=False),
     sa.Column("last_error_code", sa.Text(), server_default="", nullable=False),
     sa.Column(
         "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
@@ -2130,8 +2128,7 @@ email_thread_links = sa.Table(
         name="ck_email_thread_links_status",
     ),
     sa.CheckConstraint(
-        "confidence IN ('provider_id', 'sent_message', 'trusted_domain', "
-        "'subject_source', 'none')",
+        "confidence IN ('provider_id', 'sent_message', 'trusted_domain', 'subject_source', 'none')",
         name="ck_email_thread_links_confidence",
     ),
 )
@@ -3084,9 +3081,7 @@ reply_draft_versions = sa.Table(
     sa.Column("subject", sa.Text(), server_default="", nullable=False),
     sa.Column("body_text", sa.Text(), server_default="", nullable=False),
     sa.Column("intent", sa.String(24), server_default="acknowledge", nullable=False),
-    sa.Column(
-        "risk_category", sa.String(24), server_default="low_risk", nullable=False
-    ),
+    sa.Column("risk_category", sa.String(24), server_default="low_risk", nullable=False),
     sa.Column("mail_category", sa.Text(), server_default="", nullable=False),
     # Context + claims + validation findings (JSONB).
     sa.Column(
@@ -3155,4 +3150,3 @@ sa.Index(
     reply_draft_versions.c.thread_id,
     reply_draft_versions.c.candidate_id,
 )
-

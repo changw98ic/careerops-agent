@@ -154,9 +154,7 @@ def validate_read_scope(scopes: tuple[str, ...] | frozenset[str]) -> tuple[str, 
         )
     extra = scope_set - ALLOWED_GMAIL_SCOPES
     if extra:
-        raise ReadScopeViolationError(
-            "unapproved scope granted: " + ",".join(sorted(extra))
-        )
+        raise ReadScopeViolationError("unapproved scope granted: " + ",".join(sorted(extra)))
     if not scope_set:
         raise ReadScopeViolationError("no granted scope")
     return tuple(sorted(scope_set))

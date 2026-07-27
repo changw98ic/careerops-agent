@@ -153,9 +153,7 @@ class ApplicationWorkspaceService:
         one-active-cycle invariant holds and history is preserved across
         re-application. ``candidate_id`` is always the server-resolved owner.
         """
-        existing = self._applications.find_by_candidate_and_job(
-            candidate_id, canonical_job_id
-        )
+        existing = self._applications.find_by_candidate_and_job(candidate_id, canonical_job_id)
         if existing is not None:
             return existing
 
@@ -180,9 +178,7 @@ class ApplicationWorkspaceService:
                 to_state=ApplicationState.FAVORITED,
                 source=ApplicationEventSource.USER,
                 actor_id=str(candidate_id),
-                event_data=(
-                    {"cycle_id": str(cycle_id)} if cycle_id is not None else {}
-                ),
+                event_data=({"cycle_id": str(cycle_id)} if cycle_id is not None else {}),
                 occurred_at=now,
                 created_at=now,
             )
@@ -386,9 +382,7 @@ class ApplicationWorkspaceService:
     # 7.6 — timeline projection
     # ------------------------------------------------------------------
 
-    def get_timeline(
-        self, *, application_id: UUID, candidate_id: UUID
-    ) -> list[TimelineEntry]:
+    def get_timeline(self, *, application_id: UUID, candidate_id: UUID) -> list[TimelineEntry]:
         """Return the chronological timeline projection for the application.
 
         Gate B projects application events. Later gates merge mail event

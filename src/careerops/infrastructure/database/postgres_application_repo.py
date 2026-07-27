@@ -177,7 +177,7 @@ def _claims_to_json(claims: tuple[PackageClaim, ...]) -> list[dict[str, object]]
 
 
 def _package_version_claims_to_json(
-    claims: tuple[PackageClaimVersion, ...]
+    claims: tuple[PackageClaimVersion, ...],
 ) -> list[dict[str, object]]:
     return [
         {"claim_text": c.claim_text, "evidence_ids": [str(e) for e in c.evidence_ids]}
@@ -185,9 +185,7 @@ def _package_version_claims_to_json(
     ]
 
 
-def _attachments_to_json(
-    attachments: tuple[PackageAttachment, ...]
-) -> list[dict[str, object]]:
+def _attachments_to_json(attachments: tuple[PackageAttachment, ...]) -> list[dict[str, object]]:
     return [
         {
             "name": a.name,
@@ -212,9 +210,7 @@ def _diff_to_json(diff: tuple[PackageDiffEntry, ...]) -> list[dict[str, object]]
     ]
 
 
-def _requirement_gaps_to_json(
-    gaps: tuple[RequirementGap, ...]
-) -> list[dict[str, object]]:
+def _requirement_gaps_to_json(gaps: tuple[RequirementGap, ...]) -> list[dict[str, object]]:
     return [
         {
             "requirement_name": g.requirement_name,
@@ -567,9 +563,7 @@ class PostgresApplicationRepository:
 
     # -- Application package versions (Section 8) --------------------------
 
-    def find_latest_package_version(
-        self, application_id: UUID
-    ) -> ApplicationPackageVersion | None:
+    def find_latest_package_version(self, application_id: UUID) -> ApplicationPackageVersion | None:
         """Return the highest-numbered package version for the application."""
         stmt = (
             sa.select(application_package_versions)

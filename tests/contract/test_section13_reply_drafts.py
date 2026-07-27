@@ -79,9 +79,7 @@ class _FakeDraftRepo:
     def find_by_id(self, draft_id: UUID) -> ReplyDraft | None:
         return self._drafts.get(draft_id)
 
-    def find_latest_for_thread(
-        self, thread_id: UUID, candidate_id: UUID
-    ) -> ReplyDraft | None:
+    def find_latest_for_thread(self, thread_id: UUID, candidate_id: UUID) -> ReplyDraft | None:
         candidates = [
             d
             for d in self._drafts.values()
@@ -252,9 +250,7 @@ class _FakeReplySendPort:
     def deliver(
         self, *, draft: ReplyDraft, account_email: str, candidate_id: UUID, now: datetime
     ) -> ReplySendOutcome:
-        self.calls.append(
-            {"draft_id": draft.id, "account_email": account_email, "now": now}
-        )
+        self.calls.append({"draft_id": draft.id, "account_email": account_email, "now": now})
         outcome = self._outcome or ReplySendOutcome(
             phase=ReplySendPhase.SENT,
             intent_id=uuid4(),
@@ -323,9 +319,7 @@ def _make_follow_up_service(
     # find_active_by_application_and_rule / save) with the application repo
     # (ownership + timeline). A dedicated fake backs the follow-up surface so
     # the method names match the Protocol exactly.
-    return FollowUpService(
-        _FakeFollowUpRepo(), app_repo, timeline_sink=_TimelineSink(app_repo)
-    )
+    return FollowUpService(_FakeFollowUpRepo(), app_repo, timeline_sink=_TimelineSink(app_repo))
 
 
 # ===========================================================================
@@ -421,9 +415,7 @@ class TestFollowUpLifecycle:
         )
         assert resched.state == FollowUpState.ACTIVE
         assert resched.due_at == NOW + timedelta(days=4)
-        completed = svc.complete_follow_up(
-            reminder_id=r.id, candidate_id=app.candidate_id, now=NOW
-        )
+        completed = svc.complete_follow_up(reminder_id=r.id, candidate_id=app.candidate_id, now=NOW)
         assert completed.state == FollowUpState.COMPLETED
         # completed is terminal: cannot cancel
         from careerops.application.reply_draft_service import FollowUpServiceError
@@ -772,9 +764,7 @@ class TestDraftEditVersioning:
 
 
 class TestReplySend:
-    def _approved_low_risk_draft(
-        self, svc: ReplyDraftService, candidate_id: UUID
-    ) -> ReplyDraft:
+    def _approved_low_risk_draft(self, svc: ReplyDraftService, candidate_id: UUID) -> ReplyDraft:
         ctx = svc.assemble_context(
             candidate_id=candidate_id,
             message_id=uuid4(),
@@ -809,9 +799,7 @@ class TestReplySend:
         assert outcome.phase == ReplySendPhase.SENT
         assert len(port.calls) == 1
         # idempotent: repeat send reuses the in-flight outcome (no 2nd effect)
-        outcome2 = port.status(
-            intent_id=outcome.intent_id, candidate_id=app.candidate_id
-        )
+        outcome2 = port.status(intent_id=outcome.intent_id, candidate_id=app.candidate_id)
         assert outcome2.phase == ReplySendPhase.SENT
 
     def test_auto_send_not_invoked_without_approval(self) -> None:
@@ -888,16 +876,10 @@ class TestReplySend:
         assert port.calls == []
 
     def test_work_authorization_denied(self) -> None:
-        assert (
-            reply_risk_for_category("work_authorization")
-            is ReplyRiskCategory.PERMANENTLY_DENIED
-        )
+        assert reply_risk_for_category("work_authorization") is ReplyRiskCategory.PERMANENTLY_DENIED
 
     def test_resume_link_denied(self) -> None:
-        assert (
-            reply_risk_for_category("resume_link")
-            is ReplyRiskCategory.PERMANENTLY_DENIED
-        )
+        assert reply_risk_for_category("resume_link") is ReplyRiskCategory.PERMANENTLY_DENIED
 
     def test_ambiguous_send_marks_reconciliation(self) -> None:
         app = _make_application()
@@ -999,9 +981,7 @@ class TestOwnershipAndPagination:
         page1, cursor = svc.list_drafts(candidate_id=app.candidate_id, limit=2)
         assert len(page1) == 2
         assert cursor is not None
-        page2, cursor2 = svc.list_drafts(
-            candidate_id=app.candidate_id, limit=2, cursor=cursor
-        )
+        page2, cursor2 = svc.list_drafts(candidate_id=app.candidate_id, limit=2, cursor=cursor)
         assert len(page2) == 1
         assert cursor2 is None
         # no cross-candidate leak

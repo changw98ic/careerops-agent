@@ -68,9 +68,7 @@ async def test_require_capability_gmail_read_denies_when_oauth_disabled() -> Non
     dependency-not-ready beats denied), so we only assert the denied branch
     here.
     """
-    state = SimpleNamespace(
-        capability_resolver=SettingsCapabilityResolver(_default_settings())
-    )
+    state = SimpleNamespace(capability_resolver=SettingsCapabilityResolver(_default_settings()))
     dependency = require_capability(CapabilityKind.GMAIL_READ)
     request = MagicMock()
     request.app = SimpleNamespace(state=state)

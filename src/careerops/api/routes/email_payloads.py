@@ -148,9 +148,7 @@ def _workspace(request: Request) -> object:
     return require_repository(request, "application_workspace_service")
 
 
-def _require_owned_app(
-    request: Request, application_id: UUID, candidate_id: UUID
-) -> object:
+def _require_owned_app(request: Request, application_id: UUID, candidate_id: UUID) -> object:
     """Enforce candidate ownership and return the application record."""
     ws = _workspace(request)
     try:

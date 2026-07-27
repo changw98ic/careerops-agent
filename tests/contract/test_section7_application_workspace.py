@@ -71,9 +71,7 @@ class _FakeApplicationRepo:
 
     def save(self, application: Application) -> None:
         self._apps[application.id] = application
-        self._by_pair[
-            (application.candidate_id, application.canonical_job_id)
-        ] = application.id
+        self._by_pair[(application.candidate_id, application.canonical_job_id)] = application.id
 
     def append_event(self, event: ApplicationEvent) -> None:
         self.events.append(event)
@@ -152,9 +150,7 @@ class TestGetOrCreateIdempotency:
         cid, job = uuid4(), uuid4()
         now = datetime.now(tz=UTC)
 
-        app = svc.get_or_create_application(
-            candidate_id=cid, canonical_job_id=job, now=now
-        )
+        app = svc.get_or_create_application(candidate_id=cid, canonical_job_id=job, now=now)
         assert app.cycle_id is not None, "new application must bind to a cycle"
         assert (cid, job) in cycle._active
 
@@ -194,14 +190,21 @@ class TestIllegalTransitions:
         app = svc.get_or_create_application(candidate_id=cid, canonical_job_id=uuid4(), now=now)
         # Force the app into REJECTED via the repo (terminal) to test the gate.
         rejected = Application(
-            id=app.id, candidate_id=cid, canonical_job_id=app.canonical_job_id,
-            state=ApplicationState.REJECTED, version=5, created_at=now, updated_at=now,
+            id=app.id,
+            candidate_id=cid,
+            canonical_job_id=app.canonical_job_id,
+            state=ApplicationState.REJECTED,
+            version=5,
+            created_at=now,
+            updated_at=now,
         )
         repo.save(rejected)
         with pytest.raises(IllegalTransitionError):
             svc.apply_user_transition(
-                application_id=app.id, candidate_id=cid,
-                to_state=ApplicationState.INTERVIEWING, now=now,
+                application_id=app.id,
+                candidate_id=cid,
+                to_state=ApplicationState.INTERVIEWING,
+                now=now,
             )
 
     def test_submission_requires_evidence_not_bare_transition(self) -> None:
@@ -215,8 +218,10 @@ class TestIllegalTransitions:
 
         with pytest.raises(WorkspaceError):
             svc.apply_user_transition(
-                application_id=app.id, candidate_id=cid,
-                to_state=ApplicationState.SUBMITTED, now=now,
+                application_id=app.id,
+                candidate_id=cid,
+                to_state=ApplicationState.SUBMITTED,
+                now=now,
             )
 
     def test_prepare_from_submitted_rejected(self) -> None:
@@ -227,8 +232,11 @@ class TestIllegalTransitions:
         svc.prepare_application(application_id=app.id, candidate_id=cid, now=now)
         # Now confirm an external submission to reach SUBMITTED
         svc.confirm_external_submission(
-            application_id=app.id, candidate_id=cid,
-            apply_url="https://acme.com/j/1", submitted_at=now, now=now,
+            application_id=app.id,
+            candidate_id=cid,
+            apply_url="https://acme.com/j/1",
+            submitted_at=now,
+            now=now,
         )
         # PREPARING->SUBMITTED already happened; preparing again is illegal
         with pytest.raises(IllegalTransitionError):
@@ -267,20 +275,22 @@ class TestChannelEligibility:
         app = svc.get_or_create_application(candidate_id=cid, canonical_job_id=uuid4(), now=now)
         with pytest.raises(ChannelUnavailableError):
             svc.select_channel(
-                application_id=app.id, candidate_id=cid,
-                channel=SubmissionChannel.EXTERNAL_FORM, now=now,
+                application_id=app.id,
+                candidate_id=cid,
+                channel=SubmissionChannel.EXTERNAL_FORM,
+                now=now,
             )
 
     def test_select_manual_channel_succeeds(self) -> None:
         svc, _, _ = _make_service()
         cid = uuid4()
         now = datetime.now(tz=UTC)
-        app = svc.get_or_create_application(
-            candidate_id=cid, canonical_job_id=uuid4(), now=now
-        )
+        app = svc.get_or_create_application(candidate_id=cid, canonical_job_id=uuid4(), now=now)
         updated = svc.select_channel(
-            application_id=app.id, candidate_id=cid,
-            channel=SubmissionChannel.MANUAL, now=now,
+            application_id=app.id,
+            candidate_id=cid,
+            channel=SubmissionChannel.MANUAL,
+            now=now,
         )
         assert updated.submission_channel is SubmissionChannel.MANUAL
 
@@ -304,9 +314,9 @@ class TestExternalFormSubmission:
         assert current is not None
         assert current.state is ApplicationState.PREPARING
         events = repo.get_events(app.id)
-        assert not any(
-            e.event_type.value == "submitted_manually" for e in events
-        ), "abandoned external form must not create a submitted event"
+        assert not any(e.event_type.value == "submitted_manually" for e in events), (
+            "abandoned external form must not create a submitted event"
+        )
 
     def test_external_form_requires_apply_url(self) -> None:
         svc, _, _ = _make_service()
@@ -316,8 +326,11 @@ class TestExternalFormSubmission:
         svc.prepare_application(application_id=app.id, candidate_id=cid, now=now)
         with pytest.raises(ExternalFormEvidenceError):
             svc.confirm_external_submission(
-                application_id=app.id, candidate_id=cid,
-                apply_url="", submitted_at=now, now=now,
+                application_id=app.id,
+                candidate_id=cid,
+                apply_url="",
+                submitted_at=now,
+                now=now,
             )
 
     def test_confirmation_records_evidence_and_transitions(self) -> None:
@@ -325,14 +338,19 @@ class TestExternalFormSubmission:
         cid = uuid4()
         now = datetime.now(tz=UTC)
         app = svc.get_or_create_application(
-            candidate_id=cid, canonical_job_id=uuid4(),
-            apply_url="https://acme.com/jobs/42", now=now,
+            candidate_id=cid,
+            canonical_job_id=uuid4(),
+            apply_url="https://acme.com/jobs/42",
+            now=now,
         )
         svc.prepare_application(application_id=app.id, candidate_id=cid, now=now)
         submitted_at = datetime(2026, 7, 26, 12, tzinfo=UTC)
         updated = svc.confirm_external_submission(
-            application_id=app.id, candidate_id=cid,
-            apply_url="https://acme.com/jobs/42", submitted_at=submitted_at, now=now,
+            application_id=app.id,
+            candidate_id=cid,
+            apply_url="https://acme.com/jobs/42",
+            submitted_at=submitted_at,
+            now=now,
         )
         assert updated.state is ApplicationState.SUBMITTED
         assert updated.submitted_at == submitted_at
@@ -353,8 +371,11 @@ class TestExternalFormSubmission:
         # Still FAVORITED -> cannot confirm submission
         with pytest.raises(IllegalTransitionError):
             svc.confirm_external_submission(
-                application_id=app.id, candidate_id=cid,
-                apply_url="https://acme.com/j/1", submitted_at=now, now=now,
+                application_id=app.id,
+                candidate_id=cid,
+                apply_url="https://acme.com/j/1",
+                submitted_at=now,
+                now=now,
             )
 
 
@@ -373,8 +394,11 @@ class TestTimelineProjection:
         svc.prepare_application(application_id=app.id, candidate_id=cid, now=t1)
         t2 = datetime(2026, 7, 3, tzinfo=UTC)
         svc.confirm_external_submission(
-            application_id=app.id, candidate_id=cid,
-            apply_url="https://acme.com/j/1", submitted_at=t2, now=t2,
+            application_id=app.id,
+            candidate_id=cid,
+            apply_url="https://acme.com/j/1",
+            submitted_at=t2,
+            now=t2,
         )
         timeline = svc.get_timeline(application_id=app.id, candidate_id=cid)
         # created, state_changed, submitted = 3 entries
@@ -413,16 +437,18 @@ class TestPackageBinding:
         app = svc.get_or_create_application(candidate_id=cid, canonical_job_id=uuid4(), now=now)
         pkg_v1 = uuid4()
         updated = svc.bind_package(
-            application_id=app.id, candidate_id=cid,
-            package_version_id=pkg_v1, payload_hash="a" * 64,
-            job_version_id=uuid4(), resume_version_id=uuid4(),
-            evidence_refs=(uuid4(),), now=now,
+            application_id=app.id,
+            candidate_id=cid,
+            package_version_id=pkg_v1,
+            payload_hash="a" * 64,
+            job_version_id=uuid4(),
+            resume_version_id=uuid4(),
+            evidence_refs=(uuid4(),),
+            now=now,
         )
         assert updated.package_version_id == pkg_v1
         assert updated.payload_hash == "a" * 64
-        attached = [
-            e for e in repo.get_events(app.id) if e.event_type.value == "package_attached"
-        ]
+        attached = [e for e in repo.get_events(app.id) if e.event_type.value == "package_attached"]
         assert len(attached) == 1
         assert attached[0].event_data["payload_hash"] == "a" * 64
 
@@ -435,20 +461,24 @@ class TestPackageBinding:
         app = svc.get_or_create_application(candidate_id=cid, canonical_job_id=uuid4(), now=now)
         pkg_v1 = uuid4()
         svc.bind_package(
-            application_id=app.id, candidate_id=cid,
-            package_version_id=pkg_v1, payload_hash="a" * 64, now=now,
+            application_id=app.id,
+            candidate_id=cid,
+            package_version_id=pkg_v1,
+            payload_hash="a" * 64,
+            now=now,
         )
         pkg_v2 = uuid4()
         updated = svc.bind_package(
-            application_id=app.id, candidate_id=cid,
-            package_version_id=pkg_v2, payload_hash="b" * 64, now=now,
+            application_id=app.id,
+            candidate_id=cid,
+            package_version_id=pkg_v2,
+            payload_hash="b" * 64,
+            now=now,
         )
         # The current binding reflects the NEW payload; the old is invalidated.
         assert updated.payload_hash == "b" * 64
         assert updated.package_version_id == pkg_v2
-        attached = [
-            e for e in repo.get_events(app.id) if e.event_type.value == "package_attached"
-        ]
+        attached = [e for e in repo.get_events(app.id) if e.event_type.value == "package_attached"]
         assert len(attached) == 2, "both binds are append-only history"
         assert attached[-1].event_data["payload_hash"] == "b" * 64
 
@@ -492,23 +522,32 @@ class TestApplicationWorkspaceSlice:
         snap = svc.evaluate_channels(application_id=app.id, candidate_id=candidate_id)
         assert snap.is_eligible(SubmissionChannel.EXTERNAL_FORM)
         app = svc.select_channel(
-            application_id=app.id, candidate_id=candidate_id,
-            channel=SubmissionChannel.EXTERNAL_FORM, now=t_prepare,
+            application_id=app.id,
+            candidate_id=candidate_id,
+            channel=SubmissionChannel.EXTERNAL_FORM,
+            now=t_prepare,
         )
         assert app.submission_channel is SubmissionChannel.EXTERNAL_FORM
 
         # 4. Package binding (Section 8 produces the package; here we bind it)
         app = svc.bind_package(
-            application_id=app.id, candidate_id=candidate_id,
-            package_version_id=uuid4(), payload_hash="c" * 64,
-            job_version_id=uuid4(), resume_version_id=uuid4(), now=t_bind,
+            application_id=app.id,
+            candidate_id=candidate_id,
+            package_version_id=uuid4(),
+            payload_hash="c" * 64,
+            job_version_id=uuid4(),
+            resume_version_id=uuid4(),
+            now=t_bind,
         )
         assert app.payload_hash == "c" * 64
 
         # 5. External-form confirmation with evidence
         app = svc.confirm_external_submission(
-            application_id=app.id, candidate_id=candidate_id,
-            apply_url=apply_url, submitted_at=t_submit, now=t_submit,
+            application_id=app.id,
+            candidate_id=candidate_id,
+            apply_url=apply_url,
+            submitted_at=t_submit,
+            now=t_submit,
         )
         assert app.state is ApplicationState.SUBMITTED
         assert app.submitted_at == t_submit
@@ -519,9 +558,7 @@ class TestApplicationWorkspaceSlice:
         assert "decision" in kinds  # created + prepare
         assert "package_event" in kinds
         assert "submission" in kinds
-        assert [e.occurred_at for e in timeline] == sorted(
-            e.occurred_at for e in timeline
-        )
+        assert [e.occurred_at for e in timeline] == sorted(e.occurred_at for e in timeline)
         # Append-only: history was never rewritten
         assert len(repo.events) == len({e.id for e in repo.events})
 
@@ -538,9 +575,12 @@ class TestApplicationWorkspaceSlice:
         snap = svc.evaluate_channels(application_id=app.id, candidate_id=candidate_id)
         assert snap.is_eligible(SubmissionChannel.MANUAL)
         app = svc.confirm_external_submission(
-            application_id=app.id, candidate_id=candidate_id,
-            apply_url="", submitted_at=now,
-            channel=SubmissionChannel.MANUAL, now=now,
+            application_id=app.id,
+            candidate_id=candidate_id,
+            apply_url="",
+            submitted_at=now,
+            channel=SubmissionChannel.MANUAL,
+            now=now,
         )
         assert app.state is ApplicationState.SUBMITTED
         assert app.submission_channel is SubmissionChannel.MANUAL

@@ -92,17 +92,29 @@ class GmailSideEffectProvider:
             )
 
         # Resolve attachment hashes to actual file paths via storage.
+        # If hashes are present but storage can't resolve them, the send MUST
+        # fail — proceeding without attachments would violate the payload hash
+        # binding (preview/send parity, task 9.8).
         attachment_paths: tuple[Path, ...] = ()
         attachment_hashes = payload.get("attachment_hashes", [])
-        if attachment_hashes and self._storage is not None:
+        if attachment_hashes:
+            if self._storage is None:
+                return ProviderCallResult(
+                    kind=ProviderResultKind.FAILURE,
+                    error_code="ATTACHMENT_STORAGE_UNAVAILABLE",
+                    failure_class=ProviderFailureClass.VALIDATION,
+                )
             resolved: list[Path] = []
             for hash_val in attachment_hashes:
-                try:
-                    path = self._storage.get(str(hash_val))  # type: ignore[union-attr]
-                    if path is not None:
-                        resolved.append(Path(path))
-                except Exception:
-                    pass  # missing attachment is not a send failure; hash-only ref
+                path = self._storage.get(str(hash_val))  # type: ignore[union-attr]
+                if path is None:
+                    return ProviderCallResult(
+                        kind=ProviderResultKind.FAILURE,
+                        error_code="ATTACHMENT_NOT_FOUND",
+                        failure_class=ProviderFailureClass.VALIDATION,
+                        metadata={"missing_hash": str(hash_val)},
+                    )
+                resolved.append(Path(path))
             attachment_paths = tuple(resolved)
 
         email = OutgoingEmail(to=to, subject=subject, body=body, attachments=attachment_paths)

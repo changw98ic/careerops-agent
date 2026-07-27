@@ -276,8 +276,7 @@ class SystemManagedSendService:
         # intent/approval/outbox state and creates no second provider trigger.
         replay = self._kernel.replay(result.intent.id)
         already_approved = any(
-            a.decision.value == "approved"
-            and a.payload_version_id == result.payload_version.id
+            a.decision.value == "approved" and a.payload_version_id == result.payload_version.id
             for a in replay.approvals
         )
         if not already_approved:
@@ -463,9 +462,7 @@ class SystemManagedSendService:
 
         app = self._applications.find_by_id(request.application_id)
         if app is None or app.candidate_id != candidate_id:
-            raise SystemSendDeniedError(
-                (SystemSendDenialReason.APPLICATION_NOT_OWNED.value,)
-            )
+            raise SystemSendDeniedError((SystemSendDenialReason.APPLICATION_NOT_OWNED.value,))
 
         if app.state is not ApplicationState.PREPARING:
             reasons.append(SystemSendDenialReason.APPLICATION_NOT_PREPARING.value)
@@ -488,9 +485,7 @@ class SystemManagedSendService:
         if not self._recipient_eligible(request):
             reasons.append(SystemSendDenialReason.RECIPIENT_NOT_ELIGIBLE.value)
 
-        if self._account_status is not None and not self._account_status(
-            request.application_id
-        ):
+        if self._account_status is not None and not self._account_status(request.application_id):
             reasons.append(SystemSendDenialReason.ACCOUNT_NOT_ACTIVE.value)
 
         if reasons:
@@ -564,9 +559,7 @@ class SystemManagedSendService:
     # Internals
     # ------------------------------------------------------------------
 
-    def _enqueue_outbox(
-        self, intent_id: UUID, payload_version_id: UUID, now: datetime
-    ) -> None:
+    def _enqueue_outbox(self, intent_id: UUID, payload_version_id: UUID, now: datetime) -> None:
         if self._outbox is None:
             return
         self._outbox.enqueue(
@@ -593,19 +586,18 @@ class SystemManagedSendService:
 
 
 def _default_recipient_eligible(request: SystemSendRequest) -> bool:
-    """Default recipient check: a non-empty, well-formed address.
+    """Default recipient check: DENY when no trusted-contact resolver is wired.
 
-    Production wiring replaces this with the Section 9 trusted-contact /
-    verified-reply-target lookup (domain match against company evidence).
+    A recipient must pass the Section 9 trusted-contact / verified-reply-target
+    lookup (domain match against company evidence). Without that resolver, no
+    recipient is eligible — the send is blocked until production wiring supplies
+    a real lookup. This prevents the "contains @ = allowed" degradation.
     """
-    recipient = request.recipient.strip()
-    return bool(recipient) and "@" in recipient and not recipient.endswith("@")
+    return False
 
 
 def _message_id(receipt: object) -> str | None:
-    metadata = getattr(receipt, "receipt_metadata", None) or getattr(
-        receipt, "metadata", None
-    )
+    metadata = getattr(receipt, "receipt_metadata", None) or getattr(receipt, "metadata", None)
     if not isinstance(metadata, dict):
         return None
     value = metadata.get("message_id") or metadata.get("provider_message_id")

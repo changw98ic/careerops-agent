@@ -131,9 +131,7 @@ class ReplyDraftRepository(Protocol):
 
     def find_by_id(self, draft_id: UUID) -> ReplyDraft | None: ...
 
-    def find_latest_for_thread(
-        self, thread_id: UUID, candidate_id: UUID
-    ) -> ReplyDraft | None: ...
+    def find_latest_for_thread(self, thread_id: UUID, candidate_id: UUID) -> ReplyDraft | None: ...
 
     def find_by_idempotency_key(self, key: str) -> ReplyDraft | None: ...
 
@@ -386,20 +384,14 @@ class FollowUpService:
         from careerops.domain.reply_draft import FollowUpTriggerState
 
         rule = rule_version or self._rule_version
-        existing = self._follow_ups.find_active_by_application_and_rule(
-            application_id, rule
-        )
+        existing = self._follow_ups.find_active_by_application_and_rule(application_id, rule)
         if existing is not None:
             raise DuplicateFollowUpError(application_id, rule)
 
         app = self._require_owned(application_id, candidate_id)
 
         trigger_state = FollowUpTriggerState(trigger)
-        wait = (
-            business_days
-            if business_days is not None
-            else default_waiting_period(trigger_state)
-        )
+        wait = business_days if business_days is not None else default_waiting_period(trigger_state)
         anchor = base_at or app.submitted_at or now
         due_at = compute_follow_up_due_date(anchor, wait)
 
@@ -440,9 +432,7 @@ class FollowUpService:
     ) -> FollowUpReminder:
         reminder = self._load_reminder(reminder_id, candidate_id)
         if reminder.state != FollowUpState.ACTIVE:
-            raise FollowUpServiceError(
-                f"cannot snooze follow-up in state: {reminder.state.value}"
-            )
+            raise FollowUpServiceError(f"cannot snooze follow-up in state: {reminder.state.value}")
         updated = replace(
             reminder,
             state=FollowUpState.SNOOZED,
@@ -451,7 +441,9 @@ class FollowUpService:
         )
         self._follow_ups.save(updated)
         self._append_follow_up_event(
-            updated, ApplicationEventType.FOLLOW_UP_SNOOZED, now,
+            updated,
+            ApplicationEventType.FOLLOW_UP_SNOOZED,
+            now,
             event_data={"snoozed_until": snoozed_until.isoformat()},
         )
         return updated
@@ -473,7 +465,9 @@ class FollowUpService:
         )
         self._follow_ups.save(updated)
         self._append_follow_up_event(
-            updated, ApplicationEventType.FOLLOW_UP_RESCHEDULED, now,
+            updated,
+            ApplicationEventType.FOLLOW_UP_RESCHEDULED,
+            now,
             event_data={"new_due_at": new_due_at.isoformat()},
             source=ApplicationEventSource.USER,
         )
@@ -484,9 +478,7 @@ class FollowUpService:
     ) -> FollowUpReminder:
         reminder = self._load_reminder(reminder_id, candidate_id)
         if reminder.state in (FollowUpState.CANCELLED, FollowUpState.COMPLETED):
-            raise FollowUpServiceError(
-                f"cannot cancel follow-up in state: {reminder.state.value}"
-            )
+            raise FollowUpServiceError(f"cannot cancel follow-up in state: {reminder.state.value}")
         updated = replace(
             reminder,
             state=FollowUpState.CANCELLED,
@@ -495,7 +487,9 @@ class FollowUpService:
         )
         self._follow_ups.save(updated)
         self._append_follow_up_event(
-            updated, ApplicationEventType.FOLLOW_UP_CANCELLED, now,
+            updated,
+            ApplicationEventType.FOLLOW_UP_CANCELLED,
+            now,
             event_data={"reason": reason},
         )
         return updated
@@ -509,12 +503,12 @@ class FollowUpService:
             raise FollowUpServiceError(
                 f"cannot complete follow-up in state: {reminder.state.value}"
             )
-        updated = replace(
-            reminder, state=FollowUpState.COMPLETED, updated_at=now
-        )
+        updated = replace(reminder, state=FollowUpState.COMPLETED, updated_at=now)
         self._follow_ups.save(updated)
         self._append_follow_up_event(
-            updated, ApplicationEventType.NOTE_ADDED, now,
+            updated,
+            ApplicationEventType.NOTE_ADDED,
+            now,
             event_data={"follow_up_state": FollowUpState.COMPLETED.value},
             note="Follow-up reminder completed",
             source=ApplicationEventSource.USER,
@@ -547,7 +541,9 @@ class FollowUpService:
         )
         self._follow_ups.save(updated)
         self._append_follow_up_event(
-            updated, ApplicationEventType.FOLLOW_UP_CANCELLED, now,
+            updated,
+            ApplicationEventType.FOLLOW_UP_CANCELLED,
+            now,
             event_data={"reason": f"application_terminal:{terminal_state}"},
         )
         return updated
@@ -589,7 +585,9 @@ class FollowUpService:
         )
         self._follow_ups.save(updated)
         self._append_follow_up_event(
-            updated, ApplicationEventType.FOLLOW_UP_CANCELLED, now,
+            updated,
+            ApplicationEventType.FOLLOW_UP_CANCELLED,
+            now,
             event_data={"reason": "linked_reply_arrived"},
         )
         return updated
@@ -598,9 +596,7 @@ class FollowUpService:
     # internals
     # ------------------------------------------------------------------
 
-    def _load_reminder(
-        self, reminder_id: UUID, candidate_id: UUID
-    ) -> FollowUpReminder:
+    def _load_reminder(self, reminder_id: UUID, candidate_id: UUID) -> FollowUpReminder:
         reminder = self._follow_ups.find_by_id(reminder_id)
         if reminder is None:
             raise FollowUpNotOwnedError(reminder_id)
@@ -820,9 +816,7 @@ class ReplyDraftService:
             pass
 
         confirmed = self._evidence.confirmed_evidence_ids(candidate_id)
-        issues = self._collect_validation_issues(
-            body=body, claims=claims, confirmed=confirmed
-        )
+        issues = self._collect_validation_issues(body=body, claims=claims, confirmed=confirmed)
 
         latest = self._drafts.find_latest_for_thread(context.thread_id, candidate_id)
         next_number = (latest.version_number + 1) if latest else 1
@@ -1042,9 +1036,7 @@ class ReplyDraftService:
         self._require_auto_send_denied()
         # High-risk categories are permanently denied system send.
         if is_system_send_denied(draft.risk_category):
-            raise ReplySendDeniedError(
-                ("category_permanently_denied", draft.risk_category.value)
-            )
+            raise ReplySendDeniedError(("category_permanently_denied", draft.risk_category.value))
 
         if self._send_port is None:
             # No delivery chain wired (PRODUCTION never wires it before the
@@ -1058,9 +1050,7 @@ class ReplyDraftService:
         self._record_send_outcome(draft, outcome, now)
         return outcome
 
-    def get_send_status(
-        self, *, draft_id: UUID, candidate_id: UUID
-    ) -> ReplySendOutcome:
+    def get_send_status(self, *, draft_id: UUID, candidate_id: UUID) -> ReplySendOutcome:
         """Idempotent read of the reply send phase (task 13.6 / 13.10)."""
         draft = self.get_draft(draft_id=draft_id, candidate_id=candidate_id)
         if draft.send_intent_id is None or self._send_port is None:

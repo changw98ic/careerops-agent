@@ -105,9 +105,7 @@ class _DenyingResolver:
 class _FakePackage:
     """Minimal package-version stand-in for revalidation."""
 
-    def __init__(
-        self, *, package_id: UUID, payload_hash: str, approved: bool = True
-    ) -> None:
+    def __init__(self, *, package_id: UUID, payload_hash: str, approved: bool = True) -> None:
         self.id = package_id
         self.payload_hash = payload_hash
         self.approval_state = type("A", (), {"value": "approved" if approved else "draft"})()
@@ -190,6 +188,12 @@ def _build_service(
     outbox_store = outbox or InMemoryOutboxStore()
     app_repo = application_repo or InMemoryApplicationRepository()
     package_reader = _FakePackageReader(package)
+
+    def _test_recipient_eligible(req: object) -> bool:
+        """Test resolver: allow any well-formed email (contains @)."""
+        r = getattr(req, "recipient", "").strip()
+        return bool(r) and "@" in r and not r.endswith("@")
+
     service = SystemManagedSendService(
         SideEffectKernel(store, provider),
         app_repo,
@@ -197,6 +201,7 @@ def _build_service(
         capability_resolver=resolver or _ReleasingResolver(),  # type: ignore[arg-type]
         outbox_store=outbox_store,
         account_status_lookup=(lambda _aid: account_active) if account_active is not None else None,
+        recipient_eligible=_test_recipient_eligible,
     )
     return service, provider, store, outbox_store, app_repo, package_reader
 
@@ -276,9 +281,7 @@ class TestConfirmationDurableIntent:
         service.confirm_send(request, candidate_id=CANDIDATE, now=NOW)
         # Application stays PREPARING; no submitted event appended yet.
         events = repo.get_events(app.id)
-        assert not any(
-            e.event_type is ApplicationEventType.SUBMITTED_VIA_PROVIDER for e in events
-        )
+        assert not any(e.event_type is ApplicationEventType.SUBMITTED_VIA_PROVIDER for e in events)
         assert repo.find_by_id(app.id).state is ApplicationState.PREPARING  # type: ignore[union-attr]
 
 
@@ -334,9 +337,7 @@ class TestRevalidationDenials:
     def test_recipient_not_eligible_denies(self) -> None:
         service, _, _, _, repo, _ = _build_service()
         app = _seed_preparing_app(repo)
-        request = _make_request(
-            application_id=app.id, package_id=uuid4(), recipient="not-an-email"
-        )
+        request = _make_request(application_id=app.id, package_id=uuid4(), recipient="not-an-email")
         service._packages = _FakePackageReader(  # type: ignore[assignment]
             _FakePackage(package_id=request.package_version_id, payload_hash=request.payload_hash)
         )
@@ -368,9 +369,7 @@ class TestRevalidationDenials:
         service, _, _, _, repo, _ = _build_service()
         app = _seed_preparing_app(repo)
         # No evidence refs -> kernel policy DENIES (EVIDENCE_REQUIRED).
-        request = _make_request(
-            application_id=app.id, package_id=uuid4(), evidence_refs=()
-        )
+        request = _make_request(application_id=app.id, package_id=uuid4(), evidence_refs=())
         service._packages = _FakePackageReader(  # type: ignore[assignment]
             _FakePackage(package_id=request.package_version_id, payload_hash=request.payload_hash)
         )
@@ -416,8 +415,7 @@ class TestWorkerExecutionAndReceipt:
 
         events = repo.get_events(app.id)
         submitted = [
-            e for e in events
-            if e.event_type is ApplicationEventType.SUBMITTED_VIA_PROVIDER
+            e for e in events if e.event_type is ApplicationEventType.SUBMITTED_VIA_PROVIDER
         ]
         assert len(submitted) == 1
         assert submitted[0].event_data["provider"] == "fake"
@@ -671,8 +669,7 @@ class TestIntegrationSlice:
         assert provider.effect_count() == 1
         events = repo.get_events(app.id)
         submitted_count = sum(
-            1 for e in events
-            if e.event_type is ApplicationEventType.SUBMITTED_VIA_PROVIDER
+            1 for e in events if e.event_type is ApplicationEventType.SUBMITTED_VIA_PROVIDER
         )
         assert submitted_count == 1
 
@@ -783,9 +780,7 @@ class TestRoutesDefaultDenyAndOwnership:
         client = TestClient(
             _build_route_app(service=service, resolver_on_state=_ReleasingResolver())
         )
-        resp = client.get(
-            f"/api/v1/applications/{app.id}/system-send/{intent_id}"
-        )
+        resp = client.get(f"/api/v1/applications/{app.id}/system-send/{intent_id}")
         assert resp.status_code == 200
         assert resp.headers["cache-control"] == "no-store"
         assert resp.json()["phase"] == "pending"
@@ -799,9 +794,7 @@ class TestRoutesDefaultDenyAndOwnership:
         # Build a request whose payload hash matches the service's kernel hash.
         request = _make_request(application_id=app.id, package_id=uuid4())
         service._packages = _FakePackageReader(  # type: ignore[assignment]
-            _FakePackage(
-                package_id=request.package_version_id, payload_hash=request.payload_hash
-            )
+            _FakePackage(package_id=request.package_version_id, payload_hash=request.payload_hash)
         )
         body = {
             "account_email": request.account_email,

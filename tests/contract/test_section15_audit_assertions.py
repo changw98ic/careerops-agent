@@ -44,7 +44,7 @@ from careerops.application.side_effect_kernel import (
     ProposalInput,
     SideEffectKernel,
 )
-from careerops.application.system_managed_send import SystemManagedSendService
+from careerops.application.system_managed_send import SystemManagedSendService, SystemSendRequest
 from careerops.domain.applications import (
     Application,
     ApplicationEvent,
@@ -64,6 +64,12 @@ NOW = datetime(2026, 7, 26, 12, 0, 0, tzinfo=UTC)
 # ---------------------------------------------------------------------------
 
 
+def _test_recipient_eligible(req: object) -> bool:
+    """Test resolver: allow well-formed emails (contains @)."""
+    r = getattr(req, "recipient", "").strip()
+    return bool(r) and "@" in r and not r.endswith("@")
+
+
 def _kernel() -> tuple[SideEffectKernel, InMemoryAuditWriter, InMemorySideEffectStore]:
     audit = InMemoryAuditWriter()
     store = InMemorySideEffectStore()
@@ -71,9 +77,7 @@ def _kernel() -> tuple[SideEffectKernel, InMemoryAuditWriter, InMemorySideEffect
     return kernel, audit, store
 
 
-def _proposal(
-    *, resource_id: UUID, idempotency_key: str = "audit-1"
-) -> ProposalInput:
+def _proposal(*, resource_id: UUID, idempotency_key: str = "audit-1") -> ProposalInput:
     return ProposalInput(
         action_kind="send_email",
         resource_type="application",
@@ -138,7 +142,7 @@ class TestEmailConfirmationAndProviderReceiptAudit:
                 state=ApplicationState.PREPARING,
             )
         )
-        svc = SystemManagedSendService(kernel, repo)  # type: ignore[arg-type]
+        svc = SystemManagedSendService(kernel, repo, recipient_eligible=_test_recipient_eligible)  # type: ignore[arg-type]
         status = svc.confirm_send(
             SystemSendRequest(
                 application_id=app_id,
@@ -176,7 +180,7 @@ class TestEmailConfirmationAndProviderReceiptAudit:
                 state=ApplicationState.PREPARING,
             )
         )
-        svc = SystemManagedSendService(kernel, repo)  # type: ignore[arg-type]
+        svc = SystemManagedSendService(kernel, repo, recipient_eligible=_test_recipient_eligible)  # type: ignore[arg-type]
         status = svc.confirm_send(
             SystemSendRequest(
                 application_id=app_id,
@@ -196,9 +200,7 @@ class TestEmailConfirmationAndProviderReceiptAudit:
         )
         svc.worker_step(status.intent_id, candidate_id=cid, now=NOW)
 
-        executed = next(
-            e for e in audit.all_events() if e.event_type == "side_effect_executed"
-        )
+        executed = next(e for e in audit.all_events() if e.event_type == "side_effect_executed")
         # The execution audit names the provider (FakeSideEffectProvider), not
         # the model, and never carries prompt/response content.
         assert "fake" in str(executed.event_data).lower() or executed.event_data
@@ -219,7 +221,7 @@ class TestEmailConfirmationAndProviderReceiptAudit:
                 state=ApplicationState.PREPARING,
             )
         )
-        svc = SystemManagedSendService(kernel, repo)  # type: ignore[arg-type]
+        svc = SystemManagedSendService(kernel, repo, recipient_eligible=_test_recipient_eligible)  # type: ignore[arg-type]
         request = SystemSendRequest(
             application_id=app_id,
             candidate_id=cid,
@@ -252,7 +254,7 @@ class TestEmailConfirmationAndProviderReceiptAudit:
                 state=ApplicationState.PREPARING,
             )
         )
-        svc = SystemManagedSendService(kernel, repo)  # type: ignore[arg-type]
+        svc = SystemManagedSendService(kernel, repo, recipient_eligible=_test_recipient_eligible)  # type: ignore[arg-type]
         status = svc.confirm_send(
             SystemSendRequest(
                 application_id=app_id,
@@ -273,9 +275,7 @@ class TestEmailConfirmationAndProviderReceiptAudit:
         svc.worker_step(status.intent_id, candidate_id=cid, now=NOW)
         svc.worker_step(status.intent_id, candidate_id=cid, now=NOW)
         submitted = [
-            e
-            for e in repo.events
-            if e.event_type is ApplicationEventType.SUBMITTED_VIA_PROVIDER
+            e for e in repo.events if e.event_type is ApplicationEventType.SUBMITTED_VIA_PROVIDER
         ]
         assert len(submitted) == 1, "the receipt appends exactly one submitted event"
         assert submitted[0].source is ApplicationEventSource.SYSTEM

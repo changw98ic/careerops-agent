@@ -100,9 +100,7 @@ STALE_MESSAGE_DAYS: int = 30
 class MailMessageRepository(Protocol):
     """Read a minimized, sanitized message for extraction (task 12.3 input)."""
 
-    def find_message(
-        self, message_id: UUID, candidate_id: UUID
-    ) -> MailMessageInput | None: ...
+    def find_message(self, message_id: UUID, candidate_id: UUID) -> MailMessageInput | None: ...
 
 
 class MailProposalRepository(Protocol):
@@ -112,9 +110,7 @@ class MailProposalRepository(Protocol):
 
     def find_by_idempotency_key(self, key: str) -> EmailEventProposal | None: ...
 
-    def find_active_for_message(
-        self, message_id: UUID
-    ) -> EmailEventProposal | None: ...
+    def find_active_for_message(self, message_id: UUID) -> EmailEventProposal | None: ...
 
     def save(self, proposal: EmailEventProposal) -> None: ...
 
@@ -308,9 +304,7 @@ class MailIntelligenceService:
     # reads
     # ------------------------------------------------------------------
 
-    def get_proposal(
-        self, *, proposal_id: UUID, candidate_id: UUID
-    ) -> EmailEventProposal:
+    def get_proposal(self, *, proposal_id: UUID, candidate_id: UUID) -> EmailEventProposal:
         proposal = self._proposals.find_by_id(proposal_id)
         if proposal is None or proposal.candidate_id != candidate_id:
             raise ProposalNotOwnedError(proposal_id)
@@ -360,14 +354,10 @@ class MailIntelligenceService:
             )
         if proposal.state is EmailEventProposalState.REJECTED:
             raise ProposalAlreadyDecidedError(proposal.id, proposal.state)
-        validate_proposal_transition(
-            proposal.state, EmailEventProposalState.ACCEPTED
-        )
+        validate_proposal_transition(proposal.state, EmailEventProposalState.ACCEPTED)
 
         application = self._apply_acceptance(proposal, candidate_id, now)
-        accepted = self._mark_decided(
-            proposal, EmailEventProposalState.ACCEPTED, candidate_id, now
-        )
+        accepted = self._mark_decided(proposal, EmailEventProposalState.ACCEPTED, candidate_id, now)
         self._proposals.save(accepted)
         return ProposalDecisionResult(
             proposal=accepted, application=application, already_decided=False
@@ -393,22 +383,14 @@ class MailIntelligenceService:
         proposal = self.get_proposal(proposal_id=proposal_id, candidate_id=candidate_id)
 
         if proposal.state is EmailEventProposalState.REJECTED:
-            return ProposalDecisionResult(
-                proposal=proposal, application=None, already_decided=True
-            )
+            return ProposalDecisionResult(proposal=proposal, application=None, already_decided=True)
         if proposal.state is EmailEventProposalState.ACCEPTED:
             raise ProposalAlreadyDecidedError(proposal.id, proposal.state)
-        validate_proposal_transition(
-            proposal.state, EmailEventProposalState.REJECTED
-        )
+        validate_proposal_transition(proposal.state, EmailEventProposalState.REJECTED)
 
-        rejected = self._mark_decided(
-            proposal, EmailEventProposalState.REJECTED, candidate_id, now
-        )
+        rejected = self._mark_decided(proposal, EmailEventProposalState.REJECTED, candidate_id, now)
         self._proposals.save(rejected)
-        return ProposalDecisionResult(
-            proposal=rejected, application=None, already_decided=False
-        )
+        return ProposalDecisionResult(proposal=rejected, application=None, already_decided=False)
 
     # ------------------------------------------------------------------
     # internals
@@ -517,9 +499,7 @@ class MailIntelligenceService:
             try:
                 validate_transition(application.state, to_state)
             except IllegalTransitionError as err:
-                raise ProposedStateIllegalError(
-                    application.state.value, proposed_state
-                ) from err
+                raise ProposedStateIllegalError(application.state.value, proposed_state) from err
             # Delegate to the workspace's USER-transition path. The workspace
             # service is the authoritative writer of ApplicationState; this
             # indirection is what keeps the proposal from writing state itself.
@@ -596,9 +576,7 @@ class MailIntelligenceService:
                 now=now,
             )
 
-    def set_transition_sink(
-        self, sink: Callable[..., object] | None
-    ) -> None:
+    def set_transition_sink(self, sink: Callable[..., object] | None) -> None:
         """Wire the USER-sourced transition writer (runtime DI helper).
 
         The runtime passes ``ApplicationWorkspaceService.apply_user_transition``
@@ -608,9 +586,7 @@ class MailIntelligenceService:
         """
         self._transition_sink = sink  # type: ignore[attr-defined]
 
-    def _refresh_application(
-        self, application_id: UUID, candidate_id: UUID
-    ) -> Application | None:
+    def _refresh_application(self, application_id: UUID, candidate_id: UUID) -> Application | None:
         return self._ownership.find_owned_application(
             application_id=application_id, candidate_id=candidate_id
         )

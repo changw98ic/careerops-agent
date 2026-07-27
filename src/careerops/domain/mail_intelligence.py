@@ -370,9 +370,7 @@ class ProposedStateIllegalError(MailIntelligenceError):
     def __init__(self, current_state: str, proposed_state: str) -> None:
         self.current_state = current_state
         self.proposed_state = proposed_state
-        super().__init__(
-            f"proposed mail transition {current_state} -> {proposed_state} is illegal"
-        )
+        super().__init__(f"proposed mail transition {current_state} -> {proposed_state} is illegal")
 
 
 class IllegalProposalTransitionError(MailIntelligenceError):
@@ -383,9 +381,7 @@ class IllegalProposalTransitionError(MailIntelligenceError):
     ) -> None:
         self.from_state = from_state
         self.to_state = to_state
-        super().__init__(
-            f"illegal proposal transition: {from_state.value} -> {to_state.value}"
-        )
+        super().__init__(f"illegal proposal transition: {from_state.value} -> {to_state.value}")
 
 
 class MessageNotLinkedError(MailIntelligenceError):

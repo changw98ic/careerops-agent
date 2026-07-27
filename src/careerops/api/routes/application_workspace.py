@@ -551,23 +551,29 @@ def _version_to_response(v: object) -> PackageVersionResponse:
         ],
         attachments=[
             PackageAttachmentItem(
-                name=a.name, content_hash=a.content_hash,
-                media_type=a.media_type, size_bytes=a.size_bytes,
+                name=a.name,
+                content_hash=a.content_hash,
+                media_type=a.media_type,
+                size_bytes=a.size_bytes,
             )
             for a in getattr(v, "attachments", ())
         ],
         diff=[
             PackageDiffItem(
-                section=d.section, original_text=d.original_text,
+                section=d.section,
+                original_text=d.original_text,
                 proposed_text=d.proposed_text,
-                evidence_ids=[str(e) for e in d.evidence_ids], source=d.source,
+                evidence_ids=[str(e) for e in d.evidence_ids],
+                source=d.source,
             )
             for d in getattr(v, "diff", ())
         ],
         requirement_gaps=[
             RequirementGapItem(
-                requirement_name=g.requirement_name, match_level=g.match_level,
-                reason=g.reason, rules_version=g.rules_version,
+                requirement_name=g.requirement_name,
+                match_level=g.match_level,
+                reason=g.reason,
+                rules_version=g.rules_version,
             )
             for g in getattr(v, "requirement_gaps", ())
         ],
@@ -613,8 +619,10 @@ def create_package_draft(
     )
     attachments = tuple(
         PackageAttachment(
-            name=a.name, content_hash=a.content_hash,
-            media_type=a.media_type, size_bytes=a.size_bytes,
+            name=a.name,
+            content_hash=a.content_hash,
+            media_type=a.media_type,
+            size_bytes=a.size_bytes,
         )
         for a in body.attachments
     )

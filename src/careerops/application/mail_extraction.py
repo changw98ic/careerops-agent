@@ -109,9 +109,7 @@ _INJECTION_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
 )
 
 # Unicode-confusable zero-width / homoglyph runs that often hide injection.
-_UNICODE_CONFUSABLE = re.compile(
-    "[​-‏‪-‮⁠﻿]"
-)
+_UNICODE_CONFUSABLE = re.compile("[​-‏‪-‮⁠﻿]")
 
 
 def _scan_injection(text: str) -> bool:
@@ -138,15 +136,22 @@ _CATEGORY_KEYWORDS: tuple[tuple[MailCategory, tuple[str, ...]], ...] = (
     (
         MailCategory.REJECTION,
         (
-            "regret to inform", "not moving forward", "unfortunately",
-            "position has been filled", "not selected",
+            "regret to inform",
+            "not moving forward",
+            "unfortunately",
+            "position has been filled",
+            "not selected",
         ),
     ),
     (
         MailCategory.INTERVIEW,
         (
-            "interview", "invite you to interview", "schedule an interview",
-            "technical screen", "onsite", "video call",
+            "interview",
+            "invite you to interview",
+            "schedule an interview",
+            "technical screen",
+            "onsite",
+            "video call",
         ),
     ),
     (
@@ -157,23 +162,32 @@ _CATEGORY_KEYWORDS: tuple[tuple[MailCategory, tuple[str, ...]], ...] = (
     (
         MailCategory.REQUEST_MORE_INFO,
         (
-            "please provide", "we need", "could you share",
-            "additional information", "requested documents",
+            "please provide",
+            "we need",
+            "could you share",
+            "additional information",
+            "requested documents",
         ),
     ),
     (
         MailCategory.SALARY,
         (
-            "salary", "compensation", "base salary",
-            "expected salary", "compensation expectation",
+            "salary",
+            "compensation",
+            "base salary",
+            "expected salary",
+            "compensation expectation",
         ),
     ),
     (MailCategory.VISA, ("visa", "work authorization", "sponsorship", "right to work")),
     (
         MailCategory.IDENTITY,
         (
-            "identity", "passport", "id verification",
-            "background check", "employment verification",
+            "identity",
+            "passport",
+            "id verification",
+            "background check",
+            "employment verification",
         ),
     ),
     (
@@ -383,9 +397,7 @@ class DeterministicMailExtractor:
         # 0.6 review threshold so a one-word match never auto-applies.
         return min(0.95, 0.55 + 0.1 * max(0, signals - 1))
 
-    def _needs_review(
-        self, category: MailCategory, confidence: float, injection: bool
-    ) -> bool:
+    def _needs_review(self, category: MailCategory, confidence: float, injection: bool) -> bool:
         if is_high_risk_category(category):
             return True
         if category is MailCategory.UNKNOWN:
@@ -394,9 +406,7 @@ class DeterministicMailExtractor:
             return True
         return bool(injection)
 
-    def _extract_when(
-        self, body: str, *, prefer_first: bool
-    ) -> tuple[datetime | None, str]:
+    def _extract_when(self, body: str, *, prefer_first: bool) -> tuple[datetime | None, str]:
         matches = list(_DATE_RE.finditer(body or ""))
         if not matches:
             return None, ""
@@ -445,9 +455,7 @@ class DeterministicMailExtractor:
             if cat is not category:
                 continue
             for kw in keywords:
-                span = _evidence("category", body, kw) or _evidence(
-                    "category", subject, kw
-                )
+                span = _evidence("category", body, kw) or _evidence("category", subject, kw)
                 if span:
                     spans.append(span)
                     break
@@ -512,9 +520,7 @@ class MailModelExtractor(Protocol):
     def extract(self, message: MailMessageInput) -> _ModelOutput: ...
 
 
-def merge_model_output(
-    deterministic: MailExtraction, model: object
-) -> MailExtraction:
+def merge_model_output(deterministic: MailExtraction, model: object) -> MailExtraction:
     """Merge a model result into the deterministic extraction (review-only).
 
     The deterministic category always wins when the model disagrees on a
@@ -528,9 +534,7 @@ def merge_model_output(
         model_category = MailCategory(str(getattr(model, "category", "")).strip())
     except ValueError:
         # Unknown model category string → keep deterministic, flag review.
-        raise ModelExtractionInvalidError(
-            "model returned an unknown category"
-        ) from None
+        raise ModelExtractionInvalidError("model returned an unknown category") from None
 
     # Model may sharpen the category ONLY when deterministic was UNKNOWN and the
     # model's category is in the controlled taxonomy. It may NEVER override a
@@ -565,8 +569,7 @@ def merge_model_output(
         compensation=getattr(model, "compensation", "") or deterministic.compensation,
         summary=(getattr(model, "summary", "") or deterministic.summary),
         confidence=confidence,
-        evidence_spans=tuple(getattr(model, "evidence_spans", ()))
-        or deterministic.evidence_spans,
+        evidence_spans=tuple(getattr(model, "evidence_spans", ())) or deterministic.evidence_spans,
         source=MailExtractionSource.MODEL,
         rules_version=MAIL_RULES_VERSION,
         model_version=MAIL_MODEL_VERSION,

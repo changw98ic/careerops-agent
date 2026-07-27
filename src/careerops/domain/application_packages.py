@@ -185,10 +185,7 @@ def compute_payload_hash(
             for c in claims
         ],
         "attachments": sorted(
-            [
-                {"name": a.name, "content_hash": a.content_hash}
-                for a in attachments
-            ],
+            [{"name": a.name, "content_hash": a.content_hash} for a in attachments],
             key=lambda a: a["name"],
         ),
     }

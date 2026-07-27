@@ -312,16 +312,14 @@ def create_app(
             from careerops.application.system_managed_send import (
                 SystemManagedSendService,
             )
-            from careerops.infrastructure.database.side_effect_memory import (
-                InMemoryOutboxStore,
-            )
+            from careerops.infrastructure.database.outbox import PostgresOutboxStore
 
             app.state.system_managed_send_service = SystemManagedSendService(
                 probe.side_effect_kernel,  # type: ignore[arg-type]
                 probe.application_repo,
                 package_reader=package_service,
                 capability_resolver=probe.capability_resolver,
-                outbox_store=InMemoryOutboxStore(),  # type: ignore[arg-type]
+                outbox_store=PostgresOutboxStore(probe.database),  # type: ignore[arg-type]
             )
         # Section-12 mail intelligence service (tasks 12.5-12.7). Composes the
         # durable proposal repo + minimized message reader with the workspace
@@ -451,9 +449,7 @@ def create_app(
     # (detail / prepare / channels / channel / package / timeline /
     # confirm-external-submission / state); the M3 application routes are
     # untouched. Same auth guard; candidate ownership resolved server-side.
-    app.include_router(
-        application_workspace_router, dependencies=[Depends(require_api_auth)]
-    )
+    app.include_router(application_workspace_router, dependencies=[Depends(require_api_auth)])
     # Section-9 email-payload router (tasks 9.1, 9.6). Additive paths only
     # (recruiting-contacts list + submission-preview). Performs NO provider
     # side effects (the actual send is Section 10). Same auth guard; candidate
@@ -470,9 +466,7 @@ def create_app(
     # transition path on acceptance (Iron Rule 2). Same auth guard (CSRF on
     # mutations); candidate ownership resolved server-side; responses carry
     # Cache-Control: no-store.
-    app.include_router(
-        mail_intelligence_router, dependencies=[Depends(require_api_auth)]
-    )
+    app.include_router(mail_intelligence_router, dependencies=[Depends(require_api_auth)])
     # Section-11 Gmail read-sync router (tasks 11.7, 11.10). Additive paths
     # only (account status / sync-now / sync history / threads / messages /
     # unresolved links / confirm link). Gated on the GMAIL_READ capability,

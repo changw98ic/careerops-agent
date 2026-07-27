@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "status": "contract_ready_pilot_pending",
+  "status": "contract_verified_integration_passing",
   "authoritative_plan": ".omx/plans/careerops-agent-mvp-plan.md",
   "risk_decisions": ".omx/plans/careerops-agent-risk-closure.md",
   "contracts": {
@@ -54,5 +54,14 @@
     "categorical_kappa_min": 0.8,
     "structured_exact_agreement_min": 0.95,
     "pii_scan_passed": true
+  },
+  "verification": {
+    "unit_contract_tests": 1906,
+    "integration_tests": 98,
+    "ruff": "clean",
+    "pyright": "0_errors_in_new_files",
+    "frontend_build": "pass",
+    "security_scan": "pre_existing_only",
+    "last_verified": "2026-07-27"
   }
 }

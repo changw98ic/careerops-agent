@@ -196,8 +196,8 @@
 
 ## 16. Pilot, staged enablement, and handoff
 
-- [ ] 16.1 Prepare real, legal, de-identified discovery/parser/dedup pilot artifacts and manifests without modifying the repository's synthetic fixtures.
-- [ ] 16.2 Prepare evidence-match, contact, email, policy/injection, and reconciliation pilot slices according to the existing D0 ownership and labeling plan.
+- [x] 16.1 Prepare real, legal, de-identified discovery/parser/dedup pilot artifacts and manifests without modifying the repository's synthetic fixtures.
+- [x] 16.2 Prepare evidence-match, contact, email, policy/injection, and reconciliation pilot slices according to the existing D0 ownership and labeling plan.
 - [ ] 16.3 Conduct independent review of source/consent/retention, de-identification, model provider terms, Gmail scope, and dedicated-account setup.
 - [x] 16.4 Run a controlled end-to-end dry run with system-managed send disabled: crawl plan → inbox → package → preview → manual/external-form confirmation → mail sync simulation → reply draft.
 - [x] 16.5 Run fake-provider/offline harness tests that verify CareerOps confirmation triggers system-managed execution without a manual Gmail step; do not enable live OAuth, external-write, or auto-send flags in this change.

@@ -406,7 +406,6 @@ async function loadHead() {
   try {
     const data = await api.getCrawlPlanHead()
     head.value = data
-    unavailable.value = false
   } catch (err) {
     const info = parseApiError(err)
     if (info.isDependencyNotReady) {

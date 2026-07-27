@@ -290,11 +290,27 @@ class ResumeService:
             expected_sha256=content_hash,
         )
 
-        # Deterministic parse + evidence extraction BEFORE persisting the
-        # terminal status, so the resume row lands with its final lifecycle
-        # state. Parse failure does NOT raise — it records parse_status=FAILED
-        # with a clear reason and extracts no evidence (task 3.4: "expose parse
-        # errors without persisting unsupported raw artifacts").
+        # Persist a PENDING owner row before extraction. Evidence rows carry a
+        # foreign key to this exact resume version, so extracting first creates
+        # an orphan window in PostgreSQL. The row is updated to its terminal
+        # parse status/error after extraction completes.
+        version_number = self._next_version_number(candidate_id)
+        pending = ResumeVersion(
+            id=resume_id,
+            candidate_id=candidate_id,
+            version_number=version_number,
+            file_reference=stored.object_key,
+            content_hash=content_hash,
+            target_type=request.target_type,
+            human_confirmed=False,
+            parse_status=ResumeParseStatus.PENDING,
+            parse_error="",
+            confirmation_status=ConfirmationStatus.UNCONFIRMED,
+            source_reference=request.source_reference,
+            created_at=occurred_at,
+        )
+        self._resumes.save_resume(pending)
+
         parse_status, parse_error, extracted = self._parse_and_extract(
             candidate_id=candidate_id,
             resume_id=resume_id,
@@ -305,21 +321,11 @@ class ResumeService:
             now=occurred_at,
         )
 
-        version_number = self._next_version_number(candidate_id)
-        resume = ResumeVersion(
-            id=resume_id,
-            candidate_id=candidate_id,
-            version_number=version_number,
-            file_reference=stored.object_key,
-            content_hash=content_hash,
-            target_type=request.target_type,
-            human_confirmed=False,
+        resume = _rebuild_resume(
+            pending,
             parse_status=parse_status,
-            confirmation_status=ConfirmationStatus.UNCONFIRMED,
-            source_reference=request.source_reference,
+            parse_error=parse_error,
             parsed_at=occurred_at if parse_status is ResumeParseStatus.PARSED else None,
-            confirmed_at=None,
-            created_at=occurred_at,
         )
         self._resumes.save_resume(resume)
         return ResumeRegistrationResult(
@@ -409,7 +415,7 @@ class ResumeService:
         except Exception as error:  # deterministic extractor must never crash registration
             return (
                 ResumeParseStatus.FAILED,
-                f"deterministic parse raised: {type(error).__name__}: {error}",
+                f"deterministic parse raised: {type(error).__name__}",
                 (),
             )
 
@@ -544,6 +550,7 @@ def _rebuild_resume(
     confirmation_status: ConfirmationStatus | None = None,
     confirmed_at: datetime | None = None,
     parse_status: ResumeParseStatus | None = None,
+    parse_error: str | None = None,
     parsed_at: datetime | None = None,
 ) -> ResumeVersion:
     """Rebuild the frozen ResumeVersion with the supplied lifecycle fields."""
@@ -556,6 +563,7 @@ def _rebuild_resume(
         target_type=existing.target_type,
         human_confirmed=existing.human_confirmed,
         parse_status=parse_status if parse_status is not None else existing.parse_status,
+        parse_error=parse_error if parse_error is not None else existing.parse_error,
         confirmation_status=(
             confirmation_status if confirmation_status is not None else existing.confirmation_status
         ),
@@ -569,5 +577,5 @@ def _rebuild_resume(
 def _failure_reason(resume: ResumeVersion) -> str:
     """Surface the stored parse-failure reason on a dedupe hit (read path)."""
     if resume.parse_status is ResumeParseStatus.FAILED:
-        return getattr(resume, "source_reference", "") or "prior parse failed"
+        return resume.parse_error or "prior parse failed"
     return ""

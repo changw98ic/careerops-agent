@@ -40,6 +40,12 @@ class StructuredModelRequest:
     trace_id: str = ""
     metadata: dict[str, str] = field(default_factory=lambda: {})
 
+    def __post_init__(self) -> None:
+        if self.timeout_seconds < 0 or self.timeout_seconds > 120:
+            raise ValueError("timeout_seconds must be between 0 and 120")
+        if self.max_tokens < 1 or self.max_tokens > 8192:
+            raise ValueError("max_tokens must be between 1 and 8192")
+
 
 @dataclass(frozen=True, slots=True)
 class StructuredModelResponse:
@@ -53,6 +59,10 @@ class StructuredModelResponse:
     is_review_only: bool = True
     repair_attempted: bool = False
     trace_id: str = ""
+    # Usage is returned as bounded metadata so durable Agent runs can record
+    # cost/diagnostic facts without retaining prompts or provider responses.
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 class StructuredModelClient(Protocol):

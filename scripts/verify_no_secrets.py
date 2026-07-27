@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 EXCLUDED_PARTS = {
     ".git",
     ".mypy_cache",
+    "node_modules",
     ".pytest_cache",
     ".qoder",
     ".ruff_cache",

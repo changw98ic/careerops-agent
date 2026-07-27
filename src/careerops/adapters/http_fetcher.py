@@ -227,6 +227,11 @@ def _validate_url(url: str) -> None:
         )
 
 
+def validate_url(url: str) -> None:
+    """Public preflight for other read-only network executors."""
+    _validate_url(url)
+
+
 def _rate_limit(host: str) -> None:
     if not host:
         return

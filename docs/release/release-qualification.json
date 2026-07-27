@@ -1,4 +1,9 @@
 {
+  "status": "not_qualified",
+  "record_type": "historical_engineering_record",
+  "release_qualification_allowed": false,
+  "evidence_scope": "engineering test record only; real pilot, human, legal, privacy, and custody evidence remain unverified",
+  "invalidated_by": "working tree changed after generated_at and current real-pilot evidence is absent",
   "commit_sha": "305f5cbe54c6d53e8df808fea0228c27c52aebad",
   "migration_head": "0009_m6_gmail_send",
   "dataset_versions": [

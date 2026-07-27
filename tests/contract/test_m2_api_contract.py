@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime
 from typing import cast
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx2
 from fastapi.testclient import TestClient
 
 from careerops.api.app import create_app
 from careerops.application.ports.readiness import ReadinessReport, ReadinessState
+from careerops.auth.contracts import AuthenticatedPrincipal
 from careerops.config import RuntimeEnvironment, Settings
+from careerops.orchestration.capability_resolver import SettingsCapabilityResolver
+
+TEST_CANDIDATE_ID = UUID("11111111-1111-4111-8111-111111111111")
 
 
 class FixedReadinessProbe:
@@ -32,9 +37,29 @@ class FixedReadinessProbe:
 
 def make_client() -> httpx2.Client:
     settings = Settings.model_validate({"environment": RuntimeEnvironment.TEST})
-    return cast(
-        "httpx2.Client", TestClient(create_app(settings, readiness_probe=FixedReadinessProbe()))
-    )
+    app = create_app(settings, readiness_probe=FixedReadinessProbe())
+
+    class _StubAuth:
+        def authenticate(self, token: str, *, now: datetime) -> AuthenticatedPrincipal:
+            return AuthenticatedPrincipal(
+                user_id=TEST_CANDIDATE_ID,
+                username="test-user",
+                session_id=uuid4(),
+                csrf_token_hash="test-hash",
+                absolute_expires_at=now,
+                candidate_id=TEST_CANDIDATE_ID,
+            )
+
+        def validate_csrf(self, principal: AuthenticatedPrincipal, token: str) -> None:
+            return None
+
+    app.state.auth_service = _StubAuth()
+    app.state.web_settings = object()
+    app.state.capability_resolver = SettingsCapabilityResolver(settings)
+    client = cast("httpx2.Client", TestClient(app))
+    client.cookies.set("careerops_session", "test-token")
+    client.headers["X-CSRF-Token"] = "test-csrf"
+    return client
 
 
 class TestCandidatesAPI:
@@ -50,7 +75,7 @@ class TestCandidatesAPI:
         assert response.headers["cache-control"] == "no-store"
 
     def test_list_candidate_evidence_returns_empty_without_repository(self) -> None:
-        candidate_id = str(uuid4())
+        candidate_id = str(TEST_CANDIDATE_ID)
         response = make_client().get(f"/api/v1/candidates/{candidate_id}/evidence")
         assert response.status_code == 200
         assert response.json() == []
@@ -61,7 +86,7 @@ class TestEvidenceImportAPI:
         response = make_client().post(
             "/api/v1/evidence/import",
             json={
-                "candidate_id": str(uuid4()),
+                "candidate_id": str(TEST_CANDIDATE_ID),
                 "kind": "skill",
                 "name": "Python",
             },
@@ -81,7 +106,7 @@ class TestMatchesAPI:
         response = make_client().post(
             "/api/v1/matches/run",
             json={
-                "candidate_id": str(uuid4()),
+                "candidate_id": str(TEST_CANDIDATE_ID),
                 "canonical_job_id": str(uuid4()),
             },
         )

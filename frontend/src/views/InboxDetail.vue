@@ -189,26 +189,43 @@
           <a-empty v-else description="暂无匹配结果（确定性筛选未生成或模型不可用）" />
         </a-card>
 
-        <!-- Prepare application CTA (Section 7 link, not implemented here) -->
+        <!-- Action path (task 14.3): recommendation -> favorite -> prepare ->
+             package -> channel -> application timeline. The whole downstream
+             path lives in the application workspace; this CTA is the bridge
+             from the inbox recommendation into that workspace. It is enabled
+             as soon as favoriting has produced/reused an application record
+             (the favorite response and the inbox detail both surface
+             application_id via server-side ownership). -->
         <a-card
-          v-if="job.application_state === 'favorited'"
+          v-if="hasApplication"
           class="detail-card cta-card"
           style="margin-top: 16px"
         >
           <div class="cta-content">
             <div>
-              <h3 style="margin: 0 0 4px">准备申请材料</h3>
-              <p class="muted" style="margin: 0">进入申请工作区，准备简历和求职信。</p>
+              <h3 style="margin: 0 0 4px">{{ ctaTitle }}</h3>
+              <p class="muted" style="margin: 0">{{ ctaSubtitle }}</p>
             </div>
-            <a-button type="primary" size="large" disabled>
+            <a-button
+              v-if="job.application_id"
+              type="primary"
+              size="large"
+              :loading="navigating"
+              @click="goToWorkspace"
+            >
+              {{ ctaButtonLabel }}
+              <template #icon><ArrowRightOutlined /></template>
+            </a-button>
+            <a-button v-else type="primary" size="large" disabled>
               准备申请
               <template #icon><ArrowRightOutlined /></template>
             </a-button>
           </div>
           <a-alert
+            v-if="!job.application_id"
             type="info"
             show-icon
-            message="申请工作区将在后续阶段开放。"
+            message="申请记录尚未就绪，请稍后刷新或在投递列表中查看。"
             style="margin-top: 12px"
           />
         </a-card>
@@ -360,10 +377,17 @@ async function onFavorite() {
   actionLoading.value = 'fav'
   error.value = ''
   try {
-    await api.favoriteInboxJob(jobId.value)
+    const result = await api.favoriteInboxJob(jobId.value)
     message.success('已收藏')
     if (job.value) {
-      job.value = { ...job.value, application_state: 'favorited' }
+      // Capture the application_id returned by the idempotent favorite so the
+      // "prepare" CTA can navigate straight into the application workspace
+      // without a second round-trip (task 14.3).
+      job.value = {
+        ...job.value,
+        application_state: 'favorited',
+        application_id: result?.application_id || job.value?.application_id || '',
+      }
     }
   } catch (err) {
     const parsed = parseApiError(err)
@@ -371,6 +395,49 @@ async function onFavorite() {
   } finally {
     actionLoading.value = ''
   }
+}
+
+// --- action path (task 14.3) ---
+const navigating = ref(false)
+
+// Any state past "ignored" implies an application record exists and the user
+// should be able to (re)enter the workspace to continue the path.
+const ACTIVE_APPLICATION_STATES = new Set([
+  'favorited',
+  'preparing',
+  'submitted',
+  'interviewing',
+  'offer',
+  'rejected',
+  'withdrawn',
+  'on_hold',
+])
+
+const hasApplication = computed(
+  () => !!job.value && ACTIVE_APPLICATION_STATES.has(job.value.application_state),
+)
+
+const ctaTitle = computed(() =>
+  job.value?.application_state === 'favorited'
+    ? '准备申请材料'
+    : '继续申请流程',
+)
+
+const ctaSubtitle = computed(() =>
+  job.value?.application_state === 'favorited'
+    ? '进入申请工作区，准备简历、求职信与申请包。'
+    : '进入申请工作区，查看申请包、投递通道与事件时间线。',
+)
+
+const ctaButtonLabel = computed(() =>
+  job.value?.application_state === 'favorited' ? '准备申请' : '进入工作区',
+)
+
+function goToWorkspace() {
+  const appId = job.value?.application_id
+  if (!appId) return
+  navigating.value = true
+  router.push(`/applications/${appId}`)
 }
 
 async function onIgnore() {

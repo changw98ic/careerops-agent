@@ -37,10 +37,11 @@ Server-side ownership (Iron Rule 2): the service takes a server-resolved
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import logging
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -73,6 +74,13 @@ from careerops.workflows.m1_contracts import CrawlJobSourceInput
 logger = logging.getLogger(__name__)
 
 __all__ = ["CrawlExecutionService"]
+
+# ``None`` in ``CrawlPerRunLimits`` means the service default, not unlimited
+# work. These bounds keep an accidentally incomplete plan from turning into an
+# unbounded network or ingest operation.
+DEFAULT_MAX_POSTINGS_PER_SOURCE = 500
+DEFAULT_MAX_SOURCES = 50
+DEFAULT_TIMEOUT_SECONDS = 600
 
 
 def _extract_domain(url: str) -> str:
@@ -162,12 +170,40 @@ class CrawlExecutionService:
         counters = CrawlRunCounters()
         error_category = ""
         earliest_next_eligible: datetime | None = None
+        timeout_seconds = (
+            run.limits.timeout_seconds
+            if run.limits.timeout_seconds is not None
+            else DEFAULT_TIMEOUT_SECONDS
+        )
+        # The persisted ``started_at`` may be supplied by a replay or a test
+        # fixture. Budget enforcement is wall-clock execution time, so anchor
+        # the deadline to the activity's actual start rather than a historical
+        # provenance timestamp.
+        deadline = datetime.now(tz=UTC) + timedelta(seconds=timeout_seconds)
+        max_sources = (
+            run.limits.max_sources if run.limits.max_sources is not None else DEFAULT_MAX_SOURCES
+        )
+        max_postings_per_source = (
+            run.limits.max_postings_per_source
+            if run.limits.max_postings_per_source is not None
+            else DEFAULT_MAX_POSTINGS_PER_SOURCE
+        )
+        timed_out = False
         # Per-domain backoff state for this run.
         domain_backoff: dict[str, BackoffState] = {}
 
         try:
-            # Step 3: iterate the plan's sources.
-            for source_id in plan_version.sources:
+            # Step 3: iterate the run's immutable source snapshot. The
+            # fallback preserves compatibility with old in-memory fixtures
+            # that predate ``CrawlRun.source_set``.
+            source_ids = run.source_set or plan_version.sources
+            source_ids = source_ids[: max(0, max_sources)]
+
+            for source_id in source_ids:
+                if datetime.now(tz=UTC) >= deadline:
+                    timed_out = True
+                    error_category = "run_timeout"
+                    break
                 source = self._sources.get_by_id(owner_id, source_id)
 
                 # Skip sources that are not enabled and ACTIVE (spec: "User
@@ -257,9 +293,18 @@ class CrawlExecutionService:
                     company_name="",  # not needed for fetch
                     source_type=source.source_type.value,
                     base_url=source.base_url,
+                    executor_mode=source.executor_mode.value,
                 )
                 try:
-                    result = await self._sink.crawl_source_with_signals(crawl_input)
+                    remaining = (deadline - datetime.now(tz=UTC)).total_seconds()
+                    if remaining <= 0:
+                        raise TimeoutError
+                    async with asyncio.timeout(remaining):
+                        result = await self._sink.crawl_source_with_signals(crawl_input)
+                except TimeoutError:
+                    timed_out = True
+                    error_category = "run_timeout"
+                    break
                 except Exception:
                     logger.exception("crawl_source failed for source %s", source_id)
                     counters = dataclasses.replace(counters, failed=counters.failed + 1)
@@ -332,13 +377,21 @@ class CrawlExecutionService:
                 domain_backoff[domain] = backoff_state
 
                 # Step 4: ingest each posting with provenance.
-                for posting in result.postings:
+                for posting in result.postings[: max(0, max_postings_per_source)]:
                     try:
-                        ingest_result = await self._sink.ingest_posting(
-                            posting,
-                            crawl_run_id=run.id,
-                            plan_version_id=plan_version.id,
-                        )
+                        remaining = (deadline - datetime.now(tz=UTC)).total_seconds()
+                        if remaining <= 0:
+                            raise TimeoutError
+                        async with asyncio.timeout(remaining):
+                            ingest_result = await self._sink.ingest_posting(
+                                posting,
+                                crawl_run_id=run.id,
+                                plan_version_id=plan_version.id,
+                            )
+                    except TimeoutError:
+                        timed_out = True
+                        error_category = "run_timeout"
+                        break
                     except Exception:
                         logger.exception(
                             "ingest_posting failed for source %s external_id=%s",
@@ -353,13 +406,19 @@ class CrawlExecutionService:
                     elif ingest_result.get("is_new_version"):
                         counters = dataclasses.replace(counters, updated=counters.updated + 1)
 
-            # Step 5: succeeded.
+                if timed_out:
+                    break
+
+            # Step 5: terminal result. Source failures are represented by the
+            # counters and bounded category; a budget exhaustion is distinct
+            # from a source failure so callers can offer a safe retry action.
             ended_at = datetime.now(tz=UTC)
             run = self._runs.update_terminal(
                 owner_id,
                 run_id,
-                state=CrawlRunState.SUCCEEDED,
+                state=CrawlRunState.TIMEOUT if timed_out else CrawlRunState.SUCCEEDED,
                 counters=counters,
+                error_category=error_category,
                 ended_at=ended_at,
                 next_eligible_at=earliest_next_eligible,
                 now=ended_at,

@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://careerops.local/schemas/resume_review.json",
+  "title": "resume_review",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["strengths", "gaps", "risk_flags", "recommendations", "confidence"],
+  "properties": {
+    "strengths": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["evidence_id", "statement"],
+        "properties": {
+          "evidence_id": {"type": "string"},
+          "statement": {"type": "string", "maxLength": 500}
+        }
+      }
+    },
+    "gaps": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {"type": "string", "maxLength": 300}
+    },
+    "risk_flags": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {"type": "string", "maxLength": 300}
+    },
+    "recommendations": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {"type": "string", "maxLength": 500}
+    },
+    "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+  }
+}

@@ -111,7 +111,8 @@ class FilterDecision:
     records the filter ruleset version. ``blocking_reasons`` is empty when the
     job passes all filters. ``evidence_refs`` maps each blocking reason to the
     specific job field value that triggered it (e.g. ``{"location_excluded":
-    "San Francisco, CA"}``).
+    "San Francisco, CA"}``). Semantic fields are optional review metadata and
+    never participate in the hard-filter verdict.
     """
 
     verdict: FilterVerdict
@@ -119,6 +120,12 @@ class FilterDecision:
     rules_version: str = ""
     blocking_reasons: tuple[BlockingReason, ...] = ()
     evidence_refs: dict[str, str] = field(default_factory=lambda: {})
+    # Optional review-only semantic ranking. This is never used as a hard
+    # filter or an application-state transition.
+    semantic_ranking_status: SemanticRankingStatus = SemanticRankingStatus.UNAVAILABLE
+    semantic_ranking_score: float | None = None
+    semantic_ranking_reason: str = ""
+    semantic_model_version: str = ""
 
 
 @dataclass(frozen=True, slots=True)

@@ -12,19 +12,26 @@ from careerops.api.auth_dependency import require_api_auth, require_web_auth
 from careerops.api.errors import install_error_handlers
 from careerops.api.metrics_middleware import MetricsMiddleware
 from careerops.api.middleware import RequestIdMiddleware
+from careerops.api.routes.agent_runs import router as agent_runs_router
+from careerops.api.routes.application_workspace import router as application_workspace_router
 from careerops.api.routes.applications import router as applications_router
 from careerops.api.routes.crawl_plans import router as crawl_plans_router
 from careerops.api.routes.crawl_runs import router as crawl_runs_router
 from careerops.api.routes.crawl_sources import router as crawl_sources_router
+from careerops.api.routes.email_payloads import router as email_payloads_router
 from careerops.api.routes.evidence import router as evidence_router
 from careerops.api.routes.health import router as health_router
 from careerops.api.routes.inbox import router as inbox_router
 from careerops.api.routes.jobs import router as jobs_router
+from careerops.api.routes.mail_intelligence import router as mail_intelligence_router
+from careerops.api.routes.mail_sync import router as mail_sync_router
 from careerops.api.routes.matching import router as matching_router
 from careerops.api.routes.metrics import router as metrics_router
 from careerops.api.routes.profile import router as profile_router
+from careerops.api.routes.reply_drafts import router as reply_drafts_router
 from careerops.api.routes.resumes import router as resumes_router
 from careerops.api.routes.review import install_review_endpoint
+from careerops.api.routes.system_send import router as system_send_router
 from careerops.application.dashboard import DashboardSnapshotProvider
 from careerops.application.ports.readiness import ReadinessProbe
 from careerops.auth.service import ConsoleAuthService
@@ -34,6 +41,7 @@ from careerops.domain.applications import (
     FollowUpReminder,
     ResumeVersion,
 )
+from careerops.domain.email_payloads import EmailAccountSummary
 from careerops.infrastructure.auth import create_console_auth_service
 from careerops.infrastructure.dashboard import RuntimeDashboardSnapshotProvider
 from careerops.infrastructure.database.postgres_application_repo import (
@@ -144,6 +152,7 @@ def create_app(
     app.state.readiness_probe = probe
     app.state.auth_service = auth_service
     app.state.metrics = metrics
+    app.state.career_loop_trace = metrics.trace
 
     # Wire API route repositories and services when using RuntimeResources.
     # Routes gracefully degrade to empty results when these are absent, but
@@ -242,6 +251,238 @@ def create_app(
             evidence_repo=probe.evidence_repo,
             job_data_repo=probe.matching_read_repo,
             capability_resolver=probe.capability_resolver,
+            model_client=probe.model_client,
+        )
+        app.state.agent_run_repository = probe.agent_run_repo
+        app.state.agent_runtime = probe.agent_runtime
+        app.state.resume_review_service = probe.resume_review_service
+        app.state.interview_preparation_service = probe.interview_preparation_service
+        # Section-7 application workspace service (tasks 7.2-7.7). Composes the
+        # existing application repo (doubles as resume/package/follow-up repo)
+        # with the cycle repo and the default job-evidence channel resolver.
+        from careerops.application.application_workspace import (
+            ApplicationWorkspaceService,
+            PackageServiceBindingStore,
+        )
+        from careerops.application.email_payload_service import (
+            AccountLookupError,
+            EmailPayloadService,
+            RepositoryTrustedContactResolver,
+        )
+
+        # Section-8 package service (tasks 8.2-8.7). The application repo
+        # doubles as both the package-version repo (find_latest_package_version
+        # / save_package_version / ...) and the resume-read repo
+        # (find_resume_by_id), so a single instance satisfies both ports.
+        # Tailoring stays default-disabled via the shared capability resolver
+        # until MODEL_TAILORING is released.
+        from careerops.application.package_service import PackageService
+
+        package_service = PackageService(
+            probe.application_repo,  # type: ignore[arg-type]
+            probe.application_repo,  # type: ignore[arg-type]
+            capability_resolver=probe.capability_resolver,
+            evidence_repo=probe.evidence_repo,
+            job_version_repo=probe.job_read_repo,
+            trace=metrics.trace,
+        )
+        app.state.package_service = package_service
+
+        # Section 9 trusted-contact/account adapters.  Both are candidate/job
+        # scoped and fail closed: repository misses produce no eligible
+        # recipient/account rather than a guessed fallback.
+        trusted_contact_resolver = RepositoryTrustedContactResolver(
+            probe.contact_repo,
+            probe.job_read_repo,
+        )
+
+        def _has_trusted_contact(candidate_id: UUID, canonical_job_id: UUID) -> bool:
+            application = probe.application_repo.find_by_candidate_and_job(
+                candidate_id, canonical_job_id
+            )
+            if application is None:
+                return False
+            return bool(
+                trusted_contact_resolver.resolve(
+                    candidate_id=candidate_id,
+                    application_id=application.id,
+                    canonical_job_id=canonical_job_id,
+                )
+            )
+
+        app.state.application_workspace_service = ApplicationWorkspaceService(
+            probe.application_repo,
+            cycle_repo=probe.application_cycle_repo,
+            package_binding_store=PackageServiceBindingStore(package_service),
+            contact_lookup=_has_trusted_contact,
+        )
+
+        class _CandidateAccountLookup:
+            def __init__(self, repository: Any) -> None:
+                self._repository = repository
+
+            def lookup_for_candidate(self, candidate_id: UUID, account_id: UUID) -> Any:
+                account = self._repository.get_account(candidate_id, account_id)
+                if account is None:
+                    raise AccountLookupError(f"account {account_id} not found")
+                return EmailAccountSummary(
+                    account_id=account.id,
+                    email_address=account.email_address,
+                    status=account.status.value,
+                )
+
+            def lookup(self, account_id: UUID) -> Any:
+                raise AccountLookupError(
+                    f"candidate-scoped account lookup required for {account_id}"
+                )
+
+        workspace_service = app.state.application_workspace_service
+        app.state.email_payload_service = EmailPayloadService(
+            probe.application_repo,  # type: ignore[arg-type]
+            workspace_service,  # type: ignore[arg-type]
+            contact_resolver=trusted_contact_resolver,
+            account_lookup=_CandidateAccountLookup(probe.mail_account_repo),  # type: ignore[arg-type]
+        )
+        # Section-10 system-managed send service (tasks 10.1-10.7). Composes
+        # the shared side-effect kernel (built in RuntimeResources for the
+        # non-production review stack) with the application repo, package
+        # reader and shared capability resolver. The kernel stays absent in
+        # PRODUCTION until the external-write qualification gate flips in a
+        # separate change, so this service is only wired when the kernel is
+        # present; the route's ``require_repository`` turns its absence into a
+        # 503 (dependency-not-ready) rather than a silent degradation. The
+        # provider is the FakeSideEffectProvider only — real Gmail activation
+        # is a separate future qualification change (task 17.6).
+        if probe.side_effect_kernel is not None:
+            from careerops.application.system_managed_send import (
+                SystemManagedSendService,
+            )
+            from careerops.infrastructure.database.outbox import PostgresOutboxStore
+
+            email_payload_service = app.state.email_payload_service
+
+            def _recipient_eligible(request: Any) -> bool:
+                application = probe.application_repo.find_by_id(request.application_id)
+                if (
+                    application is None
+                    or application.candidate_id != request.candidate_id
+                    or (
+                        request.canonical_job_id is not None
+                        and request.canonical_job_id != application.canonical_job_id
+                    )
+                ):
+                    return False
+                verdict = email_payload_service.resolve_trusted_contact(
+                    candidate_id=request.candidate_id,
+                    application_id=request.application_id,
+                    canonical_job_id=application.canonical_job_id,
+                    recipient_email=request.recipient,
+                )
+                return verdict.eligible and (
+                    verdict.email.strip().lower() == request.recipient.strip().lower()
+                )
+
+            def _account_active(request: Any) -> bool:
+                if request.account_id is None:
+                    return False
+                account = probe.mail_account_repo.get_account(
+                    request.candidate_id, request.account_id
+                )
+                return bool(
+                    account is not None
+                    and account.status.value == "active"
+                    and account.email_address.strip().lower()
+                    == request.account_email.strip().lower()
+                )
+
+            app.state.system_managed_send_service = SystemManagedSendService(
+                probe.side_effect_kernel,  # type: ignore[arg-type]
+                probe.application_repo,
+                package_reader=package_service,
+                capability_resolver=probe.capability_resolver,
+                outbox_store=PostgresOutboxStore(probe.database),  # type: ignore[arg-type]
+                account_status_lookup=_account_active,
+                recipient_eligible=_recipient_eligible,
+                trace=metrics.trace,
+            )
+        # Section-12 mail intelligence service (tasks 12.5-12.7). Composes the
+        # durable proposal repo + minimized message reader with the workspace
+        # service (ownership + USER-sourced transition delegation) and the
+        # shared capability resolver. The proposal NEVER writes
+        # ApplicationState directly — acceptance delegates to the workspace's
+        # ``apply_user_transition`` via a thin sink (Iron Rule 2). No live OAuth
+        # / external-write / auto-send flag is enabled here (task 17.6); the
+        # message reader consumes already-ingested rows (fixtures in the slice).
+        from careerops.application.mail_intelligence_service import (
+            MailIntelligenceService,
+        )
+
+        mail_service = MailIntelligenceService(
+            message_repo=probe.mail_message_repo,  # type: ignore[arg-type]
+            proposal_repo=probe.mail_proposal_repo,  # type: ignore[arg-type]
+            ownership_reader=workspace_service,  # type: ignore[arg-type]
+            timeline_sink=workspace_service,  # type: ignore[arg-type]
+            follow_up_scheduler=None,  # Section 13 wires concrete follow-up rules
+            capability_resolver=probe.capability_resolver,
+            trace=metrics.trace,
+        )
+        # Delegate the USER-sourced transition to the workspace service so the
+        # proposal never owns the ApplicationRepository. The bound method
+        # records a USER-sourced ApplicationEvent for every accepted proposal.
+        mail_service.set_transition_sink(workspace_service.apply_user_transition)  # type: ignore[arg-type]
+        app.state.mail_intelligence_service = mail_service
+        # Section-11 Gmail read-sync service (tasks 11.1-11.7). Composes the
+        # dedicated-account connection repo + durable sync-run/cursor repo +
+        # thread-link repo. The GMAIL_READ capability stays DENIED at the
+        # contract layer (Iron Rule 7); the router gates on it so the path is
+        # default-deny until a separate qualification change releases it. No
+        # live OAuth / external-write flag is enabled here (task 17.6); the
+        # service builds the read path and the pending-action invalidator stays
+        # None until the outbox wires a concrete invalidator.
+        from careerops.application.mail_sync_service import MailSyncService
+
+        app.state.mail_sync_service = MailSyncService(
+            probe.mail_account_repo,  # type: ignore[arg-type]
+            probe.mail_sync_run_repo,  # type: ignore[arg-type]
+            probe.mail_thread_link_repo,  # type: ignore[arg-type]
+        )
+        app.state.mail_account_repository = probe.mail_account_repo
+        app.state.mail_sync_run_repository = probe.mail_sync_run_repo
+        app.state.mail_thread_link_repository = probe.mail_thread_link_repo
+        # Section-13 reply-draft + follow-up services (tasks 13.1-13.6). The
+        # follow-up service composes the M3 follow-up repo (the application
+        # repo doubles as it) + application repo for ownership/timeline. The
+        # reply-draft service composes a durable draft repo + the workspace
+        # ownership reader + the shared capability resolver. The send port
+        # stays None (send chain not wired) until the external-write
+        # qualification gate flips in a separate change (task 17.6); the route
+        # surfaces a 503/403 rather than silently no-op'ing. Auto-send is
+        # permanently denied via the AUTO_SEND capability; high-risk categories
+        # are permanently denied system send at the service layer. No live
+        # OAuth / external-write flag is enabled here.
+        from careerops.application.reply_draft_service import (
+            FollowUpService,
+            ReplyDraftService,
+        )
+        from careerops.infrastructure.database.postgres_reply_draft_repo import (
+            PostgresReplyDraftRepository,
+        )
+
+        reply_draft_repo = PostgresReplyDraftRepository(probe.database)
+        app.state.reply_draft_repository = reply_draft_repo
+        follow_up_service = FollowUpService(
+            _FollowUpRepoAdapter(probe.application_repo),  # type: ignore[arg-type]
+            probe.application_repo,
+            timeline_sink=workspace_service,  # type: ignore[arg-type]
+            trace=metrics.trace,
+        )
+        app.state.follow_up_service = follow_up_service
+        app.state.reply_draft_service = ReplyDraftService(
+            reply_draft_repo,  # type: ignore[arg-type]
+            workspace_service,  # type: ignore[arg-type]
+            timeline_sink=workspace_service,  # type: ignore[arg-type]
+            capability_resolver=probe.capability_resolver,
+            send_port=None,  # Section 10 chain reuse wired at qualification
         )
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(MetricsMiddleware, metrics=metrics)
@@ -290,6 +531,46 @@ def create_app(
     # Section-6 inbox router (tasks 6.7-6.8). Same auth guard; candidate
     # ownership resolved server-side. Additive — no existing routes broken.
     app.include_router(inbox_router, dependencies=[Depends(require_api_auth)])
+    app.include_router(agent_runs_router, dependencies=[Depends(require_api_auth)])
+    # Section-7 application-workspace router (tasks 7.8). Additive paths only
+    # (detail / prepare / channels / channel / package / timeline /
+    # confirm-external-submission / state); the M3 application routes are
+    # untouched. Same auth guard; candidate ownership resolved server-side.
+    app.include_router(application_workspace_router, dependencies=[Depends(require_api_auth)])
+    # Section-9 email-payload router (tasks 9.1, 9.6). Additive paths only
+    # (recruiting-contacts list + submission-preview). Performs NO provider
+    # side effects (the actual send is Section 10). Same auth guard; candidate
+    # ownership resolved server-side; responses carry Cache-Control: no-store.
+    app.include_router(email_payloads_router, dependencies=[Depends(require_api_auth)])
+    # Section-10 system-managed-send router (tasks 10.1-10.8, 10.11). Additive
+    # paths only (confirm / status / reconcile); gated on the
+    # SYSTEM_MANAGED_SEND capability which stays DENIED at the contract layer.
+    # Same auth guard; candidate ownership resolved server-side.
+    app.include_router(system_send_router, dependencies=[Depends(require_api_auth)])
+    # Section-12 mail-intelligence router (tasks 12.5-12.6). Additive paths
+    # only (extract/proposal, list, get, accept, reject). Proposals are
+    # review-only; application state changes ONLY through the USER-sourced
+    # transition path on acceptance (Iron Rule 2). Same auth guard (CSRF on
+    # mutations); candidate ownership resolved server-side; responses carry
+    # Cache-Control: no-store.
+    app.include_router(mail_intelligence_router, dependencies=[Depends(require_api_auth)])
+    # Section-11 Gmail read-sync router (tasks 11.7, 11.10). Additive paths
+    # only (account status / sync-now / sync history / threads / messages /
+    # unresolved links / confirm link). Gated on the GMAIL_READ capability,
+    # which stays DENIED at the contract layer until a separate qualification
+    # change releases it (Iron Rule 7). Same auth guard (CSRF on mutations);
+    # candidate ownership resolved server-side; responses carry
+    # Cache-Control: no-store and bounded cursor pagination.
+    app.include_router(mail_sync_router, dependencies=[Depends(require_api_auth)])
+    # Section-13 reply-draft + follow-up router (tasks 13.7-13.8, 13.10).
+    # Additive paths only (draft list/detail/create/edit/approve/reject/send +
+    # follow-up schedule/snooze/reschedule/cancel/complete). Drafts are
+    # review-only; only an approved low-risk reply may be sent via the reused
+    # Section 10 chain (separately gated). High-risk categories are permanently
+    # denied system send; auto-send is permanently denied. Same auth guard
+    # (CSRF on mutations); candidate ownership resolved server-side; responses
+    # carry Cache-Control: no-store and bounded cursor pagination.
+    app.include_router(reply_drafts_router, dependencies=[Depends(require_api_auth)])
 
     # Check if Vue SPA is enabled; if so, skip old Jinja2 UI routes.
     if not serve_spa:

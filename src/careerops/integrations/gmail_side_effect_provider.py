@@ -12,6 +12,8 @@ v1 posture: this provider is only injected when
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
+from typing import Protocol, cast
 
 from careerops.domain.side_effects import (
     ProviderCallResult,
@@ -30,6 +32,12 @@ from careerops.integrations.gmail_sender import (
     GmailSendError,
     OutgoingEmail,
 )
+
+
+class AttachmentPathResolver(Protocol):
+    """Resolve an approved content hash to a provider-readable path."""
+
+    def get(self, content_hash: str) -> str | Path | None: ...
 
 
 class GmailSideEffectProvider:
@@ -52,11 +60,13 @@ class GmailSideEffectProvider:
         self,
         sender: GmailSender,
         receipt_store: GmailReceiptStore | None = None,
+        storage: AttachmentPathResolver | None = None,
     ) -> None:
         self._sender = sender
         self._receipt_store: GmailReceiptStore = (
             receipt_store if receipt_store is not None else InMemoryGmailReceiptStore()
         )
+        self._storage = storage
 
     def execute(
         self,
@@ -88,7 +98,40 @@ class GmailSideEffectProvider:
                 failure_class=ProviderFailureClass.VALIDATION,
             )
 
-        email = OutgoingEmail(to=to, subject=subject, body=body)
+        # Resolve attachment hashes to actual file paths via storage.
+        # If hashes are present but storage can't resolve them, the send MUST
+        # fail — proceeding without attachments would violate the payload hash
+        # binding (preview/send parity, task 9.8).
+        attachment_paths: tuple[Path, ...] = ()
+        attachment_hashes = payload.get("attachment_hashes", [])
+        if attachment_hashes:
+            if self._storage is None:
+                return ProviderCallResult(
+                    kind=ProviderResultKind.FAILURE,
+                    error_code="ATTACHMENT_STORAGE_UNAVAILABLE",
+                    failure_class=ProviderFailureClass.VALIDATION,
+                )
+            if not isinstance(attachment_hashes, (list, tuple)):
+                return ProviderCallResult(
+                    kind=ProviderResultKind.FAILURE,
+                    error_code="ATTACHMENT_HASHES_INVALID",
+                    failure_class=ProviderFailureClass.VALIDATION,
+                )
+            hash_values = cast("list[str] | tuple[str, ...]", attachment_hashes)
+            resolved: list[Path] = []
+            for hash_val in hash_values:
+                path = self._storage.get(str(hash_val))
+                if path is None:
+                    return ProviderCallResult(
+                        kind=ProviderResultKind.FAILURE,
+                        error_code="ATTACHMENT_NOT_FOUND",
+                        failure_class=ProviderFailureClass.VALIDATION,
+                        metadata={"missing_hash": str(hash_val)},
+                    )
+                resolved.append(Path(path))
+            attachment_paths = tuple(resolved)
+
+        email = OutgoingEmail(to=to, subject=subject, body=body, attachments=attachment_paths)
         try:
             result = self._sender.send(email)
         except GmailSendError as exc:

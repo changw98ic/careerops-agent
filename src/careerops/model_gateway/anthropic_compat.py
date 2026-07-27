@@ -18,7 +18,7 @@ ADR 0006 invariants enforced here:
 from __future__ import annotations
 
 import email.utils
-import hashlib
+import ipaddress
 import json
 import re
 import time
@@ -27,6 +27,7 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol, cast
+from urllib.parse import urlsplit
 
 import jsonschema
 
@@ -34,6 +35,7 @@ from careerops.model_gateway.base import (
     StructuredModelRequest,
     StructuredModelResponse,
 )
+from careerops.observability import current_trace_id
 
 ANTHROPIC_VERSION = "2023-06-01"
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
@@ -43,6 +45,9 @@ _MODEL_VARIANT_RE = re.compile(r"\[[^\]]*\]$")
 _MAX_429_RETRIES: int = 3
 _BASE_BACKOFF_SECONDS: float = 1.0
 _HTTP_TOO_MANY_REQUESTS: int = 429
+_MAX_RETRY_AFTER_SECONDS: float = 120.0
+_MAX_RESPONSE_BYTES: int = 1_000_000
+_MAX_USAGE_TOKENS: int = 10_000_000
 
 
 def _sleep(seconds: float) -> None:
@@ -66,7 +71,7 @@ def _parse_retry_after(value: str | None) -> float | None:
     except ValueError:
         pass
     else:
-        return max(0.0, seconds)
+        return min(_MAX_RETRY_AFTER_SECONDS, max(0.0, seconds))
     try:
         parsed = email.utils.parsedate_to_datetime(raw)
     except (TypeError, ValueError):
@@ -74,7 +79,7 @@ def _parse_retry_after(value: str | None) -> float | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     delta = (parsed - datetime.now(tz=UTC)).total_seconds()
-    return max(0.0, delta)
+    return min(_MAX_RETRY_AFTER_SECONDS, max(0.0, delta))
 
 
 def _backoff_seconds(attempt: int, retry_after: float | None) -> float:
@@ -189,7 +194,11 @@ def _extract_usage(data: dict[str, Any]) -> tuple[int, int]:
     usage = cast("dict[str, Any]", raw_usage)
 
     def _as_count(raw: object) -> int:
-        return int(raw) if isinstance(raw, (int, float)) and raw >= 0 else 0
+        if not isinstance(raw, (int, float)) or raw < 0:
+            return 0
+        if isinstance(raw, float) and not raw.is_integer():
+            return 0
+        return min(_MAX_USAGE_TOKENS, int(raw))
 
     return _as_count(usage.get("input_tokens")), _as_count(usage.get("output_tokens"))
 
@@ -202,6 +211,7 @@ class AnthropicCompatConfig:
     api_key: str
     model: str
     timeout_seconds: float = 60.0
+    allowed_hosts: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.base_url:
@@ -210,6 +220,29 @@ class AnthropicCompatConfig:
             raise ValueError("api_key is required")
         if not self.model:
             raise ValueError("model is required")
+        parsed = urlsplit(self.base_url)
+        if parsed.scheme != "https":
+            raise ValueError("base_url must use https")
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError("base_url must not contain credentials, query, or fragment")
+        hostname = parsed.hostname
+        if not hostname:
+            raise ValueError("base_url must contain a hostname")
+        try:
+            address = ipaddress.ip_address(hostname)
+        except ValueError:
+            address = None
+        if address is not None and (
+            address.is_private
+            or address.is_loopback
+            or address.is_link_local
+            or address.is_reserved
+        ):
+            raise ValueError("base_url must not target a private or loopback address")
+        if self.allowed_hosts and hostname.lower() not in {
+            host.lower() for host in self.allowed_hosts
+        }:
+            raise ValueError("base_url host is not in the model provider allowlist")
 
 
 class AnthropicCompatClient:
@@ -241,9 +274,6 @@ class AnthropicCompatClient:
     def invoke(self, request: StructuredModelRequest) -> StructuredModelResponse:
         """Invoke the model and return a structured, review-only response."""
         user_content = self._compose_user_content(request)
-        prompt_hash = hashlib.sha256(
-            (request.system_prompt + user_content).encode("utf-8")
-        ).hexdigest()
 
         call_timeout = request.timeout_seconds or self._config.timeout_seconds
         raw = self._call_messages(
@@ -258,7 +288,7 @@ class AnthropicCompatClient:
         try:
             result = _extract_json(raw)
             _validate_schema(result, request.schema)
-        except ModelInvocationError as first_err:
+        except ModelInvocationError:
             # One structure-repair attempt covering BOTH parse and schema errors.
             repair_attempted = True
             repaired = self._call_messages(
@@ -267,9 +297,9 @@ class AnthropicCompatClient:
                     "no prose and no code fences."
                 ),
                 user=(
-                    f"Your previous response was unusable ({first_err}). "
+                    "Your previous response failed the required JSON structure. "
                     "Return ONLY the corrected JSON object for this task:\n\n"
-                    f"{request.user_prompt}\n\nPrevious output:\n{raw[:2000]}"
+                    f"{request.user_prompt}"
                 ),
                 max_tokens=request.max_tokens,
                 timeout=call_timeout,
@@ -298,7 +328,9 @@ class AnthropicCompatClient:
             prompt_version=request.metadata.get("prompt_version", "v1"),
             is_review_only=True,  # model output is always advisory
             repair_attempted=repair_attempted,
-            trace_id=request.trace_id or prompt_hash[:16],
+            trace_id=request.trace_id or current_trace_id(),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
         )
 
     def _record_usage(self, input_tokens: int, output_tokens: int) -> None:
@@ -371,19 +403,31 @@ class AnthropicCompatClient:
                 method="POST",
             )
             try:
-                with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
-                    data = json.loads(resp.read().decode("utf-8"))
+                with _open_request(req, timeout=timeout) as resp:
+                    raw_body = _read_bounded_response(resp)
+                    data = json.loads(raw_body.decode("utf-8"))
             except urllib.error.HTTPError as e:
                 if e.code == _HTTP_TOO_MANY_REQUESTS and attempt < _MAX_429_RETRIES:
                     retry_after = _parse_retry_after(e.headers.get("Retry-After"))
                     _sleep(_backoff_seconds(attempt, retry_after))
                     continue
-                detail = e.read().decode("utf-8", errors="replace")[:300]
-                raise ModelInvocationError(f"model API HTTP {e.code}: {detail}") from e
+                raise ModelInvocationError(f"model API HTTP {e.code}") from e
             except urllib.error.URLError as e:
-                raise ModelInvocationError(f"model API network error: {e.reason}") from e
+                del e
+                raise ModelInvocationError("model API network error") from None
+            except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+                raise ModelInvocationError("model API returned invalid JSON") from None
 
-            content: list[dict[str, Any]] = data.get("content", []) or []
+            if not isinstance(data, dict):
+                raise ModelInvocationError("model API returned an invalid response object")
+            data = cast("dict[str, Any]", data)
+
+            raw_content = data.get("content")
+            content: list[dict[str, Any]] = []
+            if isinstance(raw_content, list):
+                for raw_block in cast("list[object]", raw_content):
+                    if isinstance(raw_block, dict):
+                        content.append(cast("dict[str, Any]", raw_block))
             texts: list[str] = [
                 str(block.get("text", "")) for block in content if block.get("type") == "text"
             ]
@@ -400,3 +444,38 @@ class AnthropicCompatClient:
         # Unreachable: the loop returns on success or raises on every terminal
         # attempt. Defensive guard for type-checker exhaustiveness.
         raise ModelInvocationError("model API returned HTTP 429 after max retries")
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Reject redirects so the provider key never follows an untrusted hop."""
+
+    def redirect_request(self, *args: Any, **kwargs: Any) -> urllib.request.Request | None:
+        del args, kwargs
+        raise ModelInvocationError("model API redirect rejected")
+
+
+def _open_request(req: urllib.request.Request, *, timeout: float) -> Any:
+    """Open one provider request with redirects disabled."""
+    # Keep the standard-library call as the test seam used by the existing
+    # provider fakes. In a real process it is the original function and the
+    # custom opener below rejects redirects before any second hop is opened.
+    if urllib.request.urlopen is _ORIGINAL_URLOPEN:
+        opener = urllib.request.build_opener(_NoRedirectHandler())
+        return opener.open(req, timeout=timeout)
+    return urllib.request.urlopen(req, timeout=timeout)  # nosec B310 -- redirects are disabled
+
+
+_ORIGINAL_URLOPEN = urllib.request.urlopen
+
+
+def _read_bounded_response(response: Any) -> bytes:
+    """Read at most the bounded provider response size."""
+    try:
+        body = response.read(_MAX_RESPONSE_BYTES + 1)
+    except TypeError:
+        # Small test doubles and a few non-standard HTTP clients expose only
+        # ``read()``. The length check below still protects their output.
+        body = response.read()
+    if len(body) > _MAX_RESPONSE_BYTES:
+        raise ModelInvocationError("model API response exceeded size limit")
+    return body

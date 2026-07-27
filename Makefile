@@ -66,7 +66,8 @@ verify-m1: verify-m1-contracts
 
 verify-frontend:
 	cd frontend && npm ci && npm run build
-	@INITIAL_JS=$$(find frontend/dist/assets -name '*.js' | head -1); \
+	@INITIAL_JS=$$(sed -n 's/.*<script type="module"[^>]*src="\([^"]*\.js\)".*/\1/p' frontend/dist/index.html | head -1); \
+	INITIAL_JS="frontend/$${INITIAL_JS#/}"; \
 	if [ -z "$$INITIAL_JS" ]; then echo "::error::No JS bundle found"; exit 1; fi; \
 	SIZE=$$(gzip -c "$$INITIAL_JS" | wc -c); \
 	LIMIT=$$((250 * 1024)); \

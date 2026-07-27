@@ -178,10 +178,11 @@ class TestHardFilterEngine:
         assert decision.verdict is FilterVerdict.EXCLUDED
         assert BlockingReason.LOCATION_NOT_REQUIRED in decision.blocking_reasons
 
-    def test_remote_unknown_excludes(self) -> None:
-        """When remote is required but no remote signals, job is excluded.
+    def test_no_remote_signals_passes(self) -> None:
+        """When remote is required but no remote/onsite signals, job passes.
 
-        Per spec: "unknown remote eligibility -> not recommended, label uncertainty."
+        Many remote jobs don't explicitly say "remote" in title/location.
+        Only explicit onsite signals exclude.
         """
         engine = HardFilterEngine()
         profile = _make_profile(
@@ -198,8 +199,7 @@ class TestHardFilterEngine:
             job_compensation=None,
             profile=profile,
         )
-        assert decision.verdict is FilterVerdict.EXCLUDED
-        assert BlockingReason.REMOTE_UNKNOWN in decision.blocking_reasons
+        assert decision.verdict is FilterVerdict.RECOMMENDED
 
     def test_remote_eligible_passes(self) -> None:
         """Job with remote signals passes remote filter."""

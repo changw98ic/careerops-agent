@@ -45,6 +45,7 @@ class ResumeVersionResponse(BaseModel):
     content_hash: str
     target_type: str = "general"
     parse_status: str = "pending"
+    parse_error: str = ""
     confirmation_status: str = "unconfirmed"
     source_reference: str = ""
     parsed_at: str | None = None
@@ -255,6 +256,7 @@ def _to_response(version: object) -> ResumeVersionResponse:
         content_hash=version.content_hash,  # type: ignore[attr-defined]
         target_type=version.target_type,  # type: ignore[attr-defined]
         parse_status=version.parse_status.value,  # type: ignore[attr-defined]
+        parse_error=getattr(version, "parse_error", ""),
         confirmation_status=version.confirmation_status.value,  # type: ignore[attr-defined]
         source_reference=version.source_reference,  # type: ignore[attr-defined]
         parsed_at=parsed_at.isoformat() if parsed_at else None,

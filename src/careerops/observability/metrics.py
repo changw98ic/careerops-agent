@@ -6,6 +6,8 @@ from time import perf_counter
 from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, generate_latest
 
 from careerops.config import Settings
+from careerops.observability.career_loop_metrics import CareerLoopMetrics
+from careerops.observability.career_loop_trace import CareerLoopTrace
 
 _HTTP_METHODS = frozenset({"DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"})
 _STATUS_CLASSES = frozenset({"1xx", "2xx", "3xx", "4xx", "5xx", "other"})
@@ -32,6 +34,10 @@ class Metrics:
 
     def __init__(self, *, version: str, settings: Settings) -> None:
         self.registry = CollectorRegistry(auto_describe=True)
+        # Product metrics share this registry so the single /metrics endpoint
+        # exposes operational, LLM, and trace-backed career-loop signals.
+        self.career_loop = CareerLoopMetrics(registry=self.registry)
+        self.trace = CareerLoopTrace(self.career_loop)
 
         build_info = Gauge(
             "careerops_build_info",

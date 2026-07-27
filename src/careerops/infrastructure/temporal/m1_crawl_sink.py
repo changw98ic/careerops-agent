@@ -40,6 +40,7 @@ from careerops.adapters.job_sources import (
     StaticHtmlAdapter,
 )
 from careerops.infrastructure.database.schema import job_posting_versions, job_postings
+from careerops.infrastructure.temporal.ego_browser_executor import EgoBrowserExecutor
 from careerops.workflows.m1_contracts import (
     CrawledPostingRecord,
     CrawlJobSourceInput,
@@ -111,18 +112,29 @@ class RealCrawlActivitySink:
         *,
         fetcher: FetcherFn | None = None,
         engine: Engine | None = None,
+        browser_executor: EgoBrowserExecutor | None = None,
     ) -> None:
         self._adapters = adapters or dict(_ADAPTER_REGISTRY)
         # Allow injecting a fake fetcher for tests.
         self._fetch: FetcherFn = fetcher or fetch
         self._engine = engine
+        self._browser = browser_executor
+
+    def _fetch_for_request(self, request: CrawlJobSourceInput, url: str) -> FetchedResponse:
+        if request.executor_mode == "http":
+            return self._fetch(url)
+        if request.executor_mode == "ego":
+            if self._browser is None:
+                raise RuntimeError("ego browser executor is not configured")
+            return self._browser.fetch(url)
+        raise RuntimeError("unsupported crawl executor mode")
 
     async def crawl_source(self, request: CrawlJobSourceInput) -> list[CrawledPostingRecord]:
         adapter = self._adapters.get(request.source_type)
         if adapter is None:
             return []
 
-        resp: FetchedResponse = self._fetch(request.base_url)
+        resp: FetchedResponse = self._fetch_for_request(request, request.base_url)
         result = adapter.list_jobs(_parse_body(resp.body))
 
         fetched_at = resp.fetched_at.isoformat()
@@ -132,7 +144,9 @@ class RealCrawlActivitySink:
         # Greenhouse list API does not include the JD body.
         detail_cache: dict[str, str] = {}
         if request.source_type == "greenhouse":
-            detail_cache = self._fetch_greenhouse_details(request.base_url, result.jobs)
+            detail_cache = self._fetch_greenhouse_details(
+                request.base_url, result.jobs, executor_mode=request.executor_mode
+            )
 
         for record in result.jobs:
             # Flatten to dict[str, str] — Temporal JSON converter rejects
@@ -179,7 +193,7 @@ class RealCrawlActivitySink:
         if adapter is None:
             return CrawlSourceResult(postings=())
 
-        resp: FetchedResponse = self._fetch(request.base_url)
+        resp: FetchedResponse = self._fetch_for_request(request, request.base_url)
         result = adapter.list_jobs(_parse_body(resp.body))
 
         fetched_at = resp.fetched_at.isoformat()
@@ -188,7 +202,9 @@ class RealCrawlActivitySink:
         # For Greenhouse: fetch detail endpoint for each job to get description.
         detail_cache: dict[str, str] = {}
         if request.source_type == "greenhouse":
-            detail_cache = self._fetch_greenhouse_details(request.base_url, result.jobs)
+            detail_cache = self._fetch_greenhouse_details(
+                request.base_url, result.jobs, executor_mode=request.executor_mode
+            )
 
         for record in result.jobs:
             raw: dict[str, str] = {}
@@ -240,6 +256,7 @@ class RealCrawlActivitySink:
         jobs: tuple[Any, ...],
         *,
         batch_size: int = 10,
+        executor_mode: str = "http",
     ) -> dict[str, str]:
         """Fetch Greenhouse detail endpoint for each job to get description.
 
@@ -260,18 +277,28 @@ class RealCrawlActivitySink:
                 if not ext_id:
                     continue
                 detail_url = f"{base_url.rstrip('/')}/{ext_id}"
+                detail_description = ""
                 try:
-                    detail_resp = self._fetch(detail_url)
+                    detail_request = CrawlJobSourceInput(
+                        source_id="detail",
+                        company_id="",
+                        company_name="",
+                        source_type="greenhouse",
+                        base_url=detail_url,
+                        executor_mode=executor_mode,
+                    )
+                    detail_resp = self._fetch_for_request(detail_request, detail_url)
                     detail_data = _parse_body(detail_resp.body)
                     detail_record = detail_adapter.fetch_job(
                         detail_data,
                         source_url=detail_url,
                         fetched_at=detail_resp.fetched_at,
                     )
-                    if detail_record.description:
-                        descriptions[ext_id] = detail_record.description
+                    detail_description = detail_record.description
                 except Exception:
-                    pass  # Skip failed detail fetches; list data is still useful
+                    detail_description = ""  # List data remains useful on detail failure.
+                if detail_description:
+                    descriptions[ext_id] = detail_description
         return descriptions
 
     async def ingest_posting(

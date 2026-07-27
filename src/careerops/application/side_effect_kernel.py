@@ -259,7 +259,7 @@ class SideEffectKernel:
         provider: SideEffectProvider,
         *,
         policy_decider: SideEffectPolicyDecider | None = None,
-        audit_writer: InMemoryAuditWriter | None = None,
+        audit_writer: AuditWriter | None = None,
         outbox_store: OutboxStore | None = None,
         max_attempts: int = 5,
         approval_ttl_seconds: int = 600,

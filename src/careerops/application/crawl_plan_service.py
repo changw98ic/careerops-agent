@@ -41,13 +41,16 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from typing import cast
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from careerops.api.errors import InvalidStateError, NotFoundError
+from careerops.api.errors import ConflictError, InvalidStateError, NotFoundError
 from careerops.domain.crawl import ALLOWED_TRANSITIONS, CrawlRunState
 from careerops.domain.crawl_plans import (
+    CrawlExecutorMode,
     CrawlPerRunLimits,
     CrawlPlanRepository,
     CrawlPlanVersion,
@@ -77,6 +80,9 @@ _RunRepoProtocol = CrawlRunRepository
 
 __all__ = [
     "CRAWL_PLAN_RULES_VERSION",
+    "MAX_PER_RUN_POSTINGS_PER_SOURCE",
+    "MAX_PER_RUN_SOURCES",
+    "MAX_PER_RUN_TIMEOUT_SECONDS",
     "MAX_SCHEDULE_INTERVAL_SECONDS",
     "MIN_SCHEDULE_INTERVAL_SECONDS",
     "CrawlPlanPreferences",
@@ -84,6 +90,7 @@ __all__ = [
     "CrawlRunService",
     "CrawlSourceService",
     "compute_next_run_at",
+    "validate_per_run_limits",
     "validate_schedule",
 ]
 
@@ -100,6 +107,14 @@ CRAWL_PLAN_RULES_VERSION = "crawl-plan-v1"
 # on demand rather than hold a long-lived schedule slot.
 MIN_SCHEDULE_INTERVAL_SECONDS = 300  # 5 minutes
 MAX_SCHEDULE_INTERVAL_SECONDS = 7 * 24 * 60 * 60  # 7 days
+
+# Per-run limits are user-configurable, but ``None`` means the bounded executor
+# default rather than unlimited work. These upper bounds are enforced before a
+# plan version is persisted so a malformed API request cannot become an
+# unbounded network/ingest job later.
+MAX_PER_RUN_POSTINGS_PER_SOURCE = 5_000
+MAX_PER_RUN_SOURCES = 200
+MAX_PER_RUN_TIMEOUT_SECONDS = 3_600
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +184,34 @@ def validate_schedule(*, interval_seconds: int, timezone: str) -> None:
         raise InvalidStateError(f"schedule timezone is not a valid IANA zone: {timezone}") from err
 
 
+def validate_per_run_limits(limits: CrawlPerRunLimits) -> None:
+    """Validate optional per-run budgets before they enter an immutable plan.
+
+    ``None`` selects the execution service's bounded default. Explicit values
+    must be positive integers and stay below the operational caps; zero,
+    negative values, booleans, and oversized values are rejected fail-closed.
+    """
+
+    fields = (
+        (
+            "max_postings_per_source",
+            limits.max_postings_per_source,
+            MAX_PER_RUN_POSTINGS_PER_SOURCE,
+        ),
+        ("max_sources", limits.max_sources, MAX_PER_RUN_SOURCES),
+        ("timeout_seconds", limits.timeout_seconds, MAX_PER_RUN_TIMEOUT_SECONDS),
+    )
+    for name, value, maximum in fields:
+        if value is None:
+            continue
+        if type(value) is not int:
+            raise InvalidStateError(f"per_run_limits.{name} must be an integer")
+        if value < 1:
+            raise InvalidStateError(f"per_run_limits.{name} must be positive")
+        if value > maximum:
+            raise InvalidStateError(f"per_run_limits.{name} exceeds maximum {maximum}")
+
+
 def compute_next_run_at(*, interval_seconds: int, timezone: str, now: datetime | None) -> datetime:
     """Return the next run time = ``now + interval`` in the plan's timezone.
 
@@ -231,6 +274,7 @@ class CrawlSourceService:
         source_type: str,
         source_identifier: str,
         base_url: str,
+        executor_mode: str = "http",
         enabled: bool = False,
         adapter_version: str = "",
         trust_status: CrawlPolicyStatus = CrawlPolicyStatus.UNKNOWN,
@@ -255,6 +299,10 @@ class CrawlSourceService:
             raise InvalidStateError("crawl source source_identifier is required")
         if not base_url:
             raise InvalidStateError("crawl source base_url is required")
+        try:
+            selected_executor = CrawlExecutorMode(executor_mode)
+        except ValueError as err:
+            raise InvalidStateError("unsupported crawl executor mode") from err
         source = CrawlSource(
             id=uuid4(),
             owner_id=owner_id,
@@ -262,6 +310,7 @@ class CrawlSourceService:
             source_type=CrawlSourceType(source_type),
             source_identifier=source_identifier,
             base_url=base_url,
+            executor_mode=selected_executor,
             state=CrawlSourceState.ACTIVE,
             trust_status=trust_status,
             terms_status=terms_status,
@@ -281,6 +330,7 @@ class CrawlSourceService:
         *,
         base_url: str | None = None,
         source_identifier: str | None = None,
+        executor_mode: str | None = None,
         adapter_version: str | None = None,
         trust_status: CrawlPolicyStatus | None = None,
         terms_status: CrawlPolicyStatus | None = None,
@@ -298,10 +348,18 @@ class CrawlSourceService:
             raise InvalidStateError("crawl source base_url is required")
         if not merged_ident:
             raise InvalidStateError("crawl source source_identifier is required")
+        if executor_mode is None:
+            selected_executor = existing.executor_mode
+        else:
+            try:
+                selected_executor = CrawlExecutorMode(executor_mode)
+            except ValueError as err:
+                raise InvalidStateError("unsupported crawl executor mode") from err
         merged = dataclasses.replace(
             existing,
             base_url=merged_base,
             source_identifier=merged_ident,
+            executor_mode=selected_executor,
             adapter_version=(
                 adapter_version if adapter_version is not None else existing.adapter_version
             ),
@@ -413,6 +471,7 @@ class CrawlPlanService:
             interval_seconds=preferences.schedule_interval_seconds,
             timezone=preferences.schedule_timezone,
         )
+        validate_per_run_limits(preferences.per_run_limits)
         version_number = self._next_version_number(owner_id)
         plan = CrawlPlanVersion(
             id=uuid4(),
@@ -447,6 +506,7 @@ class CrawlPlanService:
         become active (Iron Rule 5)."""
         version = self._repo.get_by_id(owner_id, version_id)
         validate_schedule(interval_seconds=version.interval_seconds, timezone=version.timezone)
+        validate_per_run_limits(version.per_run_limits)
         return self._repo.activate(owner_id, version_id, now=now)
 
     # -- pause / resume (task 4.5) -----------------------------------------
@@ -480,6 +540,7 @@ class CrawlPlanService:
             raise InvalidStateError("no crawl plan version to resume")
         target = latest[0]
         validate_schedule(interval_seconds=target.interval_seconds, timezone=target.timezone)
+        validate_per_run_limits(target.per_run_limits)
         return self._repo.activate(owner_id, target.id, now=now)
 
     # -- schedule (task 4.6) -----------------------------------------------
@@ -629,7 +690,17 @@ class CrawlRunService:
             counters=CrawlRunCounters(),
             created_at=now,
         )
-        return self._runs.create(owner_id, run)
+        try:
+            return self._runs.create(owner_id, run)
+        except ConflictError:
+            # Two concurrent requests can both observe no non-terminal run and
+            # race on the same deterministic identity. The unique constraint
+            # is the arbiter; recover the winner instead of surfacing a false
+            # duplicate or creating a second logical run.
+            existing = self._runs.get_by_identity(owner_id, run_identity)
+            if existing is not None:
+                return existing
+            raise
 
     def record_overlap_skip(
         self,
@@ -704,8 +775,15 @@ class CrawlRunService:
         a new identity is required (the DB unique constraint would reject a
         reuse).
         """
-        existing = self._runs.list_for_plan(owner_id, plan_version_id, limit=50)
-        attempt = len(existing) + 1
+        count_for_plan = getattr(self._runs, "count_for_plan", None)
+        if callable(count_for_plan):
+            count_fn = cast("Callable[[UUID, UUID], int]", count_for_plan)
+            attempt = count_fn(owner_id, plan_version_id) + 1
+        else:
+            # Compatibility for older test doubles; never cap the history at
+            # the overlap-read page size when minting a unique identity.
+            existing = self._runs.list_for_plan(owner_id, plan_version_id, limit=100_000)
+            attempt = len(existing) + 1
         return f"manual:{plan_version_id}:{_source_set_hash(source_set)}:{attempt}"
 
 

@@ -362,6 +362,7 @@ def match_node(
     state: CareerOpsState,
     *,
     model_client: StructuredModelClient,
+    capability_resolver: Any | None = None,
 ) -> dict[str, Any]:
     """Score jobs against the skill profile.
 
@@ -378,7 +379,7 @@ def match_node(
         years=profile_dto.get("years", ""),
         highlights=profile_dto.get("highlights", ""),
     )
-    matcher = LLMJobMatcher(model_client)
+    matcher = LLMJobMatcher(model_client, capability_resolver=capability_resolver)
     jobs = state.get("filtered_jobs") or state.get("raw_job_records") or ()
     results: list[JobMatchDTO] = []
     for job in jobs:

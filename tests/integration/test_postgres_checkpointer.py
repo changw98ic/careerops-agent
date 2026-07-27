@@ -17,6 +17,8 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 
+from careerops.infrastructure.runtime import _langgraph_conn_string
+
 pytestmark = pytest.mark.integration
 
 
@@ -49,18 +51,18 @@ class TestPostgresSaverSetup:
 
         from langgraph.checkpoint.postgres import PostgresSaver
 
-        conn_string = database_url.replace("postgresql+psycopg://", "postgresql://")
+        conn_string = _langgraph_conn_string(database_url)
         with PostgresSaver.from_conn_string(conn_string) as saver:
             saver.setup()
 
-            # Verify the checkpoints table exists (PostgresSaver creates it
-            # in the public schema by default).
+            # Verify the checkpoints table exists in the dedicated schema.
             with engine.begin() as conn:
                 result = conn.execute(
                     __import__("sqlalchemy").text(
                         "SELECT EXISTS ("
                         "  SELECT 1 FROM information_schema.tables"
-                        "  WHERE table_name = 'checkpoints'"
+                        "  WHERE table_schema = 'langgraph'"
+                        "  AND table_name = 'checkpoints'"
                         ")"
                     )
                 ).scalar()
@@ -88,7 +90,7 @@ class TestGraphInterruptResume:
         from careerops.orchestration.mapping_store import InMemoryReviewMappingStore
         from careerops.orchestration.state import ContactDTO, RawJobDTO
 
-        conn_string = database_url.replace("postgresql+psycopg://", "postgresql://")
+        conn_string = _langgraph_conn_string(database_url)
         with PostgresSaver.from_conn_string(conn_string) as saver:
             saver.setup()
 

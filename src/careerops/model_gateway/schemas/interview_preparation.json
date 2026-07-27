@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://careerops.local/schemas/interview_preparation.json",
+  "title": "interview_preparation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["focus_areas", "questions", "star_prompts", "uncertainties", "confidence"],
+  "properties": {
+    "focus_areas": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {"type": "string", "maxLength": 300}
+    },
+    "questions": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {"type": "string", "maxLength": 500}
+    },
+    "star_prompts": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {"type": "string", "maxLength": 500}
+    },
+    "uncertainties": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {"type": "string", "maxLength": 300}
+    },
+    "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+  }
+}

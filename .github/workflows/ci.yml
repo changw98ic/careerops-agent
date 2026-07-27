@@ -93,7 +93,8 @@ jobs:
         run: npm run build
       - name: Check bundle size (initial JS gzip < 250 KB)
         run: |
-          INITIAL_JS=$(find dist/assets -name '*.js' | head -1)
+          INITIAL_JS=$(sed -n 's/.*<script type="module"[^>]*src="\([^"]*\.js\)".*/\1/p' dist/index.html | head -1)
+          INITIAL_JS="dist/${INITIAL_JS#/}"
           if [ -z "$INITIAL_JS" ]; then
             echo "::error::No JS bundle found in dist/assets"
             exit 1

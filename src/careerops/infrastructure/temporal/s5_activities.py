@@ -116,6 +116,33 @@ class NoOpScheduledRunCreator:
         )
 
 
+class _UnavailableCrawlExecutor:
+    """Fail closed when a worker was built without the real crawl service."""
+
+    async def execute(
+        self,
+        owner_id: UUID,
+        run_id: UUID,
+        *,
+        now: datetime | None = None,
+    ) -> CrawlRun:
+        del owner_id, run_id, now
+        raise RuntimeError("crawl executor is not wired")
+
+
+class _UnavailableScheduledRunCreator:
+    """Fail closed when scheduled-run persistence was not injected."""
+
+    def run_now(
+        self,
+        owner_id: UUID,
+        *,
+        now: datetime | None = None,
+    ) -> CrawlRun:
+        del owner_id, now
+        raise RuntimeError("scheduled run creator is not wired")
+
+
 # ---------------------------------------------------------------------------
 # Activity bundles (injectable into the worker)
 # ---------------------------------------------------------------------------
@@ -133,8 +160,11 @@ class S5CrawlExecutionActivities:
         executor: CrawlExecutor | None = None,
         run_creator: ScheduledRunCreator | None = None,
     ) -> None:
-        self._executor: CrawlExecutor = executor or NoOpCrawlExecutor()
-        self._run_creator: ScheduledRunCreator = run_creator or NoOpScheduledRunCreator()
+        # Explicit NoOp implementations remain available for isolated unit
+        # tests, but a production worker with missing wiring must fail closed
+        # instead of manufacturing a successful crawl result.
+        self._executor: CrawlExecutor = executor or _UnavailableCrawlExecutor()
+        self._run_creator: ScheduledRunCreator = run_creator or _UnavailableScheduledRunCreator()
 
     @activity.defn(name=EXECUTE_CRAWL_RUN_ACTIVITY)
     async def execute_crawl_run(self, request: CrawlRunExecuteInput) -> CrawlRunExecuteResult:
@@ -168,7 +198,7 @@ class S5CrawlExecutionActivities:
             # Retrying could create a duplicate or hit the same error.
             activity.logger.exception("crawl run %s failed with unexpected error", run_id)
             raise ApplicationError(
-                f"crawl execution failed: {exc}",
+                f"crawl execution failed: {type(exc).__name__}",
                 non_retryable=True,
                 type=type(exc).__name__,
             ) from exc
@@ -224,7 +254,7 @@ class S5CrawlExecutionActivities:
             # DB transient error — retryable.  Let Temporal retry.
             activity.logger.exception("create_scheduled_run failed for owner %s", owner_id)
             raise ApplicationError(
-                f"failed to create scheduled run: {exc}",
+                f"failed to create scheduled run: {type(exc).__name__}",
                 non_retryable=False,
                 type=type(exc).__name__,
             ) from exc

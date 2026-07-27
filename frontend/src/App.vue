@@ -63,6 +63,14 @@
           <template #icon><ThunderboltOutlined /></template>
           Run History
         </a-menu-item>
+        <a-menu-item key="mail-follow-up">
+          <template #icon><MailOutlined /></template>
+          Mail Follow-Up
+        </a-menu-item>
+        <a-menu-item key="reply-queue">
+          <template #icon><MailOutlined /></template>
+          Reply Review
+        </a-menu-item>
       </a-menu>
 
       <div v-if="isMobile || !collapsed" class="sider-footer">
@@ -182,12 +190,15 @@ const pageTitle = computed(() => {
     'job-detail': 'Job detail',
     companies: 'Companies',
     applications: 'Applications',
+    'application-workspace': 'Application Workspace',
     profile: 'Profile',
     resumes: 'Resumes',
     evidence: 'Evidence',
     'crawl-plans': 'Crawl Plans',
     'crawl-runs': 'Run History',
     'crawl-run-detail': 'Run Detail',
+    'mail-follow-up': 'Mail Follow-Up',
+    'reply-queue': 'Reply Review',
   }
   return titles[String(route.name)] || 'CareerOps'
 })

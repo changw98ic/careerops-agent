@@ -12,6 +12,19 @@ vi.mock('../src/api/client.js', () => ({
     getEmailDraft: (...args) => mockGetEmailDraft(...args),
   },
   setCsrfToken: vi.fn(),
+  // Faithful stub of the real parseApiError so dependency-not-ready detection
+  // (status 503 / DEPENDENCY_NOT_READY) behaves like production.
+  parseApiError: (err) => ({
+    status: err?.status,
+    code: err?.code,
+    message: err?.messageText || err?.message || '',
+    details: err?.details ?? null,
+    retryable: !!err?.retryable,
+    isDependencyNotReady:
+      err?.status === 503 ||
+      err?.code === 'DEPENDENCY_NOT_READY' ||
+      err?.code === 'UNAVAILABLE_DEPENDENCY',
+  }),
 }))
 
 const mockBack = vi.fn()

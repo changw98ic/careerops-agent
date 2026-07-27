@@ -59,6 +59,7 @@ from careerops.domain.profiles import (
 __all__ = [
     "CRAWL_RUN_COUNTER_KEYS",
     "SUPPORTED_SOURCE_TYPES",
+    "CrawlExecutorMode",
     "CrawlPerRunLimits",
     "CrawlPlanRepository",
     "CrawlPlanVersion",
@@ -98,6 +99,13 @@ class CrawlSourceType(StrEnum):
     LEVER = "lever"
     ASHBY = "ashby"
     OFFICIAL = "official"
+
+
+class CrawlExecutorMode(StrEnum):
+    """The explicitly selected network executor for one registered source."""
+
+    HTTP = "http"
+    EGO = "ego"
 
 
 SUPPORTED_SOURCE_TYPES: frozenset[CrawlSourceType] = frozenset(CrawlSourceType)
@@ -229,6 +237,7 @@ class CrawlSource:
     source_type: CrawlSourceType
     source_identifier: str
     base_url: str
+    executor_mode: CrawlExecutorMode = CrawlExecutorMode.HTTP
     state: CrawlSourceState = CrawlSourceState.PENDING_REVIEW
     trust_status: CrawlPolicyStatus = CrawlPolicyStatus.UNKNOWN
     terms_status: CrawlPolicyStatus = CrawlPolicyStatus.UNKNOWN
@@ -454,6 +463,10 @@ class CrawlRunRepository(Protocol):
         self, owner_id: UUID, plan_version_id: UUID, *, limit: int = 50
     ) -> list[CrawlRun]:
         """Return runs bound to the given plan version, newest first."""
+        ...
+
+    def count_for_plan(self, owner_id: UUID, plan_version_id: UUID) -> int:
+        """Return the total number of owner-scoped runs for a plan version."""
         ...
 
     def update_terminal(

@@ -503,6 +503,41 @@ class PostgresJobReadRepository:
             return None
         return _row_to_version(row)
 
+    def find_version_by_id(self, version_id: UUID) -> JobPostingVersion | None:
+        """Return an exact posting version for package freshness checks."""
+        with self._engine.begin() as conn:
+            row = (
+                conn.execute(
+                    select(job_posting_versions).where(job_posting_versions.c.id == version_id)
+                )
+                .mappings()
+                .fetchone()
+            )
+        return _row_to_version(row) if row is not None else None
+
+    def find_version_for_canonical(
+        self, canonical_job_id: UUID, version_id: UUID
+    ) -> JobPostingVersion | None:
+        """Return a version only when its posting is assigned to this job."""
+        stmt = (
+            select(job_posting_versions)
+            .join(
+                job_postings,
+                job_postings.c.id == job_posting_versions.c.job_posting_id,
+            )
+            .join(
+                job_posting_assignments,
+                job_posting_assignments.c.job_posting_id == job_postings.c.id,
+            )
+            .where(
+                job_posting_versions.c.id == version_id,
+                job_posting_assignments.c.canonical_job_id == canonical_job_id,
+            )
+        )
+        with self._engine.begin() as conn:
+            row = conn.execute(stmt).mappings().first()
+        return _row_to_version(row) if row is not None else None
+
     def find_canonical_by_fingerprint(self, fingerprint: str) -> CanonicalJob | None:
         """Match by ``normalized_title`` (the fingerprint used during ingestion)."""
         with self._engine.begin() as conn:

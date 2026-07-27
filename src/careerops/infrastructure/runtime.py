@@ -10,6 +10,7 @@ from contextlib import suppress
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Protocol, cast
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from redis import Redis as SyncRedis
 from redis.asyncio import Redis as AsyncRedis
@@ -20,13 +21,32 @@ from careerops.application.ports.readiness import (
     ReadinessReport,
     ReadinessState,
 )
-from careerops.config import RuntimeEnvironment, Settings
+from careerops.config import DeploymentMode, RuntimeEnvironment, Settings
 from careerops.infrastructure.database.engine import create_database_engine
 from careerops.infrastructure.storage.local import LocalContentAddressedStorage
+from careerops.integrations.fake_side_effect_provider import SideEffectProvider
 from careerops.observability.metrics import Metrics
 from careerops.orchestration.mapping_store import ReviewMappingStore
 
 _COMPONENTS = ("database", "redis", "temporal", "storage")
+
+
+def _langgraph_conn_string(raw_url: str) -> str:
+    """Return a psycopg URL pinned to the dedicated LangGraph schema."""
+
+    conn_string = raw_url.replace("postgresql+psycopg://", "postgresql://")
+    parsed = urlsplit(conn_string)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query["options"] = "-csearch_path=langgraph,public"
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            urlencode(query),
+            parsed.fragment,
+        )
+    )
 
 
 class AsyncRedisClient(Protocol):
@@ -48,7 +68,8 @@ class RuntimeResources:
         self._settings = settings
         self._metrics = metrics
         is_prod = settings.environment is RuntimeEnvironment.PRODUCTION
-        self.database: Engine = create_database_engine(settings, enforce_role=is_prod)
+        enforce_role = is_prod or settings.deployment_mode is DeploymentMode.COMPOSE_LOOPBACK
+        self.database: Engine = create_database_engine(settings, enforce_role=enforce_role)
         self.redis = cast(
             "AsyncRedisClient",
             AsyncRedis.from_url(  # pyright: ignore[reportUnknownMemberType]
@@ -93,7 +114,22 @@ class RuntimeResources:
         self.career_graph: object | None = None
         self.review_mapping: ReviewMappingStore | None = None
         self.side_effect_kernel: object | None = None
+        self.model_client: object | None = None
         self._build_career_graph_stack()
+        # Production graph construction can stop early when the optional
+        # LangGraph checkpointer is unavailable. Agent routes still need the
+        # shared model capability boundary, so build the provider client
+        # independently; the factory remains disabled by default.
+        if self.model_client is None:
+            from careerops.model_gateway.factory import create_model_client
+
+            self.model_client = create_model_client(
+                settings.model_provider,
+                base_url=settings.model_base_url,
+                api_key=settings.model_api_key.get_secret_value(),
+                model=settings.model_name,
+                usage_recorder=metrics,
+            )
 
         # Read repositories and application services for API routes.
         # Always use Postgres-backed repos when a database URL is configured.
@@ -152,6 +188,39 @@ class RuntimeResources:
         self.crawl_plan_repo = PostgresCrawlPlanRepository(self.database)
         self.crawl_run_repo = PostgresCrawlRunRepository(self.database)
 
+        from careerops.application.agent_runtime import AgentRuntime
+        from careerops.application.agent_services import (
+            InterviewPreparationService,
+            ResumeReviewService,
+        )
+        from careerops.infrastructure.database.postgres_agent_run_repo import (
+            PostgresAgentRunRepository,
+        )
+        from careerops.model_gateway.base import StructuredModelClient
+
+        self.agent_run_repo = PostgresAgentRunRepository(self.database)
+        agent_model: StructuredModelClient = self.model_client
+        self.agent_runtime = AgentRuntime(
+            self.agent_run_repo,
+            capability_resolver=self.capability_resolver,
+        )
+        self.resume_review_service = ResumeReviewService(
+            self.agent_runtime,
+            resume_repository=self.application_repo,
+            evidence_repository=self.evidence_repo,
+            profile_repository=self.profile_repo,
+            job_repository=self.job_read_repo,
+            model_client=agent_model,
+        )
+        self.interview_preparation_service = InterviewPreparationService(
+            self.agent_runtime,
+            resume_repository=self.application_repo,
+            evidence_repository=self.evidence_repo,
+            profile_repository=self.profile_repo,
+            job_repository=self.job_read_repo,
+            model_client=agent_model,
+        )
+
         # Section-6 inbox repository (tasks 6.1-6.3). Persists filter
         # decisions and requirement match results. Same Postgres-backed
         # pattern as the Section-2/4 repos.
@@ -161,6 +230,36 @@ class RuntimeResources:
 
         self.inbox_repo = PostgresInboxRepository(self.database)
 
+        # Section-12 mail-intelligence repos (tasks 12.5 / 12.3). Durable
+        # EmailEventProposal store + minimized message reader. Same
+        # Postgres-backed pattern as the Section-2/4/6 repos: no in-memory
+        # fallback, scoped by the server-resolved candidate. No live OAuth /
+        # external-write / auto-send flag is enabled here (task 17.6) — these
+        # repos are a review-only record store.
+        from careerops.infrastructure.database.postgres_mail_repo import (
+            PostgresEmailEventProposalRepository,
+            PostgresMailMessageRepository,
+        )
+
+        self.mail_proposal_repo = PostgresEmailEventProposalRepository(self.database)
+        self.mail_message_repo = PostgresMailMessageRepository(self.database)
+
+        # Section-11 Gmail read-sync repos (tasks 11.1-11.6). Dedicated-account
+        # connection state + durable sync runs/cursors + thread association
+        # links. Same Postgres-backed pattern: no in-memory fallback, scoped by
+        # the server-resolved candidate. The GMAIL_READ capability stays DENIED
+        # at the contract layer (Iron Rule 7); these repos build the read path
+        # but no live OAuth / external-write flag is enabled here (task 17.6).
+        from careerops.infrastructure.database.postgres_mail_sync_repo import (
+            PostgresMailAccountRepository,
+            PostgresSyncRunRepository,
+            PostgresThreadLinkRepository,
+        )
+
+        self.mail_account_repo = PostgresMailAccountRepository(self.database)
+        self.mail_sync_run_repo = PostgresSyncRunRepository(self.database)
+        self.mail_thread_link_repo = PostgresThreadLinkRepository(self.database)
+
         # Section 5 crawl execution service (tasks 5.1, 5.5, 5.6). Wraps the
         # crawl adapter sink + policy evaluation + provenance ingest. The
         # execution service is what Temporal activities (task 5.4) or a direct
@@ -168,9 +267,14 @@ class RuntimeResources:
         # terminal state.
         from careerops.adapters.http_fetcher import fetch
         from careerops.application.crawl_execution import CrawlExecutionService
+        from careerops.infrastructure.temporal.ego_browser_executor import EgoBrowserExecutor
         from careerops.infrastructure.temporal.m1_crawl_sink import RealCrawlActivitySink
 
-        crawl_sink = RealCrawlActivitySink(fetcher=fetch, engine=self.database)
+        crawl_sink = RealCrawlActivitySink(
+            fetcher=fetch,
+            engine=self.database,
+            browser_executor=EgoBrowserExecutor(),
+        )
         self.crawl_execution_service = CrawlExecutionService(
             run_repository=self.crawl_run_repo,
             plan_repository=self.crawl_plan_repo,
@@ -252,6 +356,15 @@ class RuntimeResources:
         if not healthy:
             raise RuntimeError("Temporal health check failed")
 
+    async def get_temporal_client(self) -> Client:
+        """Return a healthy, lazily connected Temporal client for API enqueueing."""
+        if self._closed:
+            raise RuntimeError("runtime resources are closed")
+        await self._check_temporal()
+        if self._temporal is None:  # pragma: no cover - defensive invariant
+            raise RuntimeError("Temporal client is unavailable")
+        return self._temporal
+
     async def _check_storage(self) -> None:
         await asyncio.to_thread(_verify_storage_directory, self._settings.storage_root)
 
@@ -312,7 +425,12 @@ class RuntimeResources:
             side_effect_store = InMemorySideEffectStore()
             side_effect_provider = FakeSideEffectProvider()
 
-        kernel = SideEffectKernel(side_effect_store, side_effect_provider)  # type: ignore[arg-type]
+        from careerops.infrastructure.database.audit import PostgresAuditWriterEngine
+
+        audit_writer = PostgresAuditWriterEngine(self.database) if is_production else None
+        kernel = SideEffectKernel(
+            side_effect_store, side_effect_provider, audit_writer=audit_writer
+        )  # type: ignore[arg-type]
         review_mapping: ReviewMappingStore = InMemoryReviewMappingStore()
 
         # Wire LLM token recording via the model client factory (ADR 0006).
@@ -320,7 +438,7 @@ class RuntimeResources:
         model_client = create_model_client(
             settings.model_provider,
             base_url=settings.model_base_url,
-            api_key=settings.model_api_key,
+            api_key=settings.model_api_key.get_secret_value(),
             model=settings.model_name,
             usage_recorder=usage_recorder,
         )
@@ -339,6 +457,7 @@ class RuntimeResources:
 
         self.side_effect_kernel = kernel
         self.review_mapping = review_mapping
+        self.model_client = model_client
         self.career_graph = build_graph(
             crawler=demo_crawler,
             extractor=demo_extractor,
@@ -363,8 +482,7 @@ class RuntimeResources:
         from langgraph.checkpoint.postgres import PostgresSaver
 
         raw_url = self._settings.database_url.get_secret_value()
-        # from_conn_string expects psycopg DSN: strip the +psycopg driver suffix.
-        conn_string = raw_url.replace("postgresql+psycopg://", "postgresql://")
+        conn_string = _langgraph_conn_string(raw_url)
         ctx = PostgresSaver.from_conn_string(conn_string)
         saver: PostgresSaver = ctx.__enter__()  # type: ignore[attr-defined]
         saver.setup()
@@ -373,12 +491,13 @@ class RuntimeResources:
         self._postgres_saver_ctx = ctx  # type: ignore[attr-defined]
         return saver
 
-    def _build_side_effect_provider(self) -> object:
+    def _build_side_effect_provider(self) -> SideEffectProvider:
         """Build the production side-effect provider.
 
         Uses ``GmailSideEffectProvider`` when both ``auto_send_enabled`` and
         ``external_writes_enabled`` are True; otherwise falls back to
-        ``FakeSideEffectProvider``.
+        ``FakeSideEffectProvider``. Storage is passed to the Gmail provider
+        so it can resolve attachment hashes to actual file paths for sending.
         """
         settings = self._settings
         if settings.auto_send_enabled and settings.external_writes_enabled:

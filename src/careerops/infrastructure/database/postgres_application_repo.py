@@ -16,6 +16,13 @@ from sqlalchemy import ColumnElement, and_, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 
+from careerops.domain.application_packages import (
+    ApplicationPackageVersion,
+    PackageAttachment,
+    PackageClaimVersion,
+    PackageDiffEntry,
+    RequirementGap,
+)
 from careerops.domain.applications import (
     Application,
     ApplicationEvent,
@@ -34,6 +41,7 @@ from careerops.domain.applications import (
 )
 from careerops.infrastructure.database.schema import (
     application_lifecycle_events,
+    application_package_versions,
     application_packages,
     applications,
     follow_up_reminders,
@@ -114,6 +122,7 @@ def _row_to_resume(row: sa.RowMapping) -> ResumeVersion:
         # if they read from a row that pre-dates the columns, but the new
         # schema always returns these.
         parse_status=ResumeParseStatus(str(row.get("parse_status") or "pending")),
+        parse_error=str(row.get("parse_error") or ""),
         confirmation_status=ConfirmationStatus(
             str(row.get("confirmation_status") or "unconfirmed")
         ),
@@ -168,6 +177,115 @@ def _claims_to_json(claims: tuple[PackageClaim, ...]) -> list[dict[str, object]]
     ]
 
 
+def _package_version_claims_to_json(
+    claims: tuple[PackageClaimVersion, ...],
+) -> list[dict[str, object]]:
+    return [
+        {"claim_text": c.claim_text, "evidence_ids": [str(e) for e in c.evidence_ids]}
+        for c in claims
+    ]
+
+
+def _attachments_to_json(attachments: tuple[PackageAttachment, ...]) -> list[dict[str, object]]:
+    return [
+        {
+            "name": a.name,
+            "content_hash": a.content_hash,
+            "media_type": a.media_type,
+            "size_bytes": a.size_bytes,
+        }
+        for a in attachments
+    ]
+
+
+def _diff_to_json(diff: tuple[PackageDiffEntry, ...]) -> list[dict[str, object]]:
+    return [
+        {
+            "section": d.section,
+            "original_text": d.original_text,
+            "proposed_text": d.proposed_text,
+            "evidence_ids": [str(e) for e in d.evidence_ids],
+            "source": d.source,
+        }
+        for d in diff
+    ]
+
+
+def _requirement_gaps_to_json(gaps: tuple[RequirementGap, ...]) -> list[dict[str, object]]:
+    return [
+        {
+            "requirement_name": g.requirement_name,
+            "match_level": g.match_level,
+            "reason": g.reason,
+            "rules_version": g.rules_version,
+        }
+        for g in gaps
+    ]
+
+
+def _row_to_package_version(row: sa.RowMapping) -> ApplicationPackageVersion:
+    raw_claims: list[dict[str, Any]] = row["claims"] or []
+    claims = tuple(
+        PackageClaimVersion(
+            claim_text=c["claim_text"],
+            evidence_ids=tuple(UUID(e) for e in c.get("evidence_ids", ())),
+        )
+        for c in raw_claims
+    )
+    raw_attachments: list[dict[str, Any]] = row["attachments"] or []
+    attachments = tuple(
+        PackageAttachment(
+            name=a["name"],
+            content_hash=a["content_hash"],
+            media_type=a.get("media_type", ""),
+            size_bytes=a.get("size_bytes", 0),
+        )
+        for a in raw_attachments
+    )
+    raw_diff: list[dict[str, Any]] = row["diff"] or []
+    diff = tuple(
+        PackageDiffEntry(
+            section=d["section"],
+            original_text=d.get("original_text", ""),
+            proposed_text=d.get("proposed_text", ""),
+            evidence_ids=tuple(UUID(e) for e in d.get("evidence_ids", ())),
+            source=d.get("source", "user"),
+        )
+        for d in raw_diff
+    )
+    raw_gaps: list[dict[str, Any]] = row["requirement_gaps"] or []
+    gaps = tuple(
+        RequirementGap(
+            requirement_name=g["requirement_name"],
+            match_level=g["match_level"],
+            reason=g.get("reason", ""),
+            rules_version=g.get("rules_version", ""),
+        )
+        for g in raw_gaps
+    )
+    return ApplicationPackageVersion(
+        id=row["id"],
+        application_id=row["application_id"],
+        version_number=row["version_number"],
+        resume_version_id=row["resume_version_id"],
+        job_version_id=row.get("job_version_id"),
+        profile_version_id=row.get("profile_version_id"),
+        cover_letter_text=row["cover_letter_text"],
+        notes=row["notes"],
+        answers=row["answers"] or {},
+        claims=claims,
+        attachments=attachments,
+        diff=diff,
+        requirement_gaps=gaps,
+        payload_hash=row.get("payload_hash"),
+        approval_state=PackageApprovalState(row["approval_state"]),
+        approved_at=row["approved_at"],
+        approved_by=row.get("approved_by", ""),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
 class PostgresApplicationRepository:
     """PostgreSQL-backed application, event, resume, package, and follow-up store.
 
@@ -199,7 +317,7 @@ class PostgresApplicationRepository:
             row = conn.execute(stmt).mappings().first()
         return _row_to_application(row) if row else None
 
-    def save(self, application: Application) -> None:
+    def _application_upsert_stmt(self, application: Application) -> Any:
         values = {
             "id": application.id,
             "candidate_id": application.candidate_id,
@@ -243,8 +361,11 @@ class PostgresApplicationRepository:
                 },
             )
         )
+        return stmt
+
+    def save(self, application: Application) -> None:
         with self._engine.begin() as conn:
-            conn.execute(stmt)
+            conn.execute(self._application_upsert_stmt(application))
 
     def append_event(self, event: ApplicationEvent) -> None:
         stmt = application_lifecycle_events.insert().values(
@@ -261,6 +382,24 @@ class PostgresApplicationRepository:
         )
         with self._engine.begin() as conn:
             conn.execute(stmt)
+
+    def save_and_append_event(self, application: Application, event: ApplicationEvent) -> None:
+        """Persist an application transition and its audit event atomically."""
+        event_stmt = application_lifecycle_events.insert().values(
+            id=event.id,
+            application_id=event.application_id,
+            event_type=event.event_type.value,
+            from_state=event.from_state.value if event.from_state else None,
+            to_state=event.to_state.value if event.to_state else None,
+            source=event.source.value,
+            actor_id=event.actor_id,
+            note=event.note,
+            event_data=event.event_data,
+            occurred_at=event.occurred_at,
+        )
+        with self._engine.begin() as conn:
+            conn.execute(self._application_upsert_stmt(application))
+            conn.execute(event_stmt)
 
     def get_events(self, application_id: UUID) -> list[ApplicationEvent]:
         stmt = (
@@ -298,6 +437,7 @@ class PostgresApplicationRepository:
                 human_confirmed=version.human_confirmed,
                 # 2.4 lifecycle fields
                 parse_status=version.parse_status.value,
+                parse_error=version.parse_error,
                 confirmation_status=version.confirmation_status.value,
                 source_reference=version.source_reference,
                 parsed_at=version.parsed_at,
@@ -312,6 +452,7 @@ class PostgresApplicationRepository:
                     "target_type": version.target_type,
                     "human_confirmed": version.human_confirmed,
                     "parse_status": version.parse_status.value,
+                    "parse_error": version.parse_error,
                     "confirmation_status": version.confirmation_status.value,
                     "source_reference": version.source_reference,
                     "parsed_at": version.parsed_at,
@@ -443,6 +584,101 @@ class PostgresApplicationRepository:
         )
         with self._engine.begin() as conn:
             conn.execute(stmt)
+
+    # -- Application package versions (Section 8) --------------------------
+
+    def find_latest_package_version(self, application_id: UUID) -> ApplicationPackageVersion | None:
+        """Return the highest-numbered package version for the application."""
+        stmt = (
+            sa.select(application_package_versions)
+            .where(application_package_versions.c.application_id == application_id)
+            .order_by(application_package_versions.c.version_number.desc())
+            .limit(1)
+        )
+        with self._engine.begin() as conn:
+            row = conn.execute(stmt).mappings().first()
+        return _row_to_package_version(row) if row else None
+
+    def find_package_version(
+        self, application_id: UUID, version_id: UUID
+    ) -> ApplicationPackageVersion | None:
+        stmt = sa.select(application_package_versions).where(
+            sa.and_(
+                application_package_versions.c.application_id == application_id,
+                application_package_versions.c.id == version_id,
+            )
+        )
+        with self._engine.begin() as conn:
+            row = conn.execute(stmt).mappings().first()
+        return _row_to_package_version(row) if row else None
+
+    def list_package_versions(
+        self, application_id: UUID, *, limit: int = 50
+    ) -> list[ApplicationPackageVersion]:
+        stmt = (
+            sa.select(application_package_versions)
+            .where(application_package_versions.c.application_id == application_id)
+            .order_by(application_package_versions.c.version_number.desc())
+            .limit(limit)
+        )
+        with self._engine.begin() as conn:
+            rows = conn.execute(stmt).mappings().all()
+        return [_row_to_package_version(row) for row in rows]
+
+    def save_package_version(self, version: ApplicationPackageVersion) -> None:
+        """Insert a new package version row (immutable; copy-on-write).
+
+        Version numbers are assigned by the service (max+1) and enforced
+        unique per application by ``uq_application_package_versions_app_version``.
+        ``on_conflict_do_update`` only reconcils the same ``id`` on retry; it
+        never rewrites a different version in place.
+        """
+        stmt = pg_insert(application_package_versions).values(
+            id=version.id,
+            application_id=version.application_id,
+            version_number=version.version_number,
+            resume_version_id=version.resume_version_id,
+            job_version_id=version.job_version_id,
+            profile_version_id=version.profile_version_id,
+            cover_letter_text=version.cover_letter_text,
+            notes=version.notes,
+            answers=version.answers,
+            claims=_package_version_claims_to_json(version.claims),
+            attachments=_attachments_to_json(version.attachments),
+            diff=_diff_to_json(version.diff),
+            requirement_gaps=_requirement_gaps_to_json(version.requirement_gaps),
+            payload_hash=version.payload_hash,
+            approval_state=version.approval_state.value,
+            approved_at=version.approved_at,
+            approved_by=version.approved_by,
+            updated_at=version.updated_at,
+        )
+        with self._engine.begin() as conn:
+            conn.execute(stmt)
+
+    def approve_package_version(self, version: ApplicationPackageVersion) -> None:
+        """Advance approval metadata without re-inserting an immutable row."""
+        stmt = (
+            sa.update(application_package_versions)
+            .where(
+                sa.and_(
+                    application_package_versions.c.id == version.id,
+                    application_package_versions.c.application_id == version.application_id,
+                    application_package_versions.c.approval_state
+                    == PackageApprovalState.DRAFT.value,
+                )
+            )
+            .values(
+                approval_state=version.approval_state.value,
+                approved_at=version.approved_at,
+                approved_by=version.approved_by,
+                updated_at=version.updated_at,
+            )
+        )
+        with self._engine.begin() as conn:
+            result = conn.execute(stmt)
+            if result.rowcount != 1:
+                raise ValueError("package version was not in an approvable draft state")
 
     # -- FollowUpRepository protocol ---------------------------------------
 

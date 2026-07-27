@@ -12,6 +12,7 @@ v1 posture: this provider is only injected when
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 
 from careerops.domain.side_effects import (
     ProviderCallResult,
@@ -52,11 +53,13 @@ class GmailSideEffectProvider:
         self,
         sender: GmailSender,
         receipt_store: GmailReceiptStore | None = None,
+        storage: object | None = None,
     ) -> None:
         self._sender = sender
         self._receipt_store: GmailReceiptStore = (
             receipt_store if receipt_store is not None else InMemoryGmailReceiptStore()
         )
+        self._storage = storage
 
     def execute(
         self,
@@ -88,7 +91,21 @@ class GmailSideEffectProvider:
                 failure_class=ProviderFailureClass.VALIDATION,
             )
 
-        email = OutgoingEmail(to=to, subject=subject, body=body)
+        # Resolve attachment hashes to actual file paths via storage.
+        attachment_paths: tuple[Path, ...] = ()
+        attachment_hashes = payload.get("attachment_hashes", [])
+        if attachment_hashes and self._storage is not None:
+            resolved: list[Path] = []
+            for hash_val in attachment_hashes:
+                try:
+                    path = self._storage.get(str(hash_val))  # type: ignore[union-attr]
+                    if path is not None:
+                        resolved.append(Path(path))
+                except Exception:
+                    pass  # missing attachment is not a send failure; hash-only ref
+            attachment_paths = tuple(resolved)
+
+        email = OutgoingEmail(to=to, subject=subject, body=body, attachments=attachment_paths)
         try:
             result = self._sender.send(email)
         except GmailSendError as exc:

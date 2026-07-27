@@ -408,7 +408,8 @@ class RuntimeResources:
 
         Uses ``GmailSideEffectProvider`` when both ``auto_send_enabled`` and
         ``external_writes_enabled`` are True; otherwise falls back to
-        ``FakeSideEffectProvider``.
+        ``FakeSideEffectProvider``. Storage is passed to the Gmail provider
+        so it can resolve attachment hashes to actual file paths for sending.
         """
         settings = self._settings
         if settings.auto_send_enabled and settings.external_writes_enabled:

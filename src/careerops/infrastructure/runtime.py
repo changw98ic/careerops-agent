@@ -21,7 +21,7 @@ from careerops.application.ports.readiness import (
     ReadinessReport,
     ReadinessState,
 )
-from careerops.config import RuntimeEnvironment, Settings
+from careerops.config import DeploymentMode, RuntimeEnvironment, Settings
 from careerops.infrastructure.database.engine import create_database_engine
 from careerops.infrastructure.storage.local import LocalContentAddressedStorage
 from careerops.integrations.fake_side_effect_provider import SideEffectProvider
@@ -68,7 +68,8 @@ class RuntimeResources:
         self._settings = settings
         self._metrics = metrics
         is_prod = settings.environment is RuntimeEnvironment.PRODUCTION
-        self.database: Engine = create_database_engine(settings, enforce_role=is_prod)
+        enforce_role = is_prod or settings.deployment_mode is DeploymentMode.COMPOSE_LOOPBACK
+        self.database: Engine = create_database_engine(settings, enforce_role=enforce_role)
         self.redis = cast(
             "AsyncRedisClient",
             AsyncRedis.from_url(  # pyright: ignore[reportUnknownMemberType]

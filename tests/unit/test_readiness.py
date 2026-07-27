@@ -4,7 +4,7 @@ import pytest
 
 import careerops.infrastructure.runtime as runtime
 from careerops.application.ports.readiness import ReadinessReport, ReadinessState
-from careerops.config import RuntimeEnvironment, Settings
+from careerops.config import DeploymentMode, RuntimeEnvironment, Settings
 from careerops.infrastructure.runtime import RuntimeResources
 
 
@@ -42,7 +42,13 @@ async def test_runtime_readiness_isolates_component_failures(
     fake_engine = FakeEngine()
     fake_async_redis = FakeAsyncRedis()
     fake_sync_redis = FakeSyncRedis()
-    monkeypatch.setattr(runtime, "create_database_engine", lambda _settings, **_kw: fake_engine)
+    enforce_roles: list[bool] = []
+
+    def fake_create_database_engine(_settings: Settings, **kwargs: object) -> FakeEngine:
+        enforce_roles.append(bool(kwargs["enforce_role"]))
+        return fake_engine
+
+    monkeypatch.setattr(runtime, "create_database_engine", fake_create_database_engine)
     monkeypatch.setattr(runtime.AsyncRedis, "from_url", lambda *_args, **_kwargs: fake_async_redis)
     monkeypatch.setattr(runtime.SyncRedis, "from_url", lambda *_args, **_kwargs: fake_sync_redis)
     resources = RuntimeResources(
@@ -54,6 +60,7 @@ async def test_runtime_readiness_isolates_component_failures(
             }
         )
     )
+    assert enforce_roles == [False]
 
     async def ok() -> None:
         return None
@@ -82,6 +89,18 @@ async def test_runtime_readiness_isolates_component_failures(
     assert all(
         state is ReadinessState.NOT_READY for state in (await resources.check()).checks.values()
     )
+
+    compose_resources = RuntimeResources(
+        Settings.model_validate(
+            {
+                "deployment_mode": DeploymentMode.COMPOSE_LOOPBACK,
+                "storage_root": tmp_path / "compose-objects",
+                "readiness_timeout_seconds": 0.1,
+            }
+        )
+    )
+    assert enforce_roles == [False, True]
+    await compose_resources.close()
     assert (
         ReadinessReport(
             checks={

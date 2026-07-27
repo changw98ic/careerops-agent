@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-import subprocess
+import subprocess  # nosec B404 -- fixed argv, no shell execution
 from datetime import UTC, datetime
 from typing import Final, cast
 from urllib.parse import urlsplit
@@ -94,7 +94,7 @@ if (html.length > cap) throw new Error('browser page body exceeds response cap')
 cliLog('{_RESULT_MARKER}' + JSON.stringify({{ finalUrl, html }}));
 """
         try:
-            completed = subprocess.run(
+            completed = subprocess.run(  # nosec B603 -- fixed argv and shell disabled
                 [self._binary, "nodejs", "-e", script],
                 capture_output=True,
                 text=True,

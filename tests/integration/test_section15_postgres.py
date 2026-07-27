@@ -80,16 +80,12 @@ def _seed_app_fk_rows(conn: sa.Connection, candidate_id: UUID, job_id: UUID | No
 @pytest.fixture(autouse=True)
 def _run_migrations(engine: sa.Engine) -> None:
     """Run alembic migrations before each test."""
-    import sys
+    from alembic import command
+    from alembic.config import Config
 
-    from alembic.config import main as alembic_main
-
-    old_argv = sys.argv
-    sys.argv = ["alembic", "upgrade", "head"]
-    try:
-        alembic_main()
-    finally:
-        sys.argv = old_argv
+    config = Config("alembic.ini")
+    config.attributes["database_url"] = os.environ["CAREEROPS_TEST_DATABASE_URL"]
+    command.upgrade(config, "head")
 
 
 # ---------------------------------------------------------------------------

@@ -462,7 +462,7 @@ def _open_request(req: urllib.request.Request, *, timeout: float) -> Any:
     if urllib.request.urlopen is _ORIGINAL_URLOPEN:
         opener = urllib.request.build_opener(_NoRedirectHandler())
         return opener.open(req, timeout=timeout)
-    return urllib.request.urlopen(req, timeout=timeout)
+    return urllib.request.urlopen(req, timeout=timeout)  # nosec B310 -- redirects are disabled
 
 
 _ORIGINAL_URLOPEN = urllib.request.urlopen

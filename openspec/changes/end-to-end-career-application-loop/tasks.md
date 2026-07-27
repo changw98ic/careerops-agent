@@ -187,7 +187,7 @@
 - [x] 15.6 Add secret/PII scans for logs, payloads, model egress, attachments, database dumps, and frontend error responses.
 - [x] 15.7 Add metrics for crawl plans/runs, inbox decisions, package approvals, send intents, provider receipts, reconciliation, mail proposals, review latency, and follow-up completion with bounded labels.
 - [x] 15.8 Add audit assertions for profile confirmation, package approval, email confirmation, provider receipt, mail-event review, reply approval, and reminder changes.
-- [ ] 15.9 Run `make verify`, `make verify-db`, `make verify-temporal`, `make verify-frontend`, `make security`, and relevant dependency/image audits in disposable environments.
+- [x] 15.9 Run `make verify`, `make verify-db`, `make verify-temporal`, `make verify-frontend`, `make security`, and relevant dependency/image audits in disposable environments.
 - [x] 15.10 Add compatibility tests proving legacy internal drafts, old application events, and historical email receipts are projected accurately and never reported as newly sent provider messages.
 - [ ] 15.11 Add staged verification commands/evidence for the crawl slice, application/package slice, fake-provider send slice, and mail-intelligence slice so each boundary has an independently recorded pass/fail result.
 - [x] 15.12 Add operator runbooks and bounded alerts for stuck crawl runs, repeated source denials, stale mail cursors, pending approvals, reconciliation backlog, revoked accounts, and failed retention/purge work.

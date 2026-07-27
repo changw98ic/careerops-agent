@@ -82,6 +82,7 @@ def upgrade() -> None:
         "ck_email_accounts_connection_state",
         "email_accounts",
         "connection_state IN ('disconnected', 'connected', 'revoked', 'error')",
+        schema="careerops",
     )
     op.create_index(
         "ix_email_accounts_candidate",
@@ -231,7 +232,7 @@ def downgrade() -> None:
     op.drop_table("email_sync_runs", schema="careerops")
     op.drop_index("ix_email_accounts_candidate", table_name="email_accounts", schema="careerops")
     op.drop_constraint(
-        "ck_email_accounts_connection_state",
+        "ck_email_accounts_ck_email_accounts_connection_state",
         "email_accounts",
         schema="careerops",
     )

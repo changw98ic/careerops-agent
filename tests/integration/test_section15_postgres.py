@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 import sqlalchemy as sa
@@ -41,6 +41,41 @@ pytestmark = pytest.mark.skipif(
 def engine() -> sa.Engine:
     url = os.environ["CAREEROPS_TEST_DATABASE_URL"]
     return sa.create_engine(url)
+
+
+def _seed_app_fk_rows(
+    conn: sa.Connection, candidate_id: UUID, job_id: UUID | None = None
+) -> UUID:
+    """Insert the FK dependency rows needed to create an application.
+
+    Returns the canonical_job_id (newly generated if not supplied).
+    Uses unique names to avoid conflicts with the normalized_name unique index.
+    """
+    job_id = job_id or uuid4()
+    company_id = uuid4()
+    conn.execute(
+        sa.text(
+            "INSERT INTO careerops.candidates (id, display_name) "
+            "VALUES (:id, 'test') ON CONFLICT DO NOTHING"
+        ),
+        {"id": candidate_id},
+    )
+    conn.execute(
+        sa.text(
+            "INSERT INTO careerops.companies (id, name, normalized_name) "
+            "VALUES (:cid, :name, :norm) ON CONFLICT DO NOTHING"
+        ),
+        {"cid": company_id, "name": f"TestCo-{company_id}", "norm": f"testco-{company_id}"},
+    )
+    conn.execute(
+        sa.text(
+            "INSERT INTO careerops.canonical_jobs "
+            "(id, company_id, canonical_title, normalized_title) "
+            "VALUES (:jid, :cid, 'Test Job', 'test job') ON CONFLICT DO NOTHING"
+        ),
+        {"jid": job_id, "cid": company_id},
+    )
+    return job_id
 
 
 @pytest.fixture(autouse=True)
@@ -167,25 +202,8 @@ class TestAppendOnlyEvents:
 
     def test_insert_lifecycle_event(self, engine: sa.Engine) -> None:
         with engine.begin() as conn:
-            # Insert a candidate first (FK dependency).
             cid = uuid4()
-            conn.execute(
-                sa.text(
-                    "INSERT INTO careerops.candidates (id, display_name) "
-                    "VALUES (:id, 'test') ON CONFLICT DO NOTHING"
-                ),
-                {"id": cid},
-            )
-            # Insert a canonical job.
-            jid = uuid4()
-            conn.execute(
-                sa.text(
-                    "INSERT INTO careerops.companies (id, name, normalized_name) "
-                    "VALUES (:cid, 'TestCo', 'testco') ON CONFLICT DO NOTHING"
-                ),
-                {"cid": uuid4()},
-            )
-            # Insert an application.
+            jid = _seed_app_fk_rows(conn, cid)
             aid = uuid4()
             conn.execute(
                 sa.text(
@@ -229,14 +247,7 @@ class TestUniqueKeyConstraints:
         duplicate applications."""
         with engine.begin() as conn:
             cid = uuid4()
-            jid = uuid4()
-            conn.execute(
-                sa.text(
-                    "INSERT INTO careerops.candidates (id, display_name) "
-                    "VALUES (:id, 'test') ON CONFLICT DO NOTHING"
-                ),
-                {"id": cid},
-            )
+            jid = _seed_app_fk_rows(conn, cid)
             conn.execute(
                 sa.text(
                     "INSERT INTO careerops.applications"
@@ -297,15 +308,15 @@ class TestOwnershipFilters:
     def test_application_scoped_by_candidate(self, engine: sa.Engine) -> None:
         with engine.begin() as conn:
             cid1, cid2 = uuid4(), uuid4()
-            jid = uuid4()
-            for cid in (cid1, cid2):
-                conn.execute(
-                    sa.text(
-                        "INSERT INTO careerops.candidates (id, display_name) "
-                        "VALUES (:id, 'test') ON CONFLICT DO NOTHING"
-                    ),
-                    {"id": cid},
-                )
+            jid = _seed_app_fk_rows(conn, cid1)
+            # Second candidate only needs the candidate row (job/company exist).
+            conn.execute(
+                sa.text(
+                    "INSERT INTO careerops.candidates (id, display_name) "
+                    "VALUES (:id, 'test2') ON CONFLICT DO NOTHING"
+                ),
+                {"id": cid2},
+            )
             aid1, aid2 = uuid4(), uuid4()
             conn.execute(
                 sa.text(

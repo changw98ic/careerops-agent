@@ -253,6 +253,38 @@
           </a-form>
         </a-card>
 
+        <!-- System-managed send progress (Section 10, task 10.11) -->
+        <a-card
+          v-if="systemSend.intentId"
+          title="系统发送进度"
+          class="detail-card"
+          style="margin-top: 16px"
+        >
+          <a-alert
+            v-if="systemSend.error"
+            type="error"
+            show-icon
+            :message="systemSend.error"
+            closable
+            style="margin-bottom: 12px"
+            @close="systemSend.error = ''"
+          />
+          <div class="system-send-progress">
+            <SystemSendStatusBadge v-if="systemSend.status" :status="systemSend.status" />
+            <a-spin v-else size="small" />
+            <span class="muted system-send-progress__hint">{{ systemSendHint }}</span>
+          </div>
+          <div v-if="isSystemSendReconciliation" style="margin-top: 12px">
+            <a-button
+              size="small"
+              :loading="actionLoading === 'reconcile'"
+              @click="onEscalateReconciliation"
+            >
+              标记为人工核对任务
+            </a-button>
+          </div>
+        </a-card>
+
         <!-- Timeline -->
         <a-card title="事件时间线" class="detail-card" style="margin-top: 16px">
           <a-alert
@@ -318,6 +350,12 @@
         @created="onPackageCreated"
       />
     </div>
+
+    <!-- Full-width submission preview (Section 9). Shows the exact email
+         payload the user will confirm: recipient, subject, body, attachments,
+         source evidence, and the explicit "system will send after
+         confirmation" notice. Performs NO provider side effects. -->
+    <SubmissionPreview :application-id="appId" />
   </div>
 
   <!-- Loading state -->
@@ -358,7 +396,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowLeftOutlined,
@@ -368,6 +406,8 @@ import {
 import { message } from 'ant-design-vue'
 import { api, parseApiError } from '../api/client.js'
 import PackageEditor from '../components/PackageEditor.vue'
+import SubmissionPreview from '../components/SubmissionPreview.vue'
+import SystemSendStatusBadge from '../components/SystemSendStatusBadge.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -396,6 +436,28 @@ const submissionForm = ref({
   note: '',
 })
 const submissionFormError = ref('')
+
+// --- system-managed send progress (Section 10) ---
+// Holds the active send intent for this application + its polled phase. A
+// queued/pending send is NEVER shown as sent (task 10.11).
+const systemSend = ref({
+  intentId: null,
+  status: null,
+  error: '',
+  pollTimer: null,
+})
+const isSystemSendReconciliation = computed(
+  () => systemSend.value.status?.phase === 'reconciliation_required'
+)
+const systemSendHint = computed(() => {
+  const phase = systemSend.value.status?.phase
+  if (phase === 'pending') return '系统正在通过受控通道发送，请勿关闭页面。'
+  if (phase === 'sent') return '已收到提供商回执，申请已标记为已投递。'
+  if (phase === 'failed') return '发送失败，请检查后重新确认。'
+  if (phase === 'reconciliation_required')
+    return '结果不明确，已停止自动重试，请人工核对。'
+  return ''
+})
 
 // --- computed ---
 const appId = computed(() => route.params.id)
@@ -650,6 +712,86 @@ function isTerminal(state) {
     isState(state, 'offer') ||
     isState(state, 'rejected')
 }
+
+// --- system-managed send (Section 10) ---
+// Confirms the CareerOps final send. The backend records a durable intent and
+// returns ``pending``; the provider is NOT called synchronously. We then poll
+// the status until it reaches a terminal phase (sent / failed /
+// reconciliation_required). The UI never displays pending as sent.
+async function onConfirmSystemSend(payload) {
+  if (!app.value) return
+  systemSend.value.error = ''
+  actionLoading.value = 'system-send'
+  try {
+    const res = await api.confirmSystemSend(app.value.id, payload)
+    systemSend.value.intentId = res.intent_id
+    systemSend.value.status = res
+    startSystemSendPolling()
+  } catch (err) {
+    const info = parseApiError(err)
+    if (info.isDependencyNotReady) {
+      systemSend.value.error = '发送服务暂不可用（503），请稍后重试。'
+    } else if (err?.status === 403) {
+      systemSend.value.error = '发送被策略拒绝：' + (info.message || 'DENIED_POLICY')
+    } else {
+      systemSend.value.error = info.message || '发送确认失败'
+    }
+  } finally {
+    actionLoading.value = ''
+  }
+}
+
+function startSystemSendPolling() {
+  stopSystemSendPolling()
+  if (!systemSend.value.intentId) return
+  systemSend.value.pollTimer = setInterval(pollSystemSend, 3000)
+}
+
+function stopSystemSendPolling() {
+  if (systemSend.value.pollTimer) {
+    clearInterval(systemSend.value.pollTimer)
+    systemSend.value.pollTimer = null
+  }
+}
+
+async function pollSystemSend() {
+  if (!systemSend.value.intentId || !app.value) return
+  try {
+    const status = await api.getSystemSendStatus(app.value.id, systemSend.value.intentId)
+    systemSend.value.status = status
+    // Stop polling once the send reaches a terminal phase.
+    if (['sent', 'failed', 'reconciliation_required'].includes(status.phase)) {
+      stopSystemSendPolling()
+      if (status.phase === 'sent') {
+        await loadAll()
+      }
+    }
+  } catch (err) {
+    // Keep the last known status; surface the error but keep polling a while.
+    const info = parseApiError(err)
+    systemSend.value.error = info.message || '状态查询失败'
+  }
+}
+
+async function onEscalateReconciliation() {
+  if (!systemSend.value.intentId || !app.value) return
+  actionLoading.value = 'reconcile'
+  try {
+    const status = await api.escalateSystemSendReconciliation(
+      app.value.id,
+      systemSend.value.intentId
+    )
+    systemSend.value.status = status
+    stopSystemSendPolling()
+  } catch (err) {
+    const info = parseApiError(err)
+    systemSend.value.error = info.message || '人工核对标记失败'
+  } finally {
+    actionLoading.value = ''
+  }
+}
+
+onBeforeUnmount(stopSystemSendPolling)
 
 function stateColor(state) {
   const s = String(state || '').toLowerCase()

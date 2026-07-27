@@ -289,6 +289,12 @@ def event_to_timeline_entry(event: ApplicationEvent) -> TimelineEntry:
     status = TimelineEntryStatus.CONFIRMED
     if event.event_type is ApplicationEventType.SUBMITTED_MANUALLY:
         title = "Submission recorded (manual / external form)"
+    elif event.event_type is ApplicationEventType.SUBMITTED_VIA_PROVIDER:
+        title = "Submission delivered (system-managed send)"
+        status = TimelineEntryStatus.CONFIRMED
+    elif event.event_type is ApplicationEventType.PROVIDER_SEND_FAILED:
+        title = "Delivery failed (provider)"
+        status = TimelineEntryStatus.FAILED
     elif event.event_type is ApplicationEventType.PACKAGE_ATTACHED:
         title = "Application package attached"
     elif event.event_type is ApplicationEventType.STATE_CHANGED:
@@ -322,6 +328,11 @@ _EVENT_KIND_MAP: dict[ApplicationEventType, tuple[TimelineEntryKind, str]] = {
     ApplicationEventType.CREATED: (TimelineEntryKind.DECISION, "Application created"),
     ApplicationEventType.STATE_CHANGED: (TimelineEntryKind.DECISION, "State changed"),
     ApplicationEventType.SUBMITTED_MANUALLY: (TimelineEntryKind.SUBMISSION, "Submission recorded"),
+    ApplicationEventType.SUBMITTED_VIA_PROVIDER: (
+        TimelineEntryKind.SUBMISSION,
+        "Submission delivered (system-managed send)",
+    ),
+    ApplicationEventType.PROVIDER_SEND_FAILED: (TimelineEntryKind.SUBMISSION, "Delivery failed"),
     ApplicationEventType.PACKAGE_ATTACHED: (
         TimelineEntryKind.PACKAGE_EVENT,
         "Application package attached",

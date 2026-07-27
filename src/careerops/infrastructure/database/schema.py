@@ -1790,6 +1790,24 @@ email_accounts = sa.Table(
     sa.Column("history_id", sa.Text(), server_default="", nullable=False),
     sa.Column("watch_expiration", sa.DateTime(timezone=True)),
     sa.Column("last_sync_at", sa.DateTime(timezone=True)),
+    # Section 11 (additive): dedicated-account connection state. ``candidate_id``
+    # scopes the account server-side (Iron Rule 2 — the legacy table was
+    # unscoped). ``granted_scopes`` stores the validated readonly scope set
+    # (JSONB array; always a subset of the gmail.readonly allowlist).
+    # ``connection_state`` is the explicit lifecycle (disconnected/connected/
+    # revoked/error) separate from the legacy ``status`` tri-state.
+    # ``last_error_code`` carries a bounded machine code for ERROR/REVOKED.
+    sa.Column("candidate_id", sa.Uuid(), nullable=True),
+    sa.Column(
+        "granted_scopes",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "connection_state", sa.String(16), server_default="disconnected", nullable=False
+    ),
+    sa.Column("last_error_code", sa.Text(), server_default="", nullable=False),
     sa.Column(
         "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     ),
@@ -1799,6 +1817,10 @@ email_accounts = sa.Table(
     sa.CheckConstraint(
         "status IN ('active', 'revoked', 'error')",
         name="status_values",
+    ),
+    sa.CheckConstraint(
+        "connection_state IN ('disconnected', 'connected', 'revoked', 'error')",
+        name="ck_email_accounts_connection_state",
     ),
 )
 
@@ -1998,6 +2020,126 @@ attachment_quarantine = sa.Table(
         "(status = 'quarantined' AND resolved_at IS NULL)",
         name="resolution_timestamp_consistent",
     ),
+)
+
+# ---------------------------------------------------------------------------
+# Section 11: Gmail read sync — durable sync runs + thread association links
+# ---------------------------------------------------------------------------
+
+email_sync_runs = sa.Table(
+    "email_sync_runs",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "account_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.email_accounts.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column("candidate_id", sa.Uuid(), nullable=False),
+    sa.Column("status", sa.String(16), server_default="pending", nullable=False),
+    sa.Column("direction", sa.String(16), server_default="incremental", nullable=False),
+    sa.Column("started_at", sa.DateTime(timezone=True)),
+    sa.Column("completed_at", sa.DateTime(timezone=True)),
+    sa.Column("messages_processed", sa.Integer(), server_default="0", nullable=False),
+    sa.Column("messages_skipped", sa.Integer(), server_default="0", nullable=False),
+    sa.Column("history_id_start", sa.Text(), server_default="", nullable=False),
+    sa.Column("history_id_end", sa.Text(), server_default="", nullable=False),
+    sa.Column("error_code", sa.Text(), server_default="", nullable=False),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.Column(
+        "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.CheckConstraint(
+        "status IN ('pending', 'running', 'completed', 'partial', 'failed')",
+        name="ck_email_sync_runs_status",
+    ),
+    sa.CheckConstraint(
+        "direction IN ('full', 'incremental', 'backfill')",
+        name="ck_email_sync_runs_direction",
+    ),
+    sa.CheckConstraint("messages_processed >= 0", name="ck_email_sync_runs_processed"),
+    sa.CheckConstraint("messages_skipped >= 0", name="ck_email_sync_runs_skipped"),
+)
+
+sa.Index(
+    "ix_email_sync_runs_account_created",
+    email_sync_runs.c.account_id,
+    email_sync_runs.c.created_at,
+)
+
+email_sync_cursors = sa.Table(
+    "email_sync_cursors",
+    metadata,
+    sa.Column(
+        "account_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.email_accounts.id", ondelete="RESTRICT"),
+        primary_key=True,
+    ),
+    sa.Column("history_id", sa.Text(), server_default="", nullable=False),
+    sa.Column("watch_expiration", sa.DateTime(timezone=True)),
+    sa.Column(
+        "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+)
+
+email_thread_links = sa.Table(
+    "email_thread_links",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "thread_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.email_threads.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column("account_id", sa.Uuid(), nullable=False),
+    sa.Column("candidate_id", sa.Uuid(), nullable=False),
+    sa.Column(
+        "application_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.applications.id", ondelete="SET NULL"),
+    ),
+    sa.Column("status", sa.String(16), server_default="unlinked", nullable=False),
+    sa.Column("confidence", sa.String(24), server_default="none", nullable=False),
+    sa.Column(
+        "candidate_application_ids",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "evidence_refs",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column("resolved_at", sa.DateTime(timezone=True)),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.Column(
+        "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.UniqueConstraint("thread_id", name="uq_email_thread_links_thread"),
+    sa.CheckConstraint(
+        "status IN ('unlinked', 'linked', 'unresolved', 'confirmed')",
+        name="ck_email_thread_links_status",
+    ),
+    sa.CheckConstraint(
+        "confidence IN ('provider_id', 'sent_message', 'trusted_domain', "
+        "'subject_source', 'none')",
+        name="ck_email_thread_links_confidence",
+    ),
+)
+
+sa.Index(
+    "ix_email_thread_links_candidate_status",
+    email_thread_links.c.candidate_id,
+    email_thread_links.c.status,
 )
 
 # ---------------------------------------------------------------------------
@@ -2785,3 +2927,232 @@ inbox_snoozes = sa.Table(
         name="uq_inbox_snoozes_candidate_job",
     ),
 )
+
+
+# Section 12 — recruiting mail intelligence: durable EmailEventProposal store.
+# Additive (Iron Rule 8): one new table; no existing table is modified. The
+# proposal links a message/thread to at most one application (nullable for the
+# unresolved-link case, task 12.10). The extraction is stored as an immutable
+# JSONB snapshot; only the decision state is mutable (pending -> terminal).
+# Server-side candidate scoping is enforced via ``candidate_id`` (the
+# server-resolved owner); a unique idempotency_key makes extraction idempotent.
+email_event_proposals = sa.Table(
+    "email_event_proposals",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "message_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.email_messages.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column(
+        "thread_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.email_threads.id", ondelete="RESTRICT"),
+        nullable=True,
+    ),
+    sa.Column(
+        "account_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.email_accounts.id", ondelete="RESTRICT"),
+        nullable=True,
+    ),
+    sa.Column(
+        "candidate_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.candidates.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column(
+        "application_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.applications.id", ondelete="SET NULL"),
+        nullable=True,
+    ),
+    sa.Column("category", sa.String(24), nullable=False),
+    sa.Column("proposed_state", sa.String(24), nullable=True),
+    sa.Column(
+        "extraction",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column("confidence", sa.Numeric(5, 4), server_default="0", nullable=False),
+    sa.Column(
+        "high_risk",
+        sa.Boolean(),
+        server_default=sa.text("false"),
+        nullable=False,
+    ),
+    sa.Column(
+        "review_required",
+        sa.Boolean(),
+        server_default=sa.text("true"),
+        nullable=False,
+    ),
+    sa.Column(
+        "prompt_injection_detected",
+        sa.Boolean(),
+        server_default=sa.text("false"),
+        nullable=False,
+    ),
+    sa.Column("idempotency_key", sa.String(128), nullable=False),
+    sa.Column("state", sa.String(16), server_default="pending", nullable=False),
+    sa.Column("extraction_source", sa.String(8), server_default="rules", nullable=False),
+    sa.Column("rules_version", sa.Text(), server_default="", nullable=False),
+    sa.Column("model_version", sa.Text(), server_default="", nullable=False),
+    sa.Column("decided_at", sa.DateTime(timezone=True), nullable=True),
+    sa.Column("decided_by", sa.Text(), server_default="", nullable=False),
+    sa.Column(
+        "created_at",
+        sa.DateTime(timezone=True),
+        server_default=sa.func.now(),
+        nullable=False,
+    ),
+    sa.Column(
+        "updated_at",
+        sa.DateTime(timezone=True),
+        server_default=sa.func.now(),
+        nullable=False,
+    ),
+    sa.UniqueConstraint("idempotency_key", name="uq_email_event_proposals_idempotency"),
+    sa.CheckConstraint(
+        "state IN ('pending', 'accepted', 'rejected', 'superseded')",
+        name="state_values",
+    ),
+    sa.CheckConstraint(
+        "extraction_source IN ('rules', 'model')",
+        name="extraction_source_values",
+    ),
+    sa.CheckConstraint("confidence >= 0 AND confidence <= 1", name="confidence_range"),
+    sa.CheckConstraint(
+        "(state IN ('accepted', 'rejected') AND decided_at IS NOT NULL) OR "
+        "(state IN ('pending', 'superseded') AND decided_at IS NULL)",
+        name="decision_timestamp_consistent",
+    ),
+)
+
+sa.Index(
+    "ix_email_event_proposals_candidate_state",
+    email_event_proposals.c.candidate_id,
+    email_event_proposals.c.state,
+)
+sa.Index(
+    "ix_email_event_proposals_message",
+    email_event_proposals.c.message_id,
+)
+
+# ---------------------------------------------------------------------------
+# Section 13: reply draft versions — immutable, candidate-owned reply drafts
+# (end-to-end-career-application-loop, tasks 13.4-13.5). Additive; the legacy
+# M4 ``reply_drafts`` table above stays for backfill/back-compat. Server-side
+# candidate ownership (candidate_id required); high-risk categories are never
+# system-sent (draft/review only).
+# ---------------------------------------------------------------------------
+
+reply_draft_versions = sa.Table(
+    "reply_draft_versions",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column("candidate_id", sa.Uuid(), nullable=False),
+    sa.Column(
+        "message_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.email_messages.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column(
+        "thread_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.email_threads.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column("account_id", sa.Uuid(), nullable=True),
+    sa.Column(
+        "application_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.applications.id", ondelete="SET NULL"),
+        nullable=True,
+    ),
+    sa.Column("version_number", sa.Integer(), nullable=False),
+    # Immutable trusted reply target (task 13.4).
+    sa.Column("recipient", sa.Text(), server_default="", nullable=False),
+    sa.Column("in_reply_to_header", sa.Text(), server_default="", nullable=False),
+    sa.Column("references_header", sa.Text(), server_default="", nullable=False),
+    # Editable content (body edits -> new version).
+    sa.Column("subject", sa.Text(), server_default="", nullable=False),
+    sa.Column("body_text", sa.Text(), server_default="", nullable=False),
+    sa.Column("intent", sa.String(24), server_default="acknowledge", nullable=False),
+    sa.Column(
+        "risk_category", sa.String(24), server_default="low_risk", nullable=False
+    ),
+    sa.Column("mail_category", sa.Text(), server_default="", nullable=False),
+    # Context + claims + validation findings (JSONB).
+    sa.Column(
+        "context",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "claims",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "validation_issues",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column("payload_hash", sa.String(64), nullable=False),
+    sa.Column("approval_state", sa.String(24), server_default="draft", nullable=False),
+    sa.Column("decided_at", sa.DateTime(timezone=True), nullable=True),
+    sa.Column("decided_by", sa.Text(), server_default="", nullable=False),
+    sa.Column("send_intent_id", sa.Uuid(), nullable=True),
+    sa.Column("send_phase", sa.String(24), server_default="", nullable=False),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.Column(
+        "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.UniqueConstraint(
+        "thread_id",
+        "candidate_id",
+        "version_number",
+        name="uq_reply_draft_versions_thread_candidate_version",
+    ),
+    sa.CheckConstraint(
+        "approval_state IN "
+        "('draft', 'pending_review', 'approved', 'rejected', 'expired', 'superseded')",
+        name="ck_reply_draft_versions_approval_state",
+    ),
+    sa.CheckConstraint(
+        "char_length(payload_hash) = 64",
+        name="ck_reply_draft_versions_payload_hash_length",
+    ),
+    sa.CheckConstraint(
+        "(approval_state IN ('approved', 'rejected') AND decided_at IS NOT NULL) "
+        "OR (approval_state NOT IN ('approved', 'rejected') AND decided_at IS NULL)",
+        name="ck_reply_draft_versions_decision_timestamp_consistent",
+    ),
+)
+
+sa.Index(
+    "ix_reply_draft_versions_candidate_state",
+    reply_draft_versions.c.candidate_id,
+    reply_draft_versions.c.approval_state,
+)
+sa.Index(
+    "ix_reply_draft_versions_application",
+    reply_draft_versions.c.application_id,
+)
+sa.Index(
+    "ix_reply_draft_versions_thread",
+    reply_draft_versions.c.thread_id,
+    reply_draft_versions.c.candidate_id,
+)
+

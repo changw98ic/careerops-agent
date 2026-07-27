@@ -197,6 +197,15 @@ export const api = {
   changeApplicationState: (id, data) =>
     request(`/api/v1/applications/${id}/state`, { method: 'POST', body: data }),
 
+  // -- Trusted contacts + submission preview (Section 9) --
+  // Preview performs NO provider side effects; it returns the exact sendable
+  // representation + validation errors so the user can review before final
+  // confirmation (the actual send is Section 10).
+  listRecruitingContacts: (applicationId) =>
+    request(`/api/v1/applications/${applicationId}/recruiting-contacts`),
+  previewSubmission: (applicationId, data) =>
+    request(`/api/v1/applications/${applicationId}/submission-preview`, { method: 'POST', body: data }),
+
   // -- Application packages (Section 8) --
   createPackageDraft: (applicationId, data) =>
     request(`/api/v1/applications/${applicationId}/packages`, { method: 'POST', body: data }),
@@ -208,4 +217,76 @@ export const api = {
     request(`/api/v1/applications/${applicationId}/packages/${versionId}/approve`, { method: 'POST' }),
   applyPackageEdits: (applicationId, versionId, data) =>
     request(`/api/v1/applications/${applicationId}/packages/${versionId}/edits`, { method: 'POST', body: data }),
+
+  // -- System-managed send (Section 10) --
+  // CareerOps final confirmation -> durable pending intent. The provider is
+  // NOT called synchronously; an isolated worker drives execution. The UI must
+  // never display a queued/pending send as "sent" (task 10.11).
+  confirmSystemSend: (applicationId, data) =>
+    request(`/api/v1/applications/${applicationId}/system-send`, { method: 'POST', body: data }),
+  getSystemSendStatus: (applicationId, intentId) =>
+    request(`/api/v1/applications/${applicationId}/system-send/${intentId}`),
+  escalateSystemSendReconciliation: (applicationId, intentId) =>
+    request(`/api/v1/applications/${applicationId}/system-send/${intentId}/reconcile`, { method: 'POST' }),
+
+  // -- Gmail read sync (Section 11) --
+  // The GMAIL_READ capability stays DENIED at the contract layer (Iron Rule 7);
+  // every method below will surface a 403 DENIED_POLICY until a separate
+  // qualification change releases the capability. The view renders that 403 as
+  // the "sync unavailable / not connected" stale state (task 11.8) rather than
+  // presenting old data as current.
+  getMailAccountStatus: () => request('/api/v1/mail/account'),
+  revokeMailAccount: () =>
+    request('/api/v1/mail/account/revoke', { method: 'POST' }),
+  syncMailNow: (params) =>
+    request('/api/v1/mail/sync-now?' + new URLSearchParams(params || {}), { method: 'POST' }),
+  listMailSyncHistory: (params) =>
+    request('/api/v1/mail/sync-history?' + new URLSearchParams(params || {})),
+  listMailThreads: (params) =>
+    request('/api/v1/mail/threads?' + new URLSearchParams(params || {})),
+  listMailMessages: (threadId, params) =>
+    request(`/api/v1/mail/threads/${threadId}/messages?` + new URLSearchParams(params || {})),
+  listMailUnresolvedLinks: (params) =>
+    request('/api/v1/mail/unresolved-links?' + new URLSearchParams(params || {})),
+  confirmMailLink: (linkId, data) =>
+    request(`/api/v1/mail/unresolved-links/${linkId}/confirm`, { method: 'POST', body: data }),
+
+  // -- Reply drafts + follow-up (Section 13) --
+  // Drafts are review-only; only an approved low-risk reply may be sent via
+  // the reused Section 10 chain. High-risk categories are permanently denied
+  // system send; auto-send is permanently denied (Iron Rule 7).
+  listReplyDrafts: (params) =>
+    request('/api/v1/reply/drafts?' + new URLSearchParams(params || {})),
+  getReplyDraft: (draftId) => request(`/api/v1/reply/drafts/${draftId}`),
+  createReplyDraft: (data) =>
+    request('/api/v1/reply/drafts', { method: 'POST', body: data }),
+  editReplyDraft: (draftId, data) =>
+    request(`/api/v1/reply/drafts/${draftId}/edit`, { method: 'POST', body: data }),
+  approveReplyDraft: (draftId) =>
+    request(`/api/v1/reply/drafts/${draftId}/approve`, { method: 'POST' }),
+  rejectReplyDraft: (draftId) =>
+    request(`/api/v1/reply/drafts/${draftId}/reject`, { method: 'POST' }),
+  sendReplyDraft: (draftId, data) =>
+    request(`/api/v1/reply/drafts/${draftId}/send`, { method: 'POST', body: data }),
+  getReplyDraftSendStatus: (draftId) =>
+    request(`/api/v1/reply/drafts/${draftId}/send-status`),
+  getFollowUpRules: () => request('/api/v1/reply/follow-up-rules'),
+  listApplicationFollowUps: (applicationId) =>
+    request(`/api/v1/applications/${applicationId}/follow-ups`),
+  scheduleFollowUp: (applicationId, data) =>
+    request(`/api/v1/applications/${applicationId}/follow-ups`, {
+      method: 'POST',
+      body: data,
+    }),
+  snoozeFollowUp: (reminderId, data) =>
+    request(`/api/v1/follow-ups/${reminderId}/snooze`, { method: 'POST', body: data }),
+  rescheduleFollowUp: (reminderId, data) =>
+    request(`/api/v1/follow-ups/${reminderId}/reschedule`, {
+      method: 'POST',
+      body: data,
+    }),
+  cancelFollowUp: (reminderId, data) =>
+    request(`/api/v1/follow-ups/${reminderId}/cancel`, { method: 'POST', body: data }),
+  completeFollowUp: (reminderId) =>
+    request(`/api/v1/follow-ups/${reminderId}/complete`, { method: 'POST' }),
 }

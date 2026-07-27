@@ -28,6 +28,12 @@ class ApplicationEventType(StrEnum):
     CREATED = "created"
     STATE_CHANGED = "state_changed"
     SUBMITTED_MANUALLY = "submitted_manually"
+    # Section 10 (system-managed send): appended ONLY after a provider receipt
+    # confirms the system-managed email. Additive member; the column is a plain
+    # string so no migration is required, and the timeline projector falls back
+    # to a NOTE for any unknown value (this one is mapped explicitly below).
+    SUBMITTED_VIA_PROVIDER = "submitted_via_provider"
+    PROVIDER_SEND_FAILED = "provider_send_failed"
     NOTE_ADDED = "note_added"
     PACKAGE_ATTACHED = "package_attached"
     FOLLOW_UP_SCHEDULED = "follow_up_scheduled"

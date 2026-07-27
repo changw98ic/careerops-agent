@@ -161,6 +161,36 @@ class RuntimeResources:
 
         self.inbox_repo = PostgresInboxRepository(self.database)
 
+        # Section-12 mail-intelligence repos (tasks 12.5 / 12.3). Durable
+        # EmailEventProposal store + minimized message reader. Same
+        # Postgres-backed pattern as the Section-2/4/6 repos: no in-memory
+        # fallback, scoped by the server-resolved candidate. No live OAuth /
+        # external-write / auto-send flag is enabled here (task 17.6) — these
+        # repos are a review-only record store.
+        from careerops.infrastructure.database.postgres_mail_repo import (
+            PostgresEmailEventProposalRepository,
+            PostgresMailMessageRepository,
+        )
+
+        self.mail_proposal_repo = PostgresEmailEventProposalRepository(self.database)
+        self.mail_message_repo = PostgresMailMessageRepository(self.database)
+
+        # Section-11 Gmail read-sync repos (tasks 11.1-11.6). Dedicated-account
+        # connection state + durable sync runs/cursors + thread association
+        # links. Same Postgres-backed pattern: no in-memory fallback, scoped by
+        # the server-resolved candidate. The GMAIL_READ capability stays DENIED
+        # at the contract layer (Iron Rule 7); these repos build the read path
+        # but no live OAuth / external-write flag is enabled here (task 17.6).
+        from careerops.infrastructure.database.postgres_mail_sync_repo import (
+            PostgresMailAccountRepository,
+            PostgresSyncRunRepository,
+            PostgresThreadLinkRepository,
+        )
+
+        self.mail_account_repo = PostgresMailAccountRepository(self.database)
+        self.mail_sync_run_repo = PostgresSyncRunRepository(self.database)
+        self.mail_thread_link_repo = PostgresThreadLinkRepository(self.database)
+
         # Section 5 crawl execution service (tasks 5.1, 5.5, 5.6). Wraps the
         # crawl adapter sink + policy evaluation + provenance ingest. The
         # execution service is what Temporal activities (task 5.4) or a direct

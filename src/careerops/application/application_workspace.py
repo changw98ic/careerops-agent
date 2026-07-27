@@ -193,6 +193,22 @@ class ApplicationWorkspaceService:
         """Read an application, enforcing candidate ownership."""
         return self._require_owned(application_id, candidate_id)
 
+    def find_owned_application(
+        self, *, application_id: UUID, candidate_id: UUID
+    ) -> Application | None:
+        """Return the application if owned by ``candidate_id``, else ``None``.
+
+        Additive ownership-read alias consumed by the Section-9 email-payload
+        preview (which collects validation errors rather than raising). This
+        does not change :meth:`get_application`; it is a non-raising variant
+        that returns ``None`` for both missing and not-owned so the preview
+        can surface "application not found for candidate" without an exception.
+        """
+        app = self._applications.find_by_id(application_id)
+        if app is None or app.candidate_id != candidate_id:
+            return None
+        return app
+
     # ------------------------------------------------------------------
     # 7.3 — favorite → preparing, and preparing → submission gates
     # ------------------------------------------------------------------
@@ -502,6 +518,39 @@ class ApplicationWorkspaceService:
             now=now,
         )
         return cycle.id
+
+    def append_note(
+        self,
+        *,
+        application_id: UUID,
+        candidate_id: UUID,
+        note: str,
+        event_data: dict[str, object] | None = None,
+        now: datetime,
+    ) -> None:
+        """Append a USER-sourced note event to the application timeline.
+
+        Additive (Section 12): used by the mail-intelligence service to record
+        mail-derived provenance (proposal id, source message id, category) on
+        the unified timeline WITHOUT transitioning state. The note is a
+        confirmed USER event — acceptance is itself a user action; the proposal
+        never writes state directly. Raises :class:`ApplicationNotOwnedError`
+        when the application is missing or not owned.
+        """
+        app = self._require_owned(application_id, candidate_id)
+        self._applications.append_event(
+            ApplicationEvent(
+                id=uuid4(),
+                application_id=app.id,
+                event_type=ApplicationEventType.NOTE_ADDED,
+                source=ApplicationEventSource.USER,
+                actor_id=str(candidate_id),
+                note=note,
+                event_data=event_data or {},
+                occurred_at=now,
+                created_at=now,
+            )
+        )
 
     def _has_trusted_contact(self, app: Application) -> bool:
         if self._contact_lookup is None:

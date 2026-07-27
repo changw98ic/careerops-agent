@@ -20,10 +20,19 @@
           <template #icon><SendOutlined /></template>
           投递申请
         </a-button>
-        <a-tag v-else color="green" style="font-size: 14px; padding: 6px 16px">
-          <template #icon><CheckCircleOutlined /></template>
-          已投递
-        </a-tag>
+        <a-space v-else wrap>
+          <a-tag color="green" style="font-size: 14px; padding: 6px 16px">
+            <template #icon><CheckCircleOutlined /></template>
+            已投递
+          </a-tag>
+          <!-- Action path (task 14.3): once an application record exists,
+               continue the path (prepare -> package -> channel -> timeline)
+               inside the application workspace. -->
+          <a-button v-if="applicationId" type="primary" @click="goToWorkspace">
+            进入申请工作区
+            <template #icon><ArrowRightOutlined /></template>
+          </a-button>
+        </a-space>
       </div>
     </div>
 
@@ -110,11 +119,12 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowLeftOutlined,
+  ArrowRightOutlined,
   CheckCircleOutlined,
   SendOutlined,
 } from '@ant-design/icons-vue'
 import message from 'ant-design-vue/es/message'
-import { api } from '../api/client.js'
+import { api, parseApiError } from '../api/client.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -167,11 +177,27 @@ async function fetchJob() {
     job.value = detail.canonical_job || detail
     versions.value = detail.versions || []
   } catch (err) {
-    error.value = parseErrorMessage(err)
+    // Dependency-not-ready (task 14.2/14.6): surface a 503 from a missing
+    // repository/capability as a dedicated, actionable message instead of a
+    // generic server error. Other errors keep the existing message mapping
+    // so the job-level apply flow and its tests stay unchanged.
+    const parsed = parseApiError(err)
+    if (parsed.isDependencyNotReady) {
+      error.value = '职位服务依赖未就绪（503），请稍后重试。'
+    } else {
+      error.value = parseErrorMessage(err)
+    }
     job.value = null
   } finally {
     loading.value = false
   }
+}
+
+// Action path (task 14.3): continue into the application workspace once an
+// application record has been created for this job.
+function goToWorkspace() {
+  if (!applicationId.value) return
+  router.push(`/applications/${applicationId.value}`)
 }
 
 async function onApplyClick() {

@@ -239,6 +239,51 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
         "/api/v1/applications/{application_id}/packages/latest",
         "/api/v1/applications/{application_id}/packages/{version_id}/approve",
         "/api/v1/applications/{application_id}/packages/{version_id}/edits",
+        # Section-9 trusted-contact + submission-preview routes
+        # (email-application-delivery spec).
+        "/api/v1/applications/{application_id}/recruiting-contacts",
+        "/api/v1/applications/{application_id}/submission-preview",
+        # Section-10 system-managed-send routes (email-application-delivery spec).
+        "/api/v1/applications/{application_id}/system-send",
+        "/api/v1/applications/{application_id}/system-send/{intent_id}",
+        "/api/v1/applications/{application_id}/system-send/{intent_id}/reconcile",
+        # Section-11 Gmail read/sync routes (recruiting-email-intelligence spec):
+        # account status/revoke, sync-now, sync history, threads/messages, and
+        # unresolved-link queue + confirmation.
+        "/api/v1/mail/account",
+        "/api/v1/mail/account/revoke",
+        "/api/v1/mail/sync-now",
+        "/api/v1/mail/sync-history",
+        "/api/v1/mail/threads",
+        "/api/v1/mail/threads/{thread_id}/messages",
+        "/api/v1/mail/unresolved-links",
+        "/api/v1/mail/unresolved-links/{link_id}/confirm",
+        # Section-12 mail-intelligence routes (recruiting-email-intelligence
+        # spec): extract/propose, list, detail, accept, reject. Proposals are
+        # review-only; state changes only through USER acceptance.
+        "/api/v1/mail/messages/{message_id}/proposal",
+        "/api/v1/mail/proposals",
+        "/api/v1/mail/proposals/{proposal_id}",
+        "/api/v1/mail/proposals/{proposal_id}/accept",
+        "/api/v1/mail/proposals/{proposal_id}/reject",
+        # Section-13 reply-draft + follow-up routes (reply-draft-and-follow-up
+        # spec): draft list/detail/create/edit/approve/reject/send + follow-up
+        # schedule/snooze/reschedule/cancel/complete. Drafts are review-only;
+        # only an approved low-risk reply may be sent via the reused Section 10
+        # chain. High-risk categories permanently denied system send.
+        "/api/v1/reply/drafts",
+        "/api/v1/reply/drafts/{draft_id}",
+        "/api/v1/reply/drafts/{draft_id}/edit",
+        "/api/v1/reply/drafts/{draft_id}/approve",
+        "/api/v1/reply/drafts/{draft_id}/reject",
+        "/api/v1/reply/drafts/{draft_id}/send",
+        "/api/v1/reply/drafts/{draft_id}/send-status",
+        "/api/v1/reply/follow-up-rules",
+        "/api/v1/applications/{application_id}/follow-ups",
+        "/api/v1/follow-ups/{reminder_id}/snooze",
+        "/api/v1/follow-ups/{reminder_id}/reschedule",
+        "/api/v1/follow-ups/{reminder_id}/cancel",
+        "/api/v1/follow-ups/{reminder_id}/complete",
     }
 
 

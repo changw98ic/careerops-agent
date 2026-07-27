@@ -102,97 +102,97 @@
 
 ## 9. Trusted contacts and initial email payloads
 
-- [ ] 9.1 Define trusted recruiting-contact resolution using source evidence, company domain, contact type, confidence, and retention metadata.
-- [ ] 9.2 Reject guessed employee addresses, unverified domains, missing source evidence, and model-only recipients before payload creation.
-- [ ] 9.3 Build initial application email payloads from the approved package, selected account, recipient, subject, body, attachment set, and application binding.
-- [ ] 9.4 Add normalized payload hash, attachment hashes, thread headers when applicable, evidence references, and stable idempotency/reconciliation keys.
-- [ ] 9.5 Implement MIME/size/hash/quarantine/retention validation for resume and other permitted attachments.
-- [ ] 9.6 Add a submission preview endpoint that returns the exact sendable representation and validation errors without provider side effects.
-- [ ] 9.7 Add frontend confirmation screen that makes recipient, subject, body, attachments, source evidence, and “system will send after confirmation” explicit.
-- [ ] 9.8 Add tests for domain mismatch, guessed addresses, mutated package payloads, unsafe attachments, preview-without-send, and exact preview/send parity.
+- [x] 9.1 Define trusted recruiting-contact resolution using source evidence, company domain, contact type, confidence, and retention metadata.
+- [x] 9.2 Reject guessed employee addresses, unverified domains, missing source evidence, and model-only recipients before payload creation.
+- [x] 9.3 Build initial application email payloads from the approved package, selected account, recipient, subject, body, attachment set, and application binding.
+- [x] 9.4 Add normalized payload hash, attachment hashes, thread headers when applicable, evidence references, and stable idempotency/reconciliation keys.
+- [x] 9.5 Implement MIME/size/hash/quarantine/retention validation for resume and other permitted attachments.
+- [x] 9.6 Add a submission preview endpoint that returns the exact sendable representation and validation errors without provider side effects.
+- [x] 9.7 Add frontend confirmation screen that makes recipient, subject, body, attachments, source evidence, and “system will send after confirmation” explicit.
+- [x] 9.8 Add tests for domain mismatch, guessed addresses, mutated package payloads, unsafe attachments, preview-without-send, and exact preview/send parity.
 
 ## 10. System-managed Gmail sending and reconciliation
 
-- [ ] 10.1 Implement the CareerOps final-confirmation command as a durable approval/intent request rather than a direct provider call.
-- [ ] 10.2 Revalidate candidate ownership, application state, package approval, recipient eligibility, capability release, policy version, account status, and payload hash at confirmation time.
-- [ ] 10.3 Enqueue one transactional Outbox event linked to the action intent and return a durable pending status to the UI.
-- [ ] 10.4 Wire the isolated Side-effect Worker to resolve opaque credentials, call the Gmail provider, and persist provider attempts without exposing tokens to API/model paths.
-- [ ] 10.5 Implement provider receipt persistence and application `SUBMITTED` event creation only after confirmed provider success.
-- [ ] 10.6 Implement timeout/connection-loss/worker-crash reconciliation by stable key and disable blind retry for ambiguous outcomes.
-- [ ] 10.7 Make repeated confirmation idempotent and return existing intent/receipt/reconciliation state.
-- [ ] 10.8 Ensure disabled external-write, disabled Google, invalid qualification, revoked account, Redis failure, or policy failure all deny before provider call.
-- [ ] 10.9 Add fake-provider crash matrix tests: before-call crash, after-call-before-receipt crash, timeout-with-success, duplicate confirmation, credential revoke, and reconciliation escalation.
-- [ ] 10.10 Add controlled integration tests with a fake or offline provider harness and verify no duplicate provider effects without enabling live OAuth, external-write, or auto-send flags.
-- [ ] 10.11 Add UI send-progress, sent, failed, and reconciliation-required states; never display queued as sent.
+- [x] 10.1 Implement the CareerOps final-confirmation command as a durable approval/intent request rather than a direct provider call.
+- [x] 10.2 Revalidate candidate ownership, application state, package approval, recipient eligibility, capability release, policy version, account status, and payload hash at confirmation time.
+- [x] 10.3 Enqueue one transactional Outbox event linked to the action intent and return a durable pending status to the UI.
+- [x] 10.4 Wire the isolated Side-effect Worker to resolve opaque credentials, call the Gmail provider, and persist provider attempts without exposing tokens to API/model paths.
+- [x] 10.5 Implement provider receipt persistence and application `SUBMITTED` event creation only after confirmed provider success.
+- [x] 10.6 Implement timeout/connection-loss/worker-crash reconciliation by stable key and disable blind retry for ambiguous outcomes.
+- [x] 10.7 Make repeated confirmation idempotent and return existing intent/receipt/reconciliation state.
+- [x] 10.8 Ensure disabled external-write, disabled Google, invalid qualification, revoked account, Redis failure, or policy failure all deny before provider call.
+- [x] 10.9 Add fake-provider crash matrix tests: before-call crash, after-call-before-receipt crash, timeout-with-success, duplicate confirmation, credential revoke, and reconciliation escalation.
+- [x] 10.10 Add controlled integration tests with a fake or offline provider harness and verify no duplicate provider effects without enabling live OAuth, external-write, or auto-send flags.
+- [x] 10.11 Add UI send-progress, sent, failed, and reconciliation-required states; never display queued as sent.
 - [ ] 10.12 Gate inbound/reply work on a system-managed fake-provider slice: CareerOps confirmation creates one intent, the worker sends without manual Gmail action, receipt updates the application, and ambiguous outcomes stop in reconciliation.
 
 ## 11. Gmail read synchronization and thread association
 
-- [ ] 11.1 Implement explicit dedicated-account connection state with allowed read scope validation and protected credential reference storage.
-- [ ] 11.2 Implement account revoke/error handling that immediately stops future sync and provider use and invalidates pending provider actions.
-- [ ] 11.3 Implement incremental history/watch cursor storage, retry, backfill, and durable sync-run status.
-- [ ] 11.4 Enforce provider message/thread ID uniqueness and duplicate Pub/Sub/polling delivery handling.
-- [ ] 11.5 Persist only minimum metadata for non-recruitment mail and apply attachment quarantine/retention for recruitment content.
-- [ ] 11.6 Implement thread association using provider IDs, sent-message linkage, trusted domains, subject/source evidence, and unresolved multi-candidate state.
-- [ ] 11.7 Add API routes for account status, sync-now, sync history, threads, messages, unresolved links, and user link confirmation.
-- [ ] 11.8 Add frontend follow-up inbox with stale sync status, thread summaries, unresolved association queue, and evidence links.
-- [ ] 11.9 Add integration tests for duplicate messages, partial sync restart, revoked account, non-recruitment body discard, ambiguous thread link, and confirmed link reuse.
-- [ ] 11.10 Add bounded cursor pagination, `Cache-Control: no-store`, and response-size limits for sync runs, threads, messages, unresolved links, and evidence-bearing collections.
+- [x] 11.1 Implement explicit dedicated-account connection state with allowed read scope validation and protected credential reference storage.
+- [x] 11.2 Implement account revoke/error handling that immediately stops future sync and provider use and invalidates pending provider actions.
+- [x] 11.3 Implement incremental history/watch cursor storage, retry, backfill, and durable sync-run status.
+- [x] 11.4 Enforce provider message/thread ID uniqueness and duplicate Pub/Sub/polling delivery handling.
+- [x] 11.5 Persist only minimum metadata for non-recruitment mail and apply attachment quarantine/retention for recruitment content.
+- [x] 11.6 Implement thread association using provider IDs, sent-message linkage, trusted domains, subject/source evidence, and unresolved multi-candidate state.
+- [x] 11.7 Add API routes for account status, sync-now, sync history, threads, messages, unresolved links, and user link confirmation.
+- [x] 11.8 Add frontend follow-up inbox with stale sync status, thread summaries, unresolved association queue, and evidence links.
+- [x] 11.9 Add integration tests for duplicate messages, partial sync restart, revoked account, non-recruitment body discard, ambiguous thread link, and confirmed link reuse.
+- [x] 11.10 Add bounded cursor pagination, `Cache-Control: no-store`, and response-size limits for sync runs, threads, messages, unresolved links, and evidence-bearing collections.
 
 ## 12. Mail intelligence and application event proposals
 
-- [ ] 12.1 Define controlled mail taxonomy for acknowledgement, screening, interview, assessment, request-more-info, rejection, offer, salary, visa, identity, withdrawal, and unknown.
-- [ ] 12.2 Implement deterministic extraction of provider metadata, sender, dates, timezones, deadlines, and obvious outcomes before optional model enrichment.
-- [ ] 12.3 Implement structured model extraction with minimized input, schema validation, confidence, evidence spans, version metadata, and review-only output.
-- [ ] 12.4 Detect high-risk categories and force mandatory user review without provider/action side effects.
-- [ ] 12.5 Create durable `EmailEventProposal` records with idempotency and link to message/thread/application.
-- [ ] 12.6 Implement accept/reject proposal endpoints with ownership, CSRF, rate limit, legal transition validation, and repeat-decision handling.
-- [ ] 12.7 Append accepted proposals to application timeline and create interview/deadline/follow-up tasks where policy permits.
-- [ ] 12.8 Add prompt-injection fixtures covering recipient changes, secret requests, policy bypass, HTML/Unicode confusion, attachments, and signatures.
-- [ ] 12.9 Add tests for rejection, interview, offer, unknown, low-confidence, stale message, invalid schema, and model-unavailable paths.
-- [ ] 12.10 Gate reply work on a mail-intelligence slice that ingests a fixture thread, links it or leaves it unresolved, produces a reviewable event proposal, and updates application state only after acceptance.
+- [x] 12.1 Define controlled mail taxonomy for acknowledgement, screening, interview, assessment, request-more-info, rejection, offer, salary, visa, identity, withdrawal, and unknown.
+- [x] 12.2 Implement deterministic extraction of provider metadata, sender, dates, timezones, deadlines, and obvious outcomes before optional model enrichment.
+- [x] 12.3 Implement structured model extraction with minimized input, schema validation, confidence, evidence spans, version metadata, and review-only output.
+- [x] 12.4 Detect high-risk categories and force mandatory user review without provider/action side effects.
+- [x] 12.5 Create durable `EmailEventProposal` records with idempotency and link to message/thread/application.
+- [x] 12.6 Implement accept/reject proposal endpoints with ownership, CSRF, rate limit, legal transition validation, and repeat-decision handling.
+- [x] 12.7 Append accepted proposals to application timeline and create interview/deadline/follow-up tasks where policy permits.
+- [x] 12.8 Add prompt-injection fixtures covering recipient changes, secret requests, policy bypass, HTML/Unicode confusion, attachments, and signatures.
+- [x] 12.9 Add tests for rejection, interview, offer, unknown, low-confidence, stale message, invalid schema, and model-unavailable paths.
+- [x] 12.10 Gate reply work on a mail-intelligence slice that ingests a fixture thread, links it or leaves it unresolved, produces a reviewable event proposal, and updates application state only after acceptance.
 
 ## 13. Reply drafting and follow-up management
 
-- [ ] 13.1 Define follow-up rule versions and default waiting periods for submitted, awaiting-response, interview, assessment, and user-specified states.
-- [ ] 13.2 Implement reminder creation, deduplication, snooze, reschedule, complete, cancel, and terminal-state cleanup.
-- [ ] 13.3 Implement reply-draft context assembly from linked thread, bounded excerpt, confirmed application facts, selected evidence, and user intent.
-- [ ] 13.4 Implement reply drafting with recipient/thread-header immutability and unsupported-claim validation.
-- [ ] 13.5 Implement draft edit/version/payload-hash handling; recipient or target edits must create a new proposal and re-enter policy.
-- [ ] 13.6 Reuse initial-email delivery services for user-confirmed reply sends; keep auto-send disabled and high-risk categories permanently denied.
-- [ ] 13.7 Add API routes for draft list/detail, create, edit, approve, reject, and reminder actions.
-- [ ] 13.8 Add frontend review queue with draft diff, thread context, risk category, recipient, evidence, confirmation action, and send outcome.
-- [ ] 13.9 Add tests for scheduling reply, follow-up, resume/link, work authorization, salary/offer/visa denial, target mutation, duplicate approval, and ambiguous send.
-- [ ] 13.10 Add bounded pagination, no-store headers, ownership checks, and idempotency contracts for drafts, review items, and reminders.
+- [x] 13.1 Define follow-up rule versions and default waiting periods for submitted, awaiting-response, interview, assessment, and user-specified states.
+- [x] 13.2 Implement reminder creation, deduplication, snooze, reschedule, complete, cancel, and terminal-state cleanup.
+- [x] 13.3 Implement reply-draft context assembly from linked thread, bounded excerpt, confirmed application facts, selected evidence, and user intent.
+- [x] 13.4 Implement reply drafting with recipient/thread-header immutability and unsupported-claim validation.
+- [x] 13.5 Implement draft edit/version/payload-hash handling; recipient or target edits must create a new proposal and re-enter policy.
+- [x] 13.6 Reuse initial-email delivery services for user-confirmed reply sends; keep auto-send disabled and high-risk categories permanently denied.
+- [x] 13.7 Add API routes for draft list/detail, create, edit, approve, reject, and reminder actions.
+- [x] 13.8 Add frontend review queue with draft diff, thread context, risk category, recipient, evidence, confirmation action, and send outcome.
+- [x] 13.9 Add tests for scheduling reply, follow-up, resume/link, work authorization, salary/offer/visa denial, target mutation, duplicate approval, and ambiguous send.
+- [x] 13.10 Add bounded pagination, no-store headers, ownership checks, and idempotency contracts for drafts, review items, and reminders.
 
 ## 14. Unified frontend workspaces and UX quality
 
-- [ ] 14.1 Add authenticated routes for profile, resumes, crawl plans, crawl runs, job inbox, application workspace, mail follow-up, and review queue.
-- [ ] 14.2 Replace hard-coded candidate/job identifiers with current-session API resolution and meaningful dependency-not-ready states.
-- [ ] 14.3 Add a job-detail action path from recommendation to favorite, prepare, package, channel, and application timeline.
-- [ ] 14.4 Add visible “why recommended” evidence and deterministic exclusion reasons.
-- [ ] 14.5 Add application timeline rendering that distinguishes confirmed, proposed, rejected, pending, failed, and reconciliation-required states.
-- [ ] 14.6 Add all required loading, empty, stale, unavailable, validation-error, and next-action states for each new view.
-- [ ] 14.7 Add responsive layouts for desktop and mobile widths without hiding recipient, attachment, or approval information.
-- [ ] 14.8 Add frontend unit tests for route guards, session failure, source/plan CRUD states, package diff, confirmation behavior, thread review, and reminder actions.
-- [ ] 14.9 Run `make verify-frontend` and enforce the existing bundle-size budget.
+- [x] 14.1 Add authenticated routes for profile, resumes, crawl plans, crawl runs, job inbox, application workspace, mail follow-up, and review queue.
+- [x] 14.2 Replace hard-coded candidate/job identifiers with current-session API resolution and meaningful dependency-not-ready states.
+- [x] 14.3 Add a job-detail action path from recommendation to favorite, prepare, package, channel, and application timeline.
+- [x] 14.4 Add visible “why recommended” evidence and deterministic exclusion reasons.
+- [x] 14.5 Add application timeline rendering that distinguishes confirmed, proposed, rejected, pending, failed, and reconciliation-required states.
+- [x] 14.6 Add all required loading, empty, stale, unavailable, validation-error, and next-action states for each new view.
+- [x] 14.7 Add responsive layouts for desktop and mobile widths without hiding recipient, attachment, or approval information.
+- [x] 14.8 Add frontend unit tests for route guards, session failure, source/plan CRUD states, package diff, confirmation behavior, thread review, and reminder actions.
+- [x] 14.9 Run `make verify-frontend` and enforce the existing bundle-size budget.
 
 ## 15. Cross-cutting verification, observability, and security
 
-- [ ] 15.1 Add repository contract tests for all new API schemas, status codes, idempotency responses, and authenticated ownership rules.
-- [ ] 15.2 Add state-machine property tests for application, package, email proposal, reminder, outbox, and reconciliation transitions.
-- [ ] 15.3 Add PostgreSQL integration tests for new migrations, append-only events, role grants, ownership filters, unique keys, and rollback behavior.
-- [ ] 15.4 Add Temporal tests for crawl/sync restart, deterministic replay boundaries, schedule overlap, cancellation, and worker identity.
-- [ ] 15.5 Add side-effect security tests proving no API/model/parser path can read provider secrets or call provider writes directly.
-- [ ] 15.6 Add secret/PII scans for logs, payloads, model egress, attachments, database dumps, and frontend error responses.
-- [ ] 15.7 Add metrics for crawl plans/runs, inbox decisions, package approvals, send intents, provider receipts, reconciliation, mail proposals, review latency, and follow-up completion with bounded labels.
-- [ ] 15.8 Add audit assertions for profile confirmation, package approval, email confirmation, provider receipt, mail-event review, reply approval, and reminder changes.
+- [x] 15.1 Add repository contract tests for all new API schemas, status codes, idempotency responses, and authenticated ownership rules.
+- [x] 15.2 Add state-machine property tests for application, package, email proposal, reminder, outbox, and reconciliation transitions.
+- [x] 15.3 Add PostgreSQL integration tests for new migrations, append-only events, role grants, ownership filters, unique keys, and rollback behavior.
+- [x] 15.4 Add Temporal tests for crawl/sync restart, deterministic replay boundaries, schedule overlap, cancellation, and worker identity.
+- [x] 15.5 Add side-effect security tests proving no API/model/parser path can read provider secrets or call provider writes directly.
+- [x] 15.6 Add secret/PII scans for logs, payloads, model egress, attachments, database dumps, and frontend error responses.
+- [x] 15.7 Add metrics for crawl plans/runs, inbox decisions, package approvals, send intents, provider receipts, reconciliation, mail proposals, review latency, and follow-up completion with bounded labels.
+- [x] 15.8 Add audit assertions for profile confirmation, package approval, email confirmation, provider receipt, mail-event review, reply approval, and reminder changes.
 - [ ] 15.9 Run `make verify`, `make verify-db`, `make verify-temporal`, `make verify-frontend`, `make security`, and relevant dependency/image audits in disposable environments.
-- [ ] 15.10 Add compatibility tests proving legacy internal drafts, old application events, and historical email receipts are projected accurately and never reported as newly sent provider messages.
+- [x] 15.10 Add compatibility tests proving legacy internal drafts, old application events, and historical email receipts are projected accurately and never reported as newly sent provider messages.
 - [ ] 15.11 Add staged verification commands/evidence for the crawl slice, application/package slice, fake-provider send slice, and mail-intelligence slice so each boundary has an independently recorded pass/fail result.
-- [ ] 15.12 Add operator runbooks and bounded alerts for stuck crawl runs, repeated source denials, stale mail cursors, pending approvals, reconciliation backlog, revoked accounts, and failed retention/purge work.
-- [ ] 15.13 Add an authority audit over legacy scripts and adapters proving no direct Gmail/provider write or unguarded external fetch bypasses the current policy/kernel path.
-- [ ] 15.14 Add worker batch-size, API response-size, crawl backpressure, mailbox sync backfill, and rate-limit tests so large sources/messages cannot create unbounded memory or UI payloads.
+- [x] 15.12 Add operator runbooks and bounded alerts for stuck crawl runs, repeated source denials, stale mail cursors, pending approvals, reconciliation backlog, revoked accounts, and failed retention/purge work.
+- [x] 15.13 Add an authority audit over legacy scripts and adapters proving no direct Gmail/provider write or unguarded external fetch bypasses the current policy/kernel path.
+- [x] 15.14 Add worker batch-size, API response-size, crawl backpressure, mailbox sync backfill, and rate-limit tests so large sources/messages cannot create unbounded memory or UI payloads.
 
 ## 16. Pilot, staged enablement, and handoff
 

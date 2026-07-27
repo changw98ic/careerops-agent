@@ -16,6 +16,8 @@ const CrawlRunHistory = () => import('./views/CrawlRunHistory.vue')
 const CrawlRunDetail = () => import('./views/CrawlRunDetail.vue')
 const Inbox = () => import('./views/Inbox.vue')
 const InboxDetail = () => import('./views/InboxDetail.vue')
+const MailFollowUp = () => import('./views/MailFollowUp.vue')
+const ReplyReviewQueue = () => import('./views/ReplyReviewQueue.vue')
 const NotFound = () => import('./views/NotFound.vue')
 
 const routes = [
@@ -35,6 +37,8 @@ const routes = [
   { path: '/crawl-runs/:id', name: 'crawl-run-detail', component: CrawlRunDetail, meta: { auth: true } },
   { path: '/inbox', name: 'inbox', component: Inbox, meta: { auth: true } },
   { path: '/inbox/:id', name: 'inbox-detail', component: InboxDetail, meta: { auth: true } },
+  { path: '/mail-follow-up', name: 'mail-follow-up', component: MailFollowUp, meta: { auth: true, title: '邮件跟进' } },
+  { path: '/reply-queue', name: 'reply-queue', component: ReplyReviewQueue, meta: { auth: true, title: '回复评审' } },
   { path: '/bootstrap', name: 'bootstrap', component: () => import('./views/Bootstrap.vue') },
   { path: '/404', name: 'not-found', component: NotFound },
   { path: '/:pathMatch(.*)*', name: 'catch-all', redirect: '/404' },
@@ -44,6 +48,11 @@ const router = createRouter({
   history: createWebHistory(),
   routes,
 })
+
+// Exported for unit tests (task 14.1/14.8): lets the suite assert every
+// workspace route carries the authenticated meta without instantiating the
+// browser history. Additive; the default export below is unchanged.
+export { routes }
 
 let sessionReady = false
 

@@ -51,6 +51,7 @@ class CrawlSourceWriteRequest(BaseModel):
     source_type: str
     source_identifier: str
     base_url: str
+    executor_mode: str = "http"
     enabled: bool = False
     adapter_version: str = ""
     trust_status: str = "unknown"
@@ -64,6 +65,7 @@ class CrawlSourceUpdateRequest(BaseModel):
 
     base_url: str | None = None
     source_identifier: str | None = None
+    executor_mode: str | None = None
     adapter_version: str | None = None
     trust_status: str | None = None
     terms_status: str | None = None
@@ -77,6 +79,7 @@ class CrawlSourceResponse(BaseModel):
     source_type: str
     source_identifier: str
     base_url: str
+    executor_mode: str = "http"
     state: str
     trust_status: str
     terms_status: str
@@ -139,6 +142,7 @@ def register_source(
         source_type=body.source_type,
         source_identifier=body.source_identifier,
         base_url=body.base_url,
+        executor_mode=body.executor_mode,
         enabled=body.enabled,
         adapter_version=body.adapter_version,
         trust_status=_policy_status(body.trust_status),
@@ -169,6 +173,7 @@ def update_source(
         source_id,
         base_url=body.base_url,
         source_identifier=body.source_identifier,
+        executor_mode=body.executor_mode,
         adapter_version=body.adapter_version,
         trust_status=_policy_status(body.trust_status) if body.trust_status else None,
         terms_status=_policy_status(body.terms_status) if body.terms_status else None,
@@ -235,6 +240,7 @@ def _to_response(source: object) -> CrawlSourceResponse:
         source_type=source.source_type.value,  # type: ignore[attr-defined]
         source_identifier=source.source_identifier,  # type: ignore[attr-defined]
         base_url=source.base_url,  # type: ignore[attr-defined]
+        executor_mode=source.executor_mode.value,  # type: ignore[attr-defined]
         state=source.state.value,  # type: ignore[attr-defined]
         trust_status=source.trust_status.value,  # type: ignore[attr-defined]
         terms_status=source.terms_status.value,  # type: ignore[attr-defined]

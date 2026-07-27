@@ -290,6 +290,7 @@ class ResumeVersion:
     # A resume is eligible for an application package only when
     # ``parse_status == PARSED`` and ``confirmation_status == CONFIRMED``.
     parse_status: ResumeParseStatus = ResumeParseStatus.PENDING
+    parse_error: str = ""
     confirmation_status: ConfirmationStatus = ConfirmationStatus.UNCONFIRMED
     source_reference: str = ""
     parsed_at: datetime | None = None

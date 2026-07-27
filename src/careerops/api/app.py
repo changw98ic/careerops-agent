@@ -12,6 +12,7 @@ from careerops.api.auth_dependency import require_api_auth, require_web_auth
 from careerops.api.errors import install_error_handlers
 from careerops.api.metrics_middleware import MetricsMiddleware
 from careerops.api.middleware import RequestIdMiddleware
+from careerops.api.routes.agent_runs import router as agent_runs_router
 from careerops.api.routes.application_workspace import router as application_workspace_router
 from careerops.api.routes.applications import router as applications_router
 from careerops.api.routes.crawl_plans import router as crawl_plans_router
@@ -250,7 +251,12 @@ def create_app(
             evidence_repo=probe.evidence_repo,
             job_data_repo=probe.matching_read_repo,
             capability_resolver=probe.capability_resolver,
+            model_client=probe.model_client,
         )
+        app.state.agent_run_repository = probe.agent_run_repo
+        app.state.agent_runtime = probe.agent_runtime
+        app.state.resume_review_service = probe.resume_review_service
+        app.state.interview_preparation_service = probe.interview_preparation_service
         # Section-7 application workspace service (tasks 7.2-7.7). Composes the
         # existing application repo (doubles as resume/package/follow-up repo)
         # with the cycle repo and the default job-evidence channel resolver.
@@ -276,6 +282,8 @@ def create_app(
             probe.application_repo,  # type: ignore[arg-type]
             probe.application_repo,  # type: ignore[arg-type]
             capability_resolver=probe.capability_resolver,
+            evidence_repo=probe.evidence_repo,
+            job_version_repo=probe.job_read_repo,
             trace=metrics.trace,
         )
         app.state.package_service = package_service
@@ -523,6 +531,7 @@ def create_app(
     # Section-6 inbox router (tasks 6.7-6.8). Same auth guard; candidate
     # ownership resolved server-side. Additive — no existing routes broken.
     app.include_router(inbox_router, dependencies=[Depends(require_api_auth)])
+    app.include_router(agent_runs_router, dependencies=[Depends(require_api_auth)])
     # Section-7 application-workspace router (tasks 7.8). Additive paths only
     # (detail / prepare / channels / channel / package / timeline /
     # confirm-external-submission / state); the M3 application routes are

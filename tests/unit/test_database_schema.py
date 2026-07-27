@@ -69,6 +69,8 @@ EXPECTED_TABLES = {
     "reply_drafts",
     "reply_draft_versions",
     "resume_versions",
+    "agent_runs",
+    "agent_run_reviews",
     "schedule_proposals",
     "send_attempts",
     "send_receipts",

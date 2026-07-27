@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Protocol
 from uuid import UUID
@@ -47,6 +47,7 @@ from careerops.domain.profiles import (
     RemoteRules,
     TargetRole,
 )
+from careerops.observability import current_trace_id
 from careerops.orchestration.capability_resolver import (
     CapabilityKind,
     SettingsCapabilityResolver,
@@ -622,8 +623,18 @@ class LLMSemanticRanker:
                 user_prompt=f"CANDIDATE EVIDENCE:\n{evidence_summary[:2000]}",
                 untrusted_content=job_text[:3000],
                 schema_name="semantic_rank",
+                schema={
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["score", "reason"],
+                    "properties": {
+                        "score": {"type": "number", "minimum": 0, "maximum": 100},
+                        "reason": {"type": "string", "maxLength": 1000},
+                    },
+                },
                 max_tokens=256,
                 timeout_seconds=30.0,
+                trace_id=current_trace_id(),
             )
             response = self._model_client.invoke(request)
             result = response.result
@@ -636,7 +647,7 @@ class LLMSemanticRanker:
                 model_version=response.model_id,
             )
         except Exception as e:
-            _log.warning("LLM semantic ranking failed: %s", e)
+            _log.warning("LLM semantic ranking failed: %s", type(e).__name__)
             return SemanticRanking(
                 status=SemanticRankingStatus.UNAVAILABLE,
                 reason=f"model error: {type(e).__name__}",
@@ -719,12 +730,11 @@ class InboxProjectionService:
             profile=profile,
         )
 
-        # 2. Persist filter decision (6.3)
-        decision_id = self._inbox_repo.upsert_filter_decision(candidate_id, decision, now=now)
-
-        # 3. For recommended jobs: evidence matching (6.5) + optional LLM (6.6)
+        # 2. For recommended jobs: evidence matching (6.5) + optional LLM (6.6)
+        # Hard filters have already completed; the model is strictly downstream
+        # and its result is attached as review-only metadata.
+        req_matches: tuple[RequirementMatchResult, ...] = ()
         if decision.verdict is FilterVerdict.RECOMMENDED:
-            # Evidence matching
             confirmed = self._evidence_repo.list_confirmed_for(candidate_id)
             job_data = self._job_data_repo.get_job_structured_data(canonical_job_id)
             if job_data:
@@ -732,7 +742,22 @@ class InboxProjectionService:
                     job_structured_data=job_data,
                     confirmed_evidence=confirmed,
                 )
-                self._inbox_repo.save_requirement_matches(decision_id, req_matches)
+            ranking = self._ranker.rank(
+                job_text=job_text,
+                evidence_summary=_evidence_summary(confirmed),
+            )
+            decision = replace(
+                decision,
+                semantic_ranking_status=ranking.status,
+                semantic_ranking_score=ranking.score,
+                semantic_ranking_reason=ranking.reason[:1000],
+                semantic_model_version=ranking.model_version[:128],
+            )
+
+        # 3. Persist the complete deterministic + review-only projection.
+        decision_id = self._inbox_repo.upsert_filter_decision(candidate_id, decision, now=now)
+        if req_matches:
+            self._inbox_repo.save_requirement_matches(decision_id, req_matches)
 
         return decision
 
@@ -764,3 +789,13 @@ class InboxProjectionService:
             )
             results.append(decision)
         return results
+
+
+def _evidence_summary(evidence: list[EvidenceItem]) -> str:
+    """Render only bounded, candidate-owned evidence metadata for ranking."""
+    lines: list[str] = []
+    for item in evidence[:40]:
+        description = item.description.replace("\n", " ").strip()[:240]
+        label = item.name.strip()[:120]
+        lines.append(f"- {label}: {description}" if description else f"- {label}")
+    return "\n".join(lines)[:2000]

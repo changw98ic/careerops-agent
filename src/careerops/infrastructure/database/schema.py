@@ -66,6 +66,7 @@ job_sources = sa.Table(
     sa.Column("source_type", sa.String(32), nullable=False),
     sa.Column("source_identifier", sa.Text(), nullable=False),
     sa.Column("base_url", sa.Text(), nullable=False),
+    sa.Column("executor_mode", sa.String(16), server_default="http", nullable=False),
     sa.Column("state", sa.String(24), server_default="pending_review", nullable=False),
     sa.Column("verified_at", sa.DateTime(timezone=True)),
     sa.Column("last_discovery_at", sa.DateTime(timezone=True)),
@@ -114,6 +115,10 @@ job_sources = sa.Table(
     sa.CheckConstraint(
         "robots_status IN ('unknown', 'allowed', 'blocked')",
         name="robots_status_values",
+    ),
+    sa.CheckConstraint(
+        "executor_mode IN ('http', 'ego')",
+        name="executor_mode_values",
     ),
 )
 
@@ -1409,6 +1414,7 @@ resume_versions = sa.Table(
         server_default="pending",
         nullable=False,
     ),
+    sa.Column("parse_error", sa.Text(), server_default="", nullable=False),
     sa.Column(
         "confirmation_status",
         sa.String(16),
@@ -2821,6 +2827,15 @@ filter_decisions = sa.Table(
     sa.Column("verdict", sa.String(16), nullable=False),
     sa.Column("rules_version", sa.Text(), server_default="", nullable=False),
     sa.Column(
+        "semantic_ranking_status",
+        sa.String(16),
+        server_default="unavailable",
+        nullable=False,
+    ),
+    sa.Column("semantic_ranking_score", sa.Numeric(5, 4), nullable=True),
+    sa.Column("semantic_ranking_reason", sa.Text(), server_default="", nullable=False),
+    sa.Column("semantic_model_version", sa.String(128), server_default="", nullable=False),
+    sa.Column(
         "blocking_reasons",
         postgresql.JSONB(astext_type=sa.Text()),
         server_default=sa.text("'[]'::jsonb"),
@@ -2847,6 +2862,15 @@ filter_decisions = sa.Table(
     sa.CheckConstraint(
         "verdict IN ('recommended', 'excluded')",
         name="verdict_values",
+    ),
+    sa.CheckConstraint(
+        "semantic_ranking_status IN ('available', 'unavailable', 'disabled')",
+        name="semantic_ranking_status_values",
+    ),
+    sa.CheckConstraint(
+        "semantic_ranking_score IS NULL OR "
+        "(semantic_ranking_score >= 0 AND semantic_ranking_score <= 1)",
+        name="semantic_ranking_score_range",
     ),
     sa.CheckConstraint("jsonb_typeof(blocking_reasons) = 'array'", name="blocking_reasons_array"),
     sa.CheckConstraint("jsonb_typeof(evidence_refs) = 'object'", name="evidence_refs_object"),
@@ -3163,4 +3187,129 @@ sa.Index(
     "ix_reply_draft_versions_thread",
     reply_draft_versions.c.thread_id,
     reply_draft_versions.c.candidate_id,
+)
+
+# ---------------------------------------------------------------------------
+# LLM Agent runs — candidate-scoped, review-only durable execution metadata.
+# Raw prompts/responses and credentials are deliberately absent.  ``result``
+# is a bounded structured proposal; input_identities/evidence_ids make stale
+# checks and audit views possible without persisting private source material.
+# ---------------------------------------------------------------------------
+
+agent_runs = sa.Table(
+    "agent_runs",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "candidate_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.candidates.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column("capability", sa.String(32), nullable=False),
+    sa.Column("state", sa.String(24), server_default="pending", nullable=False),
+    sa.Column("idempotency_key", sa.String(128), nullable=False),
+    sa.Column("input_hash", sa.String(64), nullable=False),
+    sa.Column(
+        "input_identities",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "evidence_ids",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column("schema_version", sa.String(64), server_default="", nullable=False),
+    sa.Column("prompt_version", sa.String(64), server_default="", nullable=False),
+    sa.Column("model_id", sa.String(128), server_default="", nullable=False),
+    sa.Column("trace_id", sa.String(128), server_default="", nullable=False),
+    sa.Column(
+        "result",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column("error_category", sa.String(64), server_default="", nullable=False),
+    sa.Column("input_tokens", sa.Integer(), server_default="0", nullable=False),
+    sa.Column("output_tokens", sa.Integer(), server_default="0", nullable=False),
+    sa.Column("review_decision", sa.String(16), nullable=True),
+    sa.Column("reviewed_by", sa.String(128), server_default="", nullable=False),
+    sa.Column("review_note", sa.Text(), server_default="", nullable=False),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
+    sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
+    sa.Column("reviewed_at", sa.DateTime(timezone=True), nullable=True),
+    sa.UniqueConstraint(
+        "candidate_id",
+        "capability",
+        "idempotency_key",
+        name="uq_agent_runs_candidate_capability_key",
+    ),
+    sa.CheckConstraint(
+        "capability IN ('job_matching', 'resume_review', 'interview_preparation')",
+        name="capability_values",
+    ),
+    sa.CheckConstraint(
+        "state IN ('pending', 'running', 'succeeded', 'failed', 'unavailable', "
+        "'abstained', 'stale', 'cancelled', 'reviewed')",
+        name="state_values",
+    ),
+    sa.CheckConstraint(
+        "review_decision IS NULL OR review_decision IN ('accepted', 'rejected', 'edited')",
+        name="review_decision_values",
+    ),
+    sa.CheckConstraint("char_length(input_hash) = 64", name="input_hash_length"),
+    sa.CheckConstraint("input_tokens >= 0 AND output_tokens >= 0", name="usage_nonnegative"),
+    sa.CheckConstraint("jsonb_typeof(input_identities) = 'object'", name="input_object"),
+    sa.CheckConstraint("jsonb_typeof(evidence_ids) = 'array'", name="evidence_array"),
+    sa.CheckConstraint("jsonb_typeof(result) = 'object'", name="result_object"),
+)
+
+sa.Index("ix_agent_runs_candidate_state", agent_runs.c.candidate_id, agent_runs.c.state)
+sa.Index("ix_agent_runs_candidate_created", agent_runs.c.candidate_id, agent_runs.c.created_at)
+
+agent_run_reviews = sa.Table(
+    "agent_run_reviews",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "run_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.agent_runs.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column(
+        "candidate_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.candidates.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column("decision", sa.String(16), nullable=False),
+    sa.Column("actor_id", sa.String(128), nullable=False),
+    sa.Column("note", sa.Text(), server_default="", nullable=False),
+    sa.Column(
+        "edited_result",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.CheckConstraint(
+        "decision IN ('accepted', 'rejected', 'edited')",
+        name="decision_values",
+    ),
+    sa.CheckConstraint("jsonb_typeof(edited_result) = 'object'", name="edited_object"),
+)
+
+sa.Index(
+    "ix_agent_run_reviews_candidate_run",
+    agent_run_reviews.c.candidate_id,
+    agent_run_reviews.c.run_id,
 )

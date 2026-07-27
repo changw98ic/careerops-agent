@@ -34,6 +34,7 @@ Run::
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -56,8 +57,12 @@ from careerops.domain.system_send import (
     SystemSendRequest,
     compute_system_send_payload_hash,
 )
-from careerops.infrastructure.database.side_effect_memory import InMemorySideEffectStore
+from careerops.infrastructure.database.side_effect_memory import (
+    InMemoryOutboxStore,
+    InMemorySideEffectStore,
+)
 from careerops.integrations.fake_side_effect_provider import FakeSideEffectProvider
+from careerops.orchestration.capability_resolver import CapabilityDecision, CapabilityKind
 
 NOW = datetime(2026, 7, 26, 12, 0, 0, tzinfo=UTC)
 
@@ -82,7 +87,10 @@ def _send_request(*, application_id: UUID, candidate_id: UUID) -> SystemSendRequ
             thread_headers={},
             evidence_refs=evidence_refs,
         ),
-        package_version_id=uuid4(),
+        # The stricter send revalidation binds the request to the latest
+        # approved package version. The test package reader below uses the
+        # application id as that deterministic fixture id.
+        package_version_id=application_id,
         attachment_hashes=(),
         thread_headers={},
         evidence_refs=evidence_refs,
@@ -98,6 +106,33 @@ def _test_recipient_eligible(req: object) -> bool:
     """Test resolver: allow well-formed emails (contains @)."""
     r = getattr(req, "recipient", "").strip()
     return bool(r) and "@" in r and not r.endswith("@")
+
+
+class _AuditCapabilityResolver:
+    def decide(self, capability: CapabilityKind) -> CapabilityDecision:
+        return CapabilityDecision(released=True, reason="audit test capability")
+
+
+class _AuditPackageReader:
+    def get_latest(self, application_id: UUID) -> object:
+        return SimpleNamespace(
+            id=application_id,
+            approval_state=SimpleNamespace(value="approved"),
+            payload_hash="",
+            attachments=(),
+        )
+
+
+def _audit_service(kernel: SideEffectKernel, repo: _OwnedAppRepo) -> SystemManagedSendService:
+    return SystemManagedSendService(
+        kernel,
+        repo,
+        package_reader=_AuditPackageReader(),
+        capability_resolver=_AuditCapabilityResolver(),
+        outbox_store=InMemoryOutboxStore(),
+        account_status_lookup=lambda _request: True,
+        recipient_eligible=_test_recipient_eligible,
+    )
 
 
 def _kernel() -> tuple[SideEffectKernel, InMemoryAuditWriter, InMemorySideEffectStore]:
@@ -178,7 +213,7 @@ class TestEmailConfirmationAndProviderReceiptAudit:
                 state=ApplicationState.PREPARING,
             )
         )
-        svc = SystemManagedSendService(kernel, repo, recipient_eligible=_test_recipient_eligible)  # type: ignore[arg-type]
+        svc = _audit_service(kernel, repo)
         status = svc.confirm_send(
             _send_request(application_id=app_id, candidate_id=cid),
             candidate_id=cid,
@@ -204,7 +239,7 @@ class TestEmailConfirmationAndProviderReceiptAudit:
                 state=ApplicationState.PREPARING,
             )
         )
-        svc = SystemManagedSendService(kernel, repo, recipient_eligible=_test_recipient_eligible)  # type: ignore[arg-type]
+        svc = _audit_service(kernel, repo)
         status = svc.confirm_send(
             _send_request(application_id=app_id, candidate_id=cid),
             candidate_id=cid,
@@ -233,7 +268,7 @@ class TestEmailConfirmationAndProviderReceiptAudit:
                 state=ApplicationState.PREPARING,
             )
         )
-        svc = SystemManagedSendService(kernel, repo, recipient_eligible=_test_recipient_eligible)  # type: ignore[arg-type]
+        svc = _audit_service(kernel, repo)
         request = _send_request(application_id=app_id, candidate_id=cid)
         status = svc.confirm_send(request, candidate_id=cid, now=NOW)
         svc.worker_step(_intent_id(status), candidate_id=cid, now=NOW)
@@ -254,7 +289,7 @@ class TestEmailConfirmationAndProviderReceiptAudit:
                 state=ApplicationState.PREPARING,
             )
         )
-        svc = SystemManagedSendService(kernel, repo, recipient_eligible=_test_recipient_eligible)  # type: ignore[arg-type]
+        svc = _audit_service(kernel, repo)
         status = svc.confirm_send(
             _send_request(application_id=app_id, candidate_id=cid),
             candidate_id=cid,

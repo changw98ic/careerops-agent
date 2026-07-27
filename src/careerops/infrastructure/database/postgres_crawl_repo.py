@@ -57,6 +57,7 @@ from careerops.api.errors import ConflictError, NotFoundError
 from careerops.domain.crawl import CrawlRunState
 from careerops.domain.crawl_plans import (
     CRAWL_RUN_COUNTER_KEYS,
+    CrawlExecutorMode,
     CrawlPerRunLimits,
     CrawlPlanVersion,
     CrawlPolicyStatus,
@@ -276,6 +277,13 @@ def _source_type(value: str) -> CrawlSourceType:
         return CrawlSourceType.OFFICIAL
 
 
+def _executor_mode(value: str) -> CrawlExecutorMode:
+    try:
+        return CrawlExecutorMode(value)
+    except ValueError:
+        return CrawlExecutorMode.HTTP
+
+
 # ---------------------------------------------------------------------------
 # PostgresCrawlSourceRepository
 # ---------------------------------------------------------------------------
@@ -296,6 +304,7 @@ def _row_to_source(row: sa.RowMapping, owner_id: UUID) -> CrawlSource:
         source_type=_source_type(str(row["source_type"])),
         source_identifier=str(row["source_identifier"]),
         base_url=str(row["base_url"]),
+        executor_mode=_executor_mode(str(row.get("executor_mode", "http"))),
         state=_source_state(str(row["state"])),
         trust_status=_policy_status(str(row["trust_status"])),
         terms_status=_policy_status(str(row["terms_status"])),
@@ -350,6 +359,7 @@ class PostgresCrawlSourceRepository:
             "source_type": source.source_type.value,
             "source_identifier": source.source_identifier,
             "base_url": source.base_url,
+            "executor_mode": source.executor_mode.value,
             "state": source.state.value,
             "trust_status": source.trust_status.value,
             "terms_status": source.terms_status.value,
@@ -372,6 +382,7 @@ class PostgresCrawlSourceRepository:
                         "source_type": source.source_type.value,
                         "source_identifier": source.source_identifier,
                         "base_url": source.base_url,
+                        "executor_mode": source.executor_mode.value,
                         "state": source.state.value,
                         "trust_status": source.trust_status.value,
                         "terms_status": source.terms_status.value,
@@ -747,6 +758,24 @@ class PostgresCrawlRunRepository:
         with self._engine.begin() as conn:
             rows = conn.execute(stmt).mappings().all()
         return [_row_to_run(row) for row in rows]
+
+    def count_for_plan(self, owner_id: UUID, plan_version_id: UUID) -> int:
+        stmt = (
+            sa.select(sa.func.count())
+            .select_from(crawl_runs)
+            .join(
+                crawl_plan_versions,
+                crawl_runs.c.plan_version_id == crawl_plan_versions.c.id,
+            )
+            .where(
+                sa.and_(
+                    crawl_plan_versions.c.owner_id == owner_id,
+                    crawl_runs.c.plan_version_id == plan_version_id,
+                )
+            )
+        )
+        with self._engine.begin() as conn:
+            return int(conn.execute(stmt).scalar_one())
 
     def update_terminal(
         self,

@@ -220,6 +220,8 @@ class SystemManagedSendService:
         (10.3), and returns ``PENDING``. The provider is NOT called here.
         """
         app = self._revalidate(request, candidate_id=candidate_id, now=now)
+        capability_released = self._capability_released()
+        target_allowlisted = self._recipient_eligible(request)
 
         idempotency_key = compute_system_send_idempotency_key(
             application_id=request.application_id,
@@ -256,8 +258,8 @@ class SystemManagedSendService:
             attachment_refs=request.attachment_hashes,
             evidence_refs=request.evidence_refs,
             trusted_facts={
-                "capability_released": True,
-                "target_allowlisted": True,
+                "capability_released": capability_released,
+                "target_allowlisted": target_allowlisted,
                 "confirmation_source": "careerops_final_confirmation",
             },
             untrusted_claims={},
@@ -486,14 +488,19 @@ class SystemManagedSendService:
         if app.state is not ApplicationState.PREPARING:
             reasons.append(SystemSendDenialReason.APPLICATION_NOT_PREPARING.value)
 
-        if self._capability is not None:
-            decision = self._capability.decide(CapabilityKind.SYSTEM_MANAGED_SEND)
-            if not decision.released:
-                reasons.append(SystemSendDenialReason.CAPABILITY_NOT_RELEASED.value)
+        if self._capability is None or not self._capability_released():
+            reasons.append(SystemSendDenialReason.CAPABILITY_NOT_RELEASED.value)
 
         latest: object | None = None
-        if self._packages is not None:
-            latest = self._packages.get_latest(request.application_id)
+        if self._packages is None:
+            reasons.append(SystemSendDenialReason.PACKAGE_NOT_APPROVED.value)
+        else:
+            try:
+                latest = self._packages.get_latest(request.application_id)
+            except Exception:
+                # A package-read failure is an authorization failure, never a
+                # reason to proceed with a stale or guessed package.
+                latest = None
             approval_state = getattr(latest, "approval_state", None) if latest else None
             latest_id = getattr(latest, "id", None) if latest else None
             stored_hash = getattr(latest, "payload_hash", None) if latest else None
@@ -543,16 +550,35 @@ class SystemManagedSendService:
         if request.payload_hash != expected_payload_hash:
             reasons.append(SystemSendDenialReason.PAYLOAD_HASH_MISMATCH.value)
 
-        if not self._recipient_eligible(request):
+        try:
+            recipient_eligible = self._recipient_eligible(request)
+        except Exception:
+            recipient_eligible = False
+        if not recipient_eligible:
             reasons.append(SystemSendDenialReason.RECIPIENT_NOT_ELIGIBLE.value)
 
-        if self._account_status is not None and not self._account_status(request):
+        try:
+            account_active = self._account_status is not None and self._account_status(request)
+        except Exception:
+            account_active = False
+        if not account_active:
             reasons.append(SystemSendDenialReason.ACCOUNT_NOT_ACTIVE.value)
+
+        if self._outbox is None:
+            reasons.append(SystemSendDenialReason.OUTBOX_UNAVAILABLE.value)
 
         if reasons:
             raise SystemSendDeniedError(tuple(reasons))
 
         return app
+
+    def _capability_released(self) -> bool:
+        if self._capability is None:
+            return False
+        try:
+            return bool(self._capability.decide(CapabilityKind.SYSTEM_MANAGED_SEND).released)
+        except Exception:
+            return False
 
     # ------------------------------------------------------------------
     # 10.5 — apply a confirmed receipt (append-only, exactly once)
@@ -589,8 +615,6 @@ class SystemManagedSendService:
             version=updated.version + 1,
             updated_at=now,
         )
-        self._applications.save(updated)
-
         event_data: dict[str, object] = {
             "intent_id": str(intent_id),
             "provider": receipt.provider,
@@ -601,21 +625,27 @@ class SystemManagedSendService:
         }
         if provider_message_id is not None:
             event_data["provider_message_id"] = provider_message_id
-        self._applications.append_event(
-            ApplicationEvent(
-                id=uuid4(),
-                application_id=updated.id,
-                event_type=ApplicationEventType.SUBMITTED_VIA_PROVIDER,
-                from_state=ApplicationState.PREPARING,
-                to_state=ApplicationState.SUBMITTED,
-                source=ApplicationEventSource.SYSTEM,
-                actor_id="side-effect-worker",
-                note="System-managed email delivered; provider receipt confirmed",
-                event_data=event_data,
-                occurred_at=now,
-                created_at=now,
-            )
+        event = ApplicationEvent(
+            id=uuid4(),
+            application_id=updated.id,
+            event_type=ApplicationEventType.SUBMITTED_VIA_PROVIDER,
+            from_state=ApplicationState.PREPARING,
+            to_state=ApplicationState.SUBMITTED,
+            source=ApplicationEventSource.SYSTEM,
+            actor_id="side-effect-worker",
+            note="System-managed email delivered; provider receipt confirmed",
+            event_data=event_data,
+            occurred_at=now,
+            created_at=now,
         )
+        save_and_append = getattr(self._applications, "save_and_append_event", None)
+        if callable(save_and_append):
+            save_and_append(updated, event)
+        else:
+            # The in-memory/test adapter has no transaction boundary; the
+            # production repository implements this as one DB transaction.
+            self._applications.save(updated)
+            self._applications.append_event(event)
         if self._trace is not None:
             self._trace.record_confirmed_submission(channel=SubmissionChannel.EMAIL.value)
 

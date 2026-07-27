@@ -113,7 +113,22 @@ class RuntimeResources:
         self.career_graph: object | None = None
         self.review_mapping: ReviewMappingStore | None = None
         self.side_effect_kernel: object | None = None
+        self.model_client: object | None = None
         self._build_career_graph_stack()
+        # Production graph construction can stop early when the optional
+        # LangGraph checkpointer is unavailable. Agent routes still need the
+        # shared model capability boundary, so build the provider client
+        # independently; the factory remains disabled by default.
+        if self.model_client is None:
+            from careerops.model_gateway.factory import create_model_client
+
+            self.model_client = create_model_client(
+                settings.model_provider,
+                base_url=settings.model_base_url,
+                api_key=settings.model_api_key.get_secret_value(),
+                model=settings.model_name,
+                usage_recorder=metrics,
+            )
 
         # Read repositories and application services for API routes.
         # Always use Postgres-backed repos when a database URL is configured.
@@ -172,6 +187,39 @@ class RuntimeResources:
         self.crawl_plan_repo = PostgresCrawlPlanRepository(self.database)
         self.crawl_run_repo = PostgresCrawlRunRepository(self.database)
 
+        from careerops.application.agent_runtime import AgentRuntime
+        from careerops.application.agent_services import (
+            InterviewPreparationService,
+            ResumeReviewService,
+        )
+        from careerops.infrastructure.database.postgres_agent_run_repo import (
+            PostgresAgentRunRepository,
+        )
+        from careerops.model_gateway.base import StructuredModelClient
+
+        self.agent_run_repo = PostgresAgentRunRepository(self.database)
+        agent_model: StructuredModelClient = self.model_client
+        self.agent_runtime = AgentRuntime(
+            self.agent_run_repo,
+            capability_resolver=self.capability_resolver,
+        )
+        self.resume_review_service = ResumeReviewService(
+            self.agent_runtime,
+            resume_repository=self.application_repo,
+            evidence_repository=self.evidence_repo,
+            profile_repository=self.profile_repo,
+            job_repository=self.job_read_repo,
+            model_client=agent_model,
+        )
+        self.interview_preparation_service = InterviewPreparationService(
+            self.agent_runtime,
+            resume_repository=self.application_repo,
+            evidence_repository=self.evidence_repo,
+            profile_repository=self.profile_repo,
+            job_repository=self.job_read_repo,
+            model_client=agent_model,
+        )
+
         # Section-6 inbox repository (tasks 6.1-6.3). Persists filter
         # decisions and requirement match results. Same Postgres-backed
         # pattern as the Section-2/4 repos.
@@ -218,9 +266,14 @@ class RuntimeResources:
         # terminal state.
         from careerops.adapters.http_fetcher import fetch
         from careerops.application.crawl_execution import CrawlExecutionService
+        from careerops.infrastructure.temporal.ego_browser_executor import EgoBrowserExecutor
         from careerops.infrastructure.temporal.m1_crawl_sink import RealCrawlActivitySink
 
-        crawl_sink = RealCrawlActivitySink(fetcher=fetch, engine=self.database)
+        crawl_sink = RealCrawlActivitySink(
+            fetcher=fetch,
+            engine=self.database,
+            browser_executor=EgoBrowserExecutor(),
+        )
         self.crawl_execution_service = CrawlExecutionService(
             run_repository=self.crawl_run_repo,
             plan_repository=self.crawl_plan_repo,
@@ -302,6 +355,15 @@ class RuntimeResources:
         if not healthy:
             raise RuntimeError("Temporal health check failed")
 
+    async def get_temporal_client(self) -> Client:
+        """Return a healthy, lazily connected Temporal client for API enqueueing."""
+        if self._closed:
+            raise RuntimeError("runtime resources are closed")
+        await self._check_temporal()
+        if self._temporal is None:  # pragma: no cover - defensive invariant
+            raise RuntimeError("Temporal client is unavailable")
+        return self._temporal
+
     async def _check_storage(self) -> None:
         await asyncio.to_thread(_verify_storage_directory, self._settings.storage_root)
 
@@ -375,7 +437,7 @@ class RuntimeResources:
         model_client = create_model_client(
             settings.model_provider,
             base_url=settings.model_base_url,
-            api_key=settings.model_api_key,
+            api_key=settings.model_api_key.get_secret_value(),
             model=settings.model_name,
             usage_recorder=usage_recorder,
         )
@@ -394,6 +456,7 @@ class RuntimeResources:
 
         self.side_effect_kernel = kernel
         self.review_mapping = review_mapping
+        self.model_client = model_client
         self.career_graph = build_graph(
             crawler=demo_crawler,
             extractor=demo_extractor,

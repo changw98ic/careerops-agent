@@ -4,8 +4,8 @@ Additive routes under ``/api/v1/crawl-plans`` backed by :class:`CrawlPlanService
 and :class:`CrawlRunService` (run-now). Same Iron-rule posture as the sources
 router: server-side candidate ownership, ``require_repository`` (503) on
 missing wiring, and the ``CRAWL_PLAN_MANAGEMENT`` capability gate (released by
-default). The run-now route returns the PENDING run record; Temporal execution
-is Section 5.
+default). The run-now route returns the queued run record after requesting its
+idempotent Temporal workflow; it never waits for crawl completion.
 
 Plan versions are immutable copy-on-write (design Decision 2): editing the
 active plan creates a new version (POST ``/``), preserving the prior one for
@@ -18,8 +18,10 @@ timezone) and returned for display — it is not persisted.
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Awaitable, Callable
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -43,6 +45,16 @@ from careerops.domain.profiles import (
     RemoteRules,
 )
 from careerops.orchestration.capability_resolver import CapabilityKind
+from careerops.workflows.s5_contracts import CrawlRunWorkflowInput
+from careerops.workflows.s5_workflows import CrawlRunWorkflow
+
+try:
+    from temporalio.exceptions import WorkflowAlreadyStartedError
+except ImportError:  # pragma: no cover - temporalio is a runtime dependency
+    WorkflowAlreadyStartedError = type("WorkflowAlreadyStartedError", (Exception,), {})
+
+
+_log = logging.getLogger("careerops.api.crawl_plans")
 
 router = APIRouter(
     prefix="/api/v1/crawl-plans",
@@ -285,12 +297,13 @@ def resume_plan(
 
 
 # ---------------------------------------------------------------------------
-# Routes — run-now (returns PENDING run; Temporal execution is Section 5)
+# Routes — run-now (queue a Temporal workflow without waiting)
 # ---------------------------------------------------------------------------
 
 
 @router.post("/run-now")
-def run_plan_now(
+async def run_plan_now(
+    request: Request,
     candidate_id: Annotated[UUID, Depends(require_candidate_id)],
     run_service: Annotated[CrawlRunService, Depends(_run_service)],
 ) -> RunResponse:
@@ -299,10 +312,52 @@ def run_plan_now(
     Iron Rule 4 idempotency: a repeat while the prior run is PENDING/RUNNING
     returns the same run record. Requires an ACTIVE plan with at least one
     eligible (enabled + ACTIVE) source; otherwise raises ``INVALID_STATE``.
-    The run is recorded as PENDING — Temporal execution is wired in Section 5.
+    The run is recorded as PENDING and the corresponding workflow is started
+    with a stable workflow ID. If the Temporal client/worker is unavailable,
+    the run remains visibly PENDING so a later request can retry the start;
+    this endpoint never reports a crawl as completed merely because enqueueing
+    was requested.
     """
     run = run_service.run_now(candidate_id)
+    await _start_run_workflow(request, candidate_id, run.id)
     return _run_to_response(run)
+
+
+async def _start_run_workflow(request: Request, owner_id: UUID, run_id: UUID) -> None:
+    """Best-effort enqueue of the durable crawl workflow.
+
+    ``RuntimeResources`` exposes the real Temporal client lazily. Lightweight
+    contract probes used by unit/API tests may not provide that method; in that
+    case the run remains queued rather than falling back to a fake executor.
+    A repeated request uses the same workflow ID and is therefore naturally
+    idempotent when Temporal reports that it already exists.
+    """
+    probe = getattr(request.app.state, "readiness_probe", None)
+    get_client = getattr(probe, "get_temporal_client", None)
+    if not callable(get_client):
+        _log.warning("crawl workflow not enqueued: Temporal client is not wired")
+        return
+
+    try:
+        client = await cast("Callable[[], Awaitable[Any]]", get_client)()
+        settings = request.app.state.settings
+        await client.start_workflow(
+            CrawlRunWorkflow.run,
+            CrawlRunWorkflowInput(owner_id=str(owner_id), run_id=str(run_id)),
+            id=f"careerops.crawl-run:{run_id}",
+            task_queue=settings.temporal_task_queue,
+        )
+    except WorkflowAlreadyStartedError:
+        # Double-click/retry: the existing workflow owns this run.
+        return
+    except Exception as exc:
+        # Keep the durable run queued for a later retry. Do not expose provider
+        # or network details through the API response.
+        _log.warning(
+            "crawl workflow enqueue unavailable for run %s: %s",
+            run_id,
+            type(exc).__name__,
+        )
 
 
 # ---------------------------------------------------------------------------

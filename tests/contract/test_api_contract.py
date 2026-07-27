@@ -284,6 +284,13 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
         "/api/v1/follow-ups/{reminder_id}/reschedule",
         "/api/v1/follow-ups/{reminder_id}/cancel",
         "/api/v1/follow-ups/{reminder_id}/complete",
+        # Review-only LLM Agent runs (resume review / interview preparation).
+        "/api/v1/agents/resume-review",
+        "/api/v1/agents/interview-preparation",
+        "/api/v1/agents/runs",
+        "/api/v1/agents/runs/{run_id}",
+        "/api/v1/agents/runs/{run_id}/review",
+        "/api/v1/agents/runs/{run_id}/reviews",
     }
 
 

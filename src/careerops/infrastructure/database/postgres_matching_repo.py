@@ -163,7 +163,9 @@ class PostgresMatchingReadRepository:
                 )
             )
 
-    def list_candidates(self, *, limit: int = 50) -> list[dict[str, object]]:
+    def list_candidates(
+        self, *, limit: int = 50, candidate_id: UUID | None = None
+    ) -> list[dict[str, object]]:
         with self._engine.begin() as conn:
             evidence_count = (
                 sa.select(
@@ -173,23 +175,22 @@ class PostgresMatchingReadRepository:
                 .group_by(evidence_items.c.candidate_id)
                 .subquery()
             )
-            rows = (
-                conn.execute(
-                    sa.select(
-                        candidates.c.id,
-                        candidates.c.display_name,
-                        sa.func.coalesce(evidence_count.c.cnt, 0).label("evidence_count"),
-                    )
-                    .outerjoin(
-                        evidence_count,
-                        candidates.c.id == evidence_count.c.candidate_id,
-                    )
-                    .order_by(candidates.c.created_at.desc())
-                    .limit(limit)
+            stmt = (
+                sa.select(
+                    candidates.c.id,
+                    candidates.c.display_name,
+                    sa.func.coalesce(evidence_count.c.cnt, 0).label("evidence_count"),
                 )
-                .mappings()
-                .all()
+                .outerjoin(
+                    evidence_count,
+                    candidates.c.id == evidence_count.c.candidate_id,
+                )
+                .order_by(candidates.c.created_at.desc())
+                .limit(limit)
             )
+            if candidate_id is not None:
+                stmt = stmt.where(candidates.c.id == candidate_id)
+            rows = conn.execute(stmt).mappings().all()
             return [dict(row) for row in rows]
 
     # -- Evidence -----------------------------------------------------------

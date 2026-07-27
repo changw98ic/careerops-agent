@@ -162,7 +162,10 @@ class TestInvokeInterruptsAtReviewGate:
         assert isinstance(matches, (tuple, list))
         if matches:
             assert matches[0].get("recommendation") != "apply"
-            assert matches[0].get("error") == "model provider disabled"
+            # This graph fixture predates the capability-specific resolver
+            # seam; the matcher must fail closed before reaching the disabled
+            # provider and expose only the bounded capability error.
+            assert matches[0].get("error") == "model capability unavailable"
         # IDs are JSON-safe strings (not UUID objects)
         UUID(ids["approval_id"])  # parses cleanly
         UUID(ids["intent_id"])

@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -429,10 +430,15 @@ class TestReconciliationProperties:
             ApplicationState,
         )
         from careerops.infrastructure.database.side_effect_memory import (
+            InMemoryOutboxStore,
             InMemorySideEffectStore,
         )
         from careerops.integrations.fake_side_effect_provider import (
             FakeSideEffectProvider,
+        )
+        from careerops.orchestration.capability_resolver import (
+            CapabilityDecision,
+            CapabilityKind,
         )
 
         class _AppRepo:
@@ -464,7 +470,29 @@ class TestReconciliationProperties:
             FakeSideEffectProvider(),
             audit_writer=InMemoryAuditWriter(),
         )
-        svc = SystemManagedSendService(kernel, repo, recipient_eligible=_test_recipient_eligible)  # type: ignore[arg-type]
+
+        class _CapabilityResolver:
+            def decide(self, capability: CapabilityKind) -> CapabilityDecision:
+                return CapabilityDecision(released=True, reason="state-machine test capability")
+
+        class _PackageReader:
+            def get_latest(self, application_id: UUID) -> object:
+                return SimpleNamespace(
+                    id=application_id,
+                    approval_state=SimpleNamespace(value="approved"),
+                    payload_hash="",
+                    attachments=(),
+                )
+
+        svc = SystemManagedSendService(
+            kernel,
+            repo,
+            package_reader=_PackageReader(),
+            capability_resolver=_CapabilityResolver(),
+            outbox_store=InMemoryOutboxStore(),
+            account_status_lookup=lambda _request: True,
+            recipient_eligible=_test_recipient_eligible,
+        )
 
         evidence_refs = (f"ev:{uuid4()}",)
         request = SystemSendRequest(
@@ -485,7 +513,7 @@ class TestReconciliationProperties:
                 thread_headers={},
                 evidence_refs=evidence_refs,
             ),
-            package_version_id=uuid4(),
+            package_version_id=app_id,
             attachment_hashes=(),
             thread_headers={},
             evidence_refs=evidence_refs,

@@ -122,6 +122,7 @@ def _row_to_resume(row: sa.RowMapping) -> ResumeVersion:
         # if they read from a row that pre-dates the columns, but the new
         # schema always returns these.
         parse_status=ResumeParseStatus(str(row.get("parse_status") or "pending")),
+        parse_error=str(row.get("parse_error") or ""),
         confirmation_status=ConfirmationStatus(
             str(row.get("confirmation_status") or "unconfirmed")
         ),
@@ -316,7 +317,7 @@ class PostgresApplicationRepository:
             row = conn.execute(stmt).mappings().first()
         return _row_to_application(row) if row else None
 
-    def save(self, application: Application) -> None:
+    def _application_upsert_stmt(self, application: Application) -> Any:
         values = {
             "id": application.id,
             "candidate_id": application.candidate_id,
@@ -360,8 +361,11 @@ class PostgresApplicationRepository:
                 },
             )
         )
+        return stmt
+
+    def save(self, application: Application) -> None:
         with self._engine.begin() as conn:
-            conn.execute(stmt)
+            conn.execute(self._application_upsert_stmt(application))
 
     def append_event(self, event: ApplicationEvent) -> None:
         stmt = application_lifecycle_events.insert().values(
@@ -378,6 +382,24 @@ class PostgresApplicationRepository:
         )
         with self._engine.begin() as conn:
             conn.execute(stmt)
+
+    def save_and_append_event(self, application: Application, event: ApplicationEvent) -> None:
+        """Persist an application transition and its audit event atomically."""
+        event_stmt = application_lifecycle_events.insert().values(
+            id=event.id,
+            application_id=event.application_id,
+            event_type=event.event_type.value,
+            from_state=event.from_state.value if event.from_state else None,
+            to_state=event.to_state.value if event.to_state else None,
+            source=event.source.value,
+            actor_id=event.actor_id,
+            note=event.note,
+            event_data=event.event_data,
+            occurred_at=event.occurred_at,
+        )
+        with self._engine.begin() as conn:
+            conn.execute(self._application_upsert_stmt(application))
+            conn.execute(event_stmt)
 
     def get_events(self, application_id: UUID) -> list[ApplicationEvent]:
         stmt = (
@@ -415,6 +437,7 @@ class PostgresApplicationRepository:
                 human_confirmed=version.human_confirmed,
                 # 2.4 lifecycle fields
                 parse_status=version.parse_status.value,
+                parse_error=version.parse_error,
                 confirmation_status=version.confirmation_status.value,
                 source_reference=version.source_reference,
                 parsed_at=version.parsed_at,
@@ -429,6 +452,7 @@ class PostgresApplicationRepository:
                     "target_type": version.target_type,
                     "human_confirmed": version.human_confirmed,
                     "parse_status": version.parse_status.value,
+                    "parse_error": version.parse_error,
                     "confirmation_status": version.confirmation_status.value,
                     "source_reference": version.source_reference,
                     "parsed_at": version.parsed_at,
@@ -631,6 +655,30 @@ class PostgresApplicationRepository:
         )
         with self._engine.begin() as conn:
             conn.execute(stmt)
+
+    def approve_package_version(self, version: ApplicationPackageVersion) -> None:
+        """Advance approval metadata without re-inserting an immutable row."""
+        stmt = (
+            sa.update(application_package_versions)
+            .where(
+                sa.and_(
+                    application_package_versions.c.id == version.id,
+                    application_package_versions.c.application_id == version.application_id,
+                    application_package_versions.c.approval_state
+                    == PackageApprovalState.DRAFT.value,
+                )
+            )
+            .values(
+                approval_state=version.approval_state.value,
+                approved_at=version.approved_at,
+                approved_by=version.approved_by,
+                updated_at=version.updated_at,
+            )
+        )
+        with self._engine.begin() as conn:
+            result = conn.execute(stmt)
+            if result.rowcount != 1:
+                raise ValueError("package version was not in an approvable draft state")
 
     # -- FollowUpRepository protocol ---------------------------------------
 

@@ -85,7 +85,14 @@ def build_graph(
     graph.add_node("resume", partial(resume_node, resume_text=resume_text))
     graph.add_node("filter", filter_node)
     graph.add_node("dedup", dedup_node)
-    graph.add_node("match", partial(match_node, model_client=model_client))
+    graph.add_node(
+        "match",
+        partial(
+            match_node,
+            model_client=model_client,
+            capability_resolver=capability_resolver,
+        ),
+    )
     graph.add_node("draft", draft_node)
     graph.add_node(
         "review_gate",

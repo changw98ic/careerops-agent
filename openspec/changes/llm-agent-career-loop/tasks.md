@@ -1,7 +1,7 @@
 ## 1. Contracts, storage, and capability gates
 
 - [ ] 1.1 Freeze the browser-source, Agent-run, Agent-result, review-decision, correction, and stale-input schemas from the six capability specs.
-- [ ] 1.2 Add additive PostgreSQL migrations for Agent runs/results, input identities, evidence references, review decisions, browser execution metadata, and bounded usage/outcome projections.
+- [x] 1.2 Add additive PostgreSQL migrations for Agent runs/results, input identities, evidence references, review decisions, browser execution metadata, and bounded usage/outcome projections.
 - [ ] 1.3 Implement candidate-scoped repositories with stable idempotency keys, ownership checks, versioned results, and stale-input detection.
 - [ ] 1.4 Add capability resolver entries and readiness checks for browser crawl, model matching, resume review, and interview preparation with safe defaults.
 - [ ] 1.5 Add contract tests for default-deny behavior, ownership, idempotency, state transitions, stale inputs, and rollback preservation.
@@ -10,18 +10,18 @@
 
 - [ ] 2.1 Define the source-executor port and adapt the existing guarded HTTP fetch path without changing its SSRF, robots, rate-limit, and response-limit contracts.
 - [ ] 2.2 Implement the bounded Ego worker/sidecar bridge with URL preflight, navigation/scroll/response budgets, lifecycle cleanup, safe readiness reporting, and provenance output.
-- [ ] 2.3 Normalize Ego page output through the existing source adapters into `CrawledPostingRecord` without persisting browser session material or raw unrestricted pages.
-- [ ] 2.4 Extend the crawl execution service to select the declared executor mode, record safe browser failures/backoff, and never silently switch modes after a denial.
-- [ ] 2.5 Wire `/crawl-plans/run-now` to start or reuse the idempotent `CrawlRunWorkflow` after creating the pending run.
+- [x] 2.3 Normalize Ego page output through the existing source adapters into `CrawledPostingRecord` without persisting browser session material or raw unrestricted pages.
+- [x] 2.4 Extend the crawl execution service to select the declared executor mode, record safe browser failures/backoff, and never silently switch modes after a denial.
+- [x] 2.5 Wire `/crawl-plans/run-now` to start or reuse the idempotent `CrawlRunWorkflow` after creating the pending run.
 - [ ] 2.6 Add a projection activity that runs deterministic inbox filtering/evidence matching after durable posting persistence and reports projection status separately from crawl status.
 - [ ] 2.7 Add restart/retry integration coverage for HTTP and Ego harnesses, duplicate postings/versions, partial source failure, worker unavailability, and workflow replay.
 - [ ] 2.8 Update crawl-plan/run APIs and pages to show executor mode, browser readiness, queued/running/terminal state, bounded errors, backoff, and links to inbox results.
 
 ## 3. Shared LLM Agent runtime
 
-- [ ] 3.1 Define capability-specific request/response schemas and prompt versions for resume review, job matching, and interview preparation.
-- [ ] 3.2 Implement a candidate-scoped Agent-run service that persists pending/running/succeeded/failed/unavailable/abstained/stale/reviewed states and input hashes.
-- [ ] 3.3 Inject one configured `StructuredModelClient` into the inbox and Agent services; retain `DisabledModelAdapter` as the default path.
+- [x] 3.1 Define capability-specific request/response schemas and prompt versions for resume review, job matching, and interview preparation.
+- [x] 3.2 Implement a candidate-scoped Agent-run service that persists pending/running/succeeded/failed/unavailable/abstained/stale/reviewed states and input hashes.
+- [x] 3.3 Inject one configured `StructuredModelClient` into the inbox and Agent services; retain `DisabledModelAdapter` as the default path.
 - [ ] 3.4 Implement bounded input builders, untrusted-content envelopes, evidence allowlists, credential/private-content rejection, and raw prompt/response suppression.
 - [ ] 3.5 Enforce schema validation, one repair attempt, timeout/token budgets, 429 handling, explicit abstention, and deterministic fallback for every Agent capability.
 - [ ] 3.6 Add aggregate token/latency/outcome metrics and trace correlation without high-cardinality user-content labels.
@@ -29,7 +29,7 @@
 
 ## 4. Job matching Agent
 
-- [ ] 4.1 Integrate semantic ranking into `InboxProjectionService` after hard filters and evidence matching, preserving deterministic decisions when the model is unavailable.
+- [x] 4.1 Integrate semantic ranking into `InboxProjectionService` after hard filters and evidence matching, preserving deterministic decisions when the model is unavailable.
 - [ ] 4.2 Add single-job and bounded-batch matching commands with stable input-hash idempotency and asynchronous Agent-run status.
 - [ ] 4.3 Persist requirement coverage, job/candidate evidence references, model/rules versions, confidence, abstention, and user corrections.
 - [ ] 4.4 Add inbox/job-detail pages for matching status, advisory result, gaps, evidence, model metadata, correction, retry, and stale handling.
@@ -37,7 +37,7 @@
 
 ## 5. Resume review Agent
 
-- [ ] 5.1 Implement resume-review input assembly from one eligible resume version, one job version, active profile, and selected confirmed evidence.
+- [x] 5.1 Implement resume-review input assembly from one eligible resume version, one job version, active profile, and selected confirmed evidence.
 - [ ] 5.2 Implement schema-validated review findings and presentation diffs with source evidence references and unsupported-claim handling.
 - [ ] 5.3 Persist review results without mutating the base resume or creating trusted evidence; create a new version for every user acceptance or edit.
 - [ ] 5.4 Add resume-review API/page views for start, progress, findings, evidence, diff, accept/reject/edit, retry, and stale status.
@@ -45,9 +45,9 @@
 
 ## 6. Interview preparation Agent
 
-- [ ] 6.1 Freeze the preparation-pack, question, STAR-prompt, uncertainty, and user-edit schemas with bounded size limits.
-- [ ] 6.2 Implement job-specific preparation generation from selected job facts, confirmed resume evidence, profile context, and optional user context only.
-- [ ] 6.3 Implement deterministic preparation fallback for model-disabled/unavailable mode using requirements and confirmed evidence.
+- [x] 6.1 Freeze the preparation-pack, question, STAR-prompt, uncertainty, and user-edit schemas with bounded size limits.
+- [x] 6.2 Implement job-specific preparation generation from selected job facts, confirmed resume evidence, profile context, and optional user context only.
+- [x] 6.3 Implement deterministic preparation fallback for model-disabled/unavailable mode using requirements and confirmed evidence.
 - [ ] 6.4 Add API/page views for preparation run creation, pack display, question/STAR editing, accept/reject, versioning, retry, and stale handling.
 - [ ] 6.5 Add tests for unsupported claims, injected job content, missing evidence, user-authored STAR corrections, ownership, idempotency, and provider failure.
 

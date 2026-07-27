@@ -31,7 +31,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import UUID, uuid4
 
 from careerops.application.inbox_service import RULES_VERSION, RequirementMatchEngine
@@ -110,6 +110,14 @@ class ResumeReadRepository(Protocol):
     def find_resume_by_id(self, candidate_id: UUID, version_id: UUID) -> ResumeVersion | None: ...
 
 
+class EvidenceReadRepository(Protocol):
+    def list_confirmed_for(self, candidate_id: UUID, *, limit: int = 200) -> list[EvidenceItem]: ...
+
+
+class JobVersionReadRepository(Protocol):
+    def find_version_by_id(self, version_id: UUID) -> Any | None: ...
+
+
 class PackageNotFoundError(Exception):
     pass
 
@@ -158,6 +166,8 @@ class PackageService:
         requirement_engine: RequirementMatchEngine | None = None,
         capability_resolver: CapabilityResolver | None = None,
         model_suggester: ModelSuggester | None = None,
+        evidence_repo: EvidenceReadRepository | None = None,
+        job_version_repo: JobVersionReadRepository | None = None,
         stale_threshold_days: int = STALE_SOURCE_THRESHOLD_DAYS,
         trace: CareerLoopTrace | None = None,
     ) -> None:
@@ -166,6 +176,8 @@ class PackageService:
         self._requirement_engine = requirement_engine or RequirementMatchEngine()
         self._capability_resolver = capability_resolver
         self._model_suggester = model_suggester
+        self._evidence_repo = evidence_repo
+        self._job_versions = job_version_repo
         self._stale_threshold_days = stale_threshold_days
         self._trace = trace
 
@@ -240,6 +252,12 @@ class PackageService:
         Requirement gaps are computed when job/evidence context is supplied.
         """
         self._require_confirmed_resume(candidate_id, resume_version_id)
+        self._validate_claim_evidence(
+            candidate_id=candidate_id,
+            resume_version_id=resume_version_id,
+            claims=claims,
+            confirmed_evidence=confirmed_evidence,
+        )
         gaps: tuple[RequirementGap, ...] = ()
         if job_structured_data is not None and confirmed_evidence is not None:
             gaps = self.compare_requirements(
@@ -387,6 +405,19 @@ class PackageService:
                 reasons.append(f"bound resume not eligible: {why}")
         if self._is_source_stale(version, now):
             reasons.append(f"job source is stale beyond {self._stale_threshold_days} days policy")
+        if self._evidence_repo is not None:
+            confirmed_by_id = self._confirmed_evidence_by_id(candidate_id)
+            for claim in version.claims:
+                for evidence_id in claim.evidence_ids:
+                    evidence = confirmed_by_id.get(evidence_id)
+                    if evidence is None:
+                        reasons.append(
+                            f"claim evidence is missing, unconfirmed, or not owned: {evidence_id}"
+                        )
+                    elif evidence.resume_version_id != version.resume_version_id:
+                        reasons.append(
+                            f"claim evidence is not bound to resume version: {evidence_id}"
+                        )
         return reasons
 
     def approve(
@@ -445,7 +476,14 @@ class PackageService:
             created_at=version.created_at,
             updated_at=now,
         )
-        self._packages.save_package_version(approved)
+        approve_version = getattr(self._packages, "approve_package_version", None)
+        if callable(approve_version):
+            approve_version(approved)
+        else:
+            # Test/in-memory repositories expose only save(); production uses
+            # the dedicated conditional update to avoid re-inserting the same
+            # immutable package row with a changed approval state.
+            self._packages.save_package_version(approved)
         if self._trace is not None:
             self._trace.record_package_approval(
                 outcome="approved",
@@ -477,6 +515,7 @@ class PackageService:
             answers=req.answers,
             claims=req.claims,
             attachments=req.attachments,
+            diff=diff,
         )
         return ApplicationPackageVersion(
             id=uuid4(),
@@ -527,7 +566,60 @@ class PackageService:
         available at this layer; the workspace carries the authoritative
         job-version timestamp for stricter checks in a later gate."""
         created = version.created_at
+        if version.job_version_id is not None and self._job_versions is not None:
+            job_version = self._job_versions.find_version_by_id(version.job_version_id)
+            created = getattr(job_version, "captured_at", None) if job_version is not None else None
+            if created is None:
+                return True
         if created is None:
             return False
         age_days = (now - created).days
         return age_days > self._stale_threshold_days
+
+    def _confirmed_evidence_by_id(self, candidate_id: UUID) -> dict[UUID, EvidenceItem]:
+        if self._evidence_repo is None:
+            return {}
+        try:
+            items = self._evidence_repo.list_confirmed_for(candidate_id)
+        except Exception:
+            return {}
+        return {
+            item.id: item
+            for item in items
+            if item.candidate_id == candidate_id
+            and item.confirmation_status is ConfirmationStatus.CONFIRMED
+        }
+
+    def _validate_claim_evidence(
+        self,
+        *,
+        candidate_id: UUID,
+        resume_version_id: UUID,
+        claims: tuple[PackageClaimVersion, ...],
+        confirmed_evidence: list[EvidenceItem] | None,
+    ) -> None:
+        if not claims or (self._evidence_repo is None and confirmed_evidence is None):
+            return
+        items = (
+            confirmed_evidence
+            if confirmed_evidence is not None
+            else list(self._confirmed_evidence_by_id(candidate_id).values())
+        )
+        by_id = {
+            item.id: item
+            for item in items
+            if item.candidate_id == candidate_id
+            and item.confirmation_status is ConfirmationStatus.CONFIRMED
+        }
+        reasons: list[str] = []
+        for claim in claims:
+            for evidence_id in claim.evidence_ids:
+                evidence = by_id.get(evidence_id)
+                if evidence is None:
+                    reasons.append(
+                        f"claim evidence is missing, unconfirmed, or not owned: {evidence_id}"
+                    )
+                elif evidence.resume_version_id != resume_version_id:
+                    reasons.append(f"claim evidence is not bound to resume version: {evidence_id}")
+        if reasons:
+            raise PackageApprovalValidationError(reasons)

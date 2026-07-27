@@ -14,7 +14,9 @@ ADR 0006 invariants:
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from importlib.resources import files
 from typing import Any, cast
 
 from careerops.model_gateway.base import (
@@ -22,8 +24,17 @@ from careerops.model_gateway.base import (
     StructuredModelRequest,
     StructuredModelResponse,
 )
+from careerops.orchestration.capability_resolver import CapabilityKind
 
 MATCH_SCHEMA = "job_match"
+MATCH_JSON_SCHEMA = cast(
+    dict[str, object],
+    json.loads(
+        files("careerops.model_gateway")
+        .joinpath("schemas", "job_match.json")
+        .read_text(encoding="utf-8")
+    ),
+)
 
 SYSTEM_PROMPT = """You are a technical recruiting match analyst.
 
@@ -131,8 +142,13 @@ def _job_to_text(job: dict[str, Any]) -> str:
 class LLMJobMatcher:
     """Matches jobs against a skill profile using a qualified model."""
 
-    def __init__(self, client: StructuredModelClient) -> None:
+    def __init__(
+        self,
+        client: StructuredModelClient,
+        capability_resolver: Any | None = None,
+    ) -> None:
         self._client = client
+        self._capability_resolver = capability_resolver
 
     def match_job(
         self,
@@ -144,6 +160,23 @@ class LLMJobMatcher:
         """Analyze one job's fit against the skill profile."""
         company = job.get("company", "")
         title = job.get("title", "")
+
+        if self._capability_resolver is None:
+            return JobMatchResult(
+                company=company,
+                title=title,
+                error="model capability resolver unavailable",
+            )
+        try:
+            decision = self._capability_resolver.decide(CapabilityKind.MODEL_TAILORING)
+        except Exception:
+            return JobMatchResult(
+                company=company,
+                title=title,
+                error="model capability unavailable",
+            )
+        if not decision.released:
+            return JobMatchResult(company=company, title=title, error=decision.reason)
 
         if not self._client.is_enabled:
             return JobMatchResult(
@@ -165,6 +198,7 @@ class LLMJobMatcher:
             user_prompt=user_prompt,
             untrusted_content=_job_to_text(job),
             schema_name=MATCH_SCHEMA,
+            schema=MATCH_JSON_SCHEMA,
             max_tokens=1024,
             timeout_seconds=90.0,
             trace_id=trace_id,
@@ -174,7 +208,9 @@ class LLMJobMatcher:
         try:
             response: StructuredModelResponse = self._client.invoke(request)
         except Exception as e:
-            return JobMatchResult(company=company, title=title, error=f"{type(e).__name__}: {e}")
+            # Provider errors can contain response bodies, URLs, or request
+            # details. Keep the domain result bounded and non-sensitive.
+            return JobMatchResult(company=company, title=title, error=type(e).__name__)
 
         r = response.result
         return JobMatchResult(

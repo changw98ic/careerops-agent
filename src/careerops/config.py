@@ -74,7 +74,7 @@ class Settings(BaseSettings):
     # fields are required. The provider is any Anthropic-compatible endpoint
     # (Xiaomi MiMo, Zhipu GLM, OpenAI, Anthropic, etc.).
     model_base_url: str = ""
-    model_api_key: str = ""
+    model_api_key: SecretStr = SecretStr("")
     model_name: str = ""
     google_oauth_enabled: bool = False
     external_writes_enabled: bool = False
@@ -117,7 +117,7 @@ class Settings(BaseSettings):
                 name
                 for name, value in (
                     ("model_base_url", self.model_base_url),
-                    ("model_api_key", self.model_api_key),
+                    ("model_api_key", self.model_api_key.get_secret_value()),
                     ("model_name", self.model_name),
                 )
                 if not value

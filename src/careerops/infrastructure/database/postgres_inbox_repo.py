@@ -32,6 +32,7 @@ from careerops.domain.inbox import (
     FilterDecision,
     FilterVerdict,
     RequirementMatchResult,
+    SemanticRankingStatus,
 )
 from careerops.infrastructure.database.schema import (
     applications,
@@ -79,6 +80,10 @@ class PostgresInboxRepository:
             "profile_version_id": decision.profile_version_id,
             "verdict": decision.verdict.value,
             "rules_version": decision.rules_version,
+            "semantic_ranking_status": decision.semantic_ranking_status.value,
+            "semantic_ranking_score": decision.semantic_ranking_score,
+            "semantic_ranking_reason": decision.semantic_ranking_reason,
+            "semantic_model_version": decision.semantic_model_version,
             "blocking_reasons": [r.value for r in decision.blocking_reasons],
             "evidence_refs": {
                 k: v for k, v in decision.evidence_refs.items() if not k.startswith("_")
@@ -105,6 +110,10 @@ class PostgresInboxRepository:
                     set_={
                         "verdict": values["verdict"],
                         "rules_version": values["rules_version"],
+                        "semantic_ranking_status": values["semantic_ranking_status"],
+                        "semantic_ranking_score": values["semantic_ranking_score"],
+                        "semantic_ranking_reason": values["semantic_ranking_reason"],
+                        "semantic_model_version": values["semantic_model_version"],
                         "blocking_reasons": values["blocking_reasons"],
                         "evidence_refs": values["evidence_refs"],
                         "created_at": sa.func.now(),
@@ -393,6 +402,12 @@ class PostgresInboxRepository:
                     "verdict": row["verdict"],
                     "profile_version_id": str(row["profile_version_id"]),
                     "rules_version": row["rules_version"],
+                    "semantic_ranking_status": row.get(
+                        "semantic_ranking_status", SemanticRankingStatus.UNAVAILABLE.value
+                    ),
+                    "semantic_ranking_score": row.get("semantic_ranking_score"),
+                    "semantic_ranking_reason": row.get("semantic_ranking_reason", ""),
+                    "semantic_model_version": row.get("semantic_model_version", ""),
                     "blocking_reasons": [r.value for r in blocking],
                     "evidence_refs": row["evidence_refs"] or {},
                 },
@@ -581,6 +596,12 @@ class PostgresInboxRepository:
             verdict=FilterVerdict(row["verdict"]),
             profile_version_id=row["profile_version_id"],
             rules_version=row["rules_version"],
+            semantic_ranking_status=SemanticRankingStatus(
+                row.get("semantic_ranking_status", SemanticRankingStatus.UNAVAILABLE)
+            ),
+            semantic_ranking_score=row.get("semantic_ranking_score"),
+            semantic_ranking_reason=row.get("semantic_ranking_reason", ""),
+            semantic_model_version=row.get("semantic_model_version", ""),
             blocking_reasons=tuple(
                 BlockingReason(r)
                 for r in (row["blocking_reasons"] or [])
@@ -634,6 +655,12 @@ class PostgresInboxRepository:
             "evidence_refs": row["evidence_refs"] or {},
             "rules_version": row["rules_version"],
             "profile_version_id": str(row["profile_version_id"]),
+            "semantic_ranking_status": row.get(
+                "semantic_ranking_status", SemanticRankingStatus.UNAVAILABLE.value
+            ),
+            "semantic_ranking_score": row.get("semantic_ranking_score"),
+            "semantic_ranking_reason": row.get("semantic_ranking_reason", ""),
+            "semantic_model_version": row.get("semantic_model_version", ""),
         }
 
     def get_job_detail_with_evidence(
@@ -690,6 +717,10 @@ class PostgresInboxRepository:
                     "evidence_refs": decision.evidence_refs,
                     "rules_version": decision.rules_version,
                     "profile_version_id": str(decision.profile_version_id),
+                    "semantic_ranking_status": decision.semantic_ranking_status.value,
+                    "semantic_ranking_score": decision.semantic_ranking_score,
+                    "semantic_ranking_reason": decision.semantic_ranking_reason,
+                    "semantic_model_version": decision.semantic_model_version,
                 }
 
         # Requirement matches

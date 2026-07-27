@@ -83,8 +83,12 @@ class InMemoryMatchingReadRepository:
         }
         self._evidence.setdefault(candidate_id, [])
 
-    def list_candidates(self, *, limit: int = 50) -> list[dict[str, object]]:
+    def list_candidates(
+        self, *, limit: int = 50, candidate_id: UUID | None = None
+    ) -> list[dict[str, object]]:
         items = list(self._candidates.values())
+        if candidate_id is not None:
+            items = [item for item in items if item["id"] == candidate_id]
         for item in items:
             cid: UUID = item["id"]  # type: ignore[assignment]
             item["evidence_count"] = len(self._evidence.get(cid, []))
@@ -403,6 +407,25 @@ class InMemoryJobReadRepository:
     def find_latest_version(self, posting_id: UUID) -> JobPostingVersion | None:
         versions = self._versions.get(posting_id, [])
         return versions[-1] if versions else None
+
+    def find_version_by_id(self, version_id: UUID) -> JobPostingVersion | None:
+        for versions in self._versions.values():
+            for version in versions:
+                if version.id == version_id:
+                    return version
+        return None
+
+    def find_version_for_canonical(
+        self, canonical_job_id: UUID, version_id: UUID
+    ) -> JobPostingVersion | None:
+        version = self.find_version_by_id(version_id)
+        if version is None:
+            return None
+        return (
+            version
+            if self._posting_assignments.get(version.job_posting_id) == canonical_job_id
+            else None
+        )
 
     def find_canonical_by_fingerprint(self, fingerprint: str) -> CanonicalJob | None:
         cid = self._canonical_by_fingerprint.get(fingerprint)
@@ -1383,6 +1406,11 @@ class InMemoryCrawlRunRepository:
             reverse=True,
         )
         return items[:limit]
+
+    def count_for_plan(self, owner_id: UUID, plan_version_id: UUID) -> int:
+        if not self._owner_matches(plan_version_id, owner_id):
+            return 0
+        return sum(1 for run in self._runs.values() if run.plan_version_id == plan_version_id)
 
     def update_terminal(
         self,

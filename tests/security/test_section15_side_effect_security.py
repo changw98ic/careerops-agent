@@ -33,6 +33,7 @@ from __future__ import annotations
 import inspect
 from collections.abc import Iterable
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -53,7 +54,10 @@ from careerops.domain.system_send import (
     SystemSendRequest,
     compute_system_send_payload_hash,
 )
-from careerops.infrastructure.database.side_effect_memory import InMemorySideEffectStore
+from careerops.infrastructure.database.side_effect_memory import (
+    InMemoryOutboxStore,
+    InMemorySideEffectStore,
+)
 from careerops.integrations.fake_side_effect_provider import (
     FakeSideEffectProvider,
 )
@@ -179,9 +183,26 @@ class TestNoDirectProviderWrite:
             def append_event(self, event):  # type: ignore[no-untyped-def]
                 pass
 
+        class _PackageReader:
+            def get_latest(self, application_id):  # type: ignore[no-untyped-def]
+                return SimpleNamespace(
+                    id=application_id,
+                    approval_state=SimpleNamespace(value="approved"),
+                    payload_hash="",
+                    attachments=(),
+                )
+
+        class _ReleasingResolver:
+            def decide(self, capability: CapabilityKind) -> CapabilityDecision:
+                return CapabilityDecision(released=True, reason="security test capability")
+
         svc = SystemManagedSendService(
             kernel,
             _Repo(),
+            package_reader=_PackageReader(),
+            capability_resolver=_ReleasingResolver(),
+            outbox_store=InMemoryOutboxStore(),
+            account_status_lookup=lambda _request: True,
             recipient_eligible=lambda _request: True,
         )  # type: ignore[arg-type]
         evidence_refs = (f"ev:{uuid4()}",)
@@ -204,7 +225,7 @@ class TestNoDirectProviderWrite:
                     thread_headers={},
                     evidence_refs=evidence_refs,
                 ),
-                package_version_id=uuid4(),
+                package_version_id=app_id,
                 attachment_hashes=(),
                 thread_headers={},
                 evidence_refs=evidence_refs,

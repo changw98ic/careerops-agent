@@ -14,14 +14,14 @@ The independent sub-agent attempt was not counted: the review thread exceeded tw
 | V4 | Model egress and prompt-injection boundary | PASS | `tests/unit/test_section3_security.py`: 39 passed |
 | V5 | Crawl HTTP SSRF/rate-limit/circuit boundary | PASS | `tests/unit/test_http_fetcher.py`, `test_circuit_breaker.py`: 56 passed |
 | V6 | Crawl Temporal/activity contract | PASS | `tests/contract/test_section5_crawl_slice.py`, `tests/unit/test_s5_temporal_wiring.py`: 25 passed |
-| V7 | Page run-now → Temporal → real crawl dispatch | FAIL — gap confirmed | `crawl_plans.py:293` creates a run only; `runtime.py:388` still defines `demo_crawler()` returning `()`; no API `start_workflow` call |
-| V8 | Ego in the formal runtime path | FAIL — gap confirmed | `rg --files src/careerops` has no Ego/browser executor; Ego appears in standalone `scripts/crawl_full.py`, `crawl_all.sh`, and `crawl_daily.sh` only |
-| V9 | Page inbox LLM injection and interview-prep implementation | FAIL — gap confirmed | `api/app.py:247-253` constructs `InboxProjectionService` without `model_client`; no dedicated interview/preparation/Agent implementation file exists |
-| V10 | Resume-review LLM path and durable Agent-run UI/API | FAIL — gap confirmed | `resume_analysis.py`/`resume_service.py` are deterministic and contain no `StructuredModelRequest`; no `AgentRun`/Agent-run API or persistence contract exists |
+| V7 | Page run-now → Temporal → real crawl dispatch | PASS after repair | `tests/contract/test_section5_crawl_slice.py` and `tests/unit/test_s5_temporal_wiring.py`; run-now creates/reuses a pending run and starts the stable workflow ID |
+| V8 | Ego in the formal runtime path | PASS after repair | `src/careerops/infrastructure/temporal/ego_browser_executor.py`, explicit `executor_mode=ego`, and `tests/unit/test_ego_browser_executor.py`: SSRF preflight, bounded capture, missing dependency, and no HTTP fallback |
+| V9 | Page inbox LLM injection and interview-prep implementation | PASS after repair | `InboxProjectionService` receives the shared model client; `application/agent_services.py` and Agent routes provide schema-bound resume/interview execution; `tests/unit/test_agent_services.py` covers model, fallback, idempotency, and review |
+| V10 | Resume-review LLM path and durable Agent-run UI/API | PASS after repair | `domain/agent_runs.py`, `agent_runs`/`agent_run_reviews` migrations, `StructuredModelRequest` services, candidate-scoped routes, and the Agent contract tests |
 
 ## Interpretation
 
 - Safety and existing gateway/crawl contracts are green in the tested surfaces.
-- Four independent product-integration checks fail for the same reason the new change was proposed: the full Ego + LLM + page-managed Agent loop is not yet implemented.
-- V7–V10 are not waived as “known”; they are explicit blockers for implementing and later accepting this change.
+- The original V7–V10 gaps were repaired and re-run locally. The remaining unchecked items are pilot, UI breadth, stale/correction workflows, and independent/release qualification evidence.
+- These passes are code-level/harness evidence only; they do not substitute for a real Mimo pilot, quality sample review, or release qualification.
 - No key, raw model content, browser session material, or private dataset was emitted by these checks.

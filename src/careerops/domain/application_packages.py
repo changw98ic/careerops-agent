@@ -160,6 +160,7 @@ def compute_payload_hash(
     answers: dict[str, str],
     claims: tuple[PackageClaimVersion, ...],
     attachments: tuple[PackageAttachment, ...],
+    diff: tuple[PackageDiffEntry, ...] = (),
 ) -> str:
     """Return the canonical sha256 (64 hex) over the exact package inputs.
 
@@ -183,6 +184,16 @@ def compute_payload_hash(
                 "evidence_ids": sorted(str(e) for e in c.evidence_ids),
             }
             for c in claims
+        ],
+        "diff": [
+            {
+                "section": d.section,
+                "original_text": d.original_text,
+                "proposed_text": d.proposed_text,
+                "evidence_ids": sorted(str(e) for e in d.evidence_ids),
+                "source": d.source,
+            }
+            for d in diff
         ],
         "attachments": sorted(
             [{"name": a.name, "content_hash": a.content_hash} for a in attachments],

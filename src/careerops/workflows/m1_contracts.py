@@ -48,6 +48,7 @@ class CrawlJobSourceInput:
     company_name: str
     source_type: str
     base_url: str
+    executor_mode: str = "http"
 
 
 @dataclass(frozen=True, slots=True)

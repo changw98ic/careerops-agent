@@ -14,6 +14,7 @@ from careerops.infrastructure.temporal.activities import (
     OutboxDrainActivities,
     SmokeActivities,
 )
+from careerops.infrastructure.temporal.ego_browser_executor import EgoBrowserExecutor
 from careerops.infrastructure.temporal.m1_activities import (
     CrawlActivitySink,
     M1CrawlActivities,
@@ -39,7 +40,7 @@ _TemporalActivity = Callable[..., object]
 class TemporalWorkerSettings:
     target: str = "127.0.0.1:7233"
     namespace: str = "default"
-    task_queue: str = "careerops-m1"
+    task_queue: str = "careerops-m0"
     identity: str | None = None
 
     def __post_init__(self) -> None:
@@ -57,7 +58,7 @@ class TemporalWorkerSettings:
         return cls(
             target=values.get("CAREEROPS_TEMPORAL_ADDRESS", "127.0.0.1:7233"),
             namespace=values.get("CAREEROPS_TEMPORAL_NAMESPACE", "default"),
-            task_queue=values.get("CAREEROPS_TEMPORAL_TASK_QUEUE", "careerops-m1"),
+            task_queue=values.get("CAREEROPS_TEMPORAL_TASK_QUEUE", "careerops-m0"),
             identity=identity,
         )
 
@@ -186,7 +187,11 @@ def main() -> None:
     )
 
     # Section 5: wire crawl execution + scheduled-run creation.
-    crawl_sink = RealCrawlActivitySink(fetcher=fetch, engine=engine)
+    crawl_sink = RealCrawlActivitySink(
+        fetcher=fetch,
+        engine=engine,
+        browser_executor=EgoBrowserExecutor(),
+    )
     run_repo = PostgresCrawlRunRepository(engine)
     plan_repo = PostgresCrawlPlanRepository(engine)
     source_repo = PostgresCrawlSourceRepository(engine)

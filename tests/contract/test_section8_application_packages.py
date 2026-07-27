@@ -528,6 +528,7 @@ class TestPackageSlice:
             kind=EvidenceKind.SKILL,
             name="Python",
             confirmation_status=ConfirmationStatus.CONFIRMED,
+            resume_version_id=resume.id,
         )
         svc, repo = _make_service(resume=resume)
         app = uuid4()

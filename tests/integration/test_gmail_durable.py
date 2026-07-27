@@ -8,6 +8,7 @@ Run with: ``uv run python -m pytest tests/integration/test_gmail_durable.py``
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 from datetime import UTC, datetime
 
@@ -21,12 +22,13 @@ from careerops.integrations.gmail_receipt_store import GmailReceipt
 
 pytestmark = pytest.mark.integration
 
-DATABASE_URL = "postgresql+psycopg://careerops_runtime@127.0.0.1:5432/careerops_test"
-
 
 @pytest.fixture(scope="module")
 def engine() -> Iterator[sa.Engine]:
-    eng = sa.create_engine(DATABASE_URL, pool_pre_ping=True)
+    database_url = os.environ.get("CAREEROPS_TEST_DATABASE_URL")
+    if database_url is None:
+        pytest.skip("CAREEROPS_TEST_DATABASE_URL is required for Gmail receipt integration tests")
+    eng = sa.create_engine(database_url, pool_pre_ping=True)
     yield eng
     eng.dispose()
 

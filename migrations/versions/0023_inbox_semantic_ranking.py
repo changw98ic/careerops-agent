@@ -60,8 +60,18 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint("semantic_ranking_score_range", "filter_decisions", schema="careerops")
-    op.drop_constraint("semantic_ranking_status_values", "filter_decisions", schema="careerops")
+    op.drop_constraint(
+        op.f("ck_filter_decisions_semantic_ranking_score_range"),
+        "filter_decisions",
+        schema="careerops",
+        type_="check",
+    )
+    op.drop_constraint(
+        op.f("ck_filter_decisions_semantic_ranking_status_values"),
+        "filter_decisions",
+        schema="careerops",
+        type_="check",
+    )
     op.drop_column("filter_decisions", "semantic_model_version", schema="careerops")
     op.drop_column("filter_decisions", "semantic_ranking_reason", schema="careerops")
     op.drop_column("filter_decisions", "semantic_ranking_score", schema="careerops")

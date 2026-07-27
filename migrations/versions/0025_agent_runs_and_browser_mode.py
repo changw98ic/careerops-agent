@@ -173,5 +173,13 @@ def downgrade() -> None:
     op.drop_index("ix_agent_runs_candidate_created", table_name="agent_runs", schema="careerops")
     op.drop_index("ix_agent_runs_candidate_state", table_name="agent_runs", schema="careerops")
     op.drop_table("agent_runs", schema="careerops")
-    op.drop_constraint("executor_mode_values", "job_sources", schema="careerops")
+    # ``create_check_constraint`` applies the metadata naming convention, so
+    # PostgreSQL stores the expanded name rather than the short label used
+    # above. Keep the downgrade aligned with the actual schema identifier.
+    op.drop_constraint(
+        op.f("ck_job_sources_executor_mode_values"),
+        "job_sources",
+        schema="careerops",
+        type_="check",
+    )
     op.drop_column("job_sources", "executor_mode", schema="careerops")

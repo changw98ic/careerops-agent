@@ -1,4 +1,4 @@
-FROM node:20-bookworm-slim@sha256:b7502599a095bfa719e6e4e381926718848793045962e4597f594509e1a6a085 AS frontend
+FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS frontend
 
 WORKDIR /build
 

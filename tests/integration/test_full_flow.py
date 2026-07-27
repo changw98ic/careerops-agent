@@ -6,6 +6,7 @@ Requires Docker.  Uses one-time PostgreSQL and Redis via ``testcontainers``.
 from __future__ import annotations
 
 import shutil
+import tempfile
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -179,9 +180,12 @@ def _settings(
         conn.execute(sa.text(f"GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA careerops TO {login}"))
 
     runtime_url = parsed.set(username=login, password=password)
-    # /private/tmp avoids macOS /var symlink (O_NOFOLLOW in storage layer).
-    storage_root = Path(f"/private/tmp/careerops-it-{uuid4().hex[:8]}")
-    storage_root.mkdir(parents=True, exist_ok=True)
+    # Keep macOS storage outside its /var symlink; Linux uses the normal temp
+    # directory because /private/tmp does not exist there.
+    temp_parent = (
+        Path("/private/tmp") if Path("/private/tmp").is_dir() else Path(tempfile.gettempdir())
+    )
+    storage_root = Path(tempfile.mkdtemp(prefix="careerops-it-", dir=temp_parent))
 
     yield Settings.model_validate(
         {

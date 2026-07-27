@@ -124,7 +124,7 @@
 - [x] 10.9 Add fake-provider crash matrix tests: before-call crash, after-call-before-receipt crash, timeout-with-success, duplicate confirmation, credential revoke, and reconciliation escalation.
 - [x] 10.10 Add controlled integration tests with a fake or offline provider harness and verify no duplicate provider effects without enabling live OAuth, external-write, or auto-send flags.
 - [x] 10.11 Add UI send-progress, sent, failed, and reconciliation-required states; never display queued as sent.
-- [ ] 10.12 Gate inbound/reply work on a system-managed fake-provider slice: CareerOps confirmation creates one intent, the worker sends without manual Gmail action, receipt updates the application, and ambiguous outcomes stop in reconciliation.
+- [x] 10.12 Gate inbound/reply work on a system-managed fake-provider slice: CareerOps confirmation creates one intent, the worker sends without manual Gmail action, receipt updates the application, and ambiguous outcomes stop in reconciliation.
 
 ## 11. Gmail read synchronization and thread association
 
@@ -189,7 +189,7 @@
 - [x] 15.8 Add audit assertions for profile confirmation, package approval, email confirmation, provider receipt, mail-event review, reply approval, and reminder changes.
 - [x] 15.9 Run `make verify`, `make verify-db`, `make verify-temporal`, `make verify-frontend`, `make security`, and relevant dependency/image audits in disposable environments.
 - [x] 15.10 Add compatibility tests proving legacy internal drafts, old application events, and historical email receipts are projected accurately and never reported as newly sent provider messages.
-- [ ] 15.11 Add staged verification commands/evidence for the crawl slice, application/package slice, fake-provider send slice, and mail-intelligence slice so each boundary has an independently recorded pass/fail result.
+- [x] 15.11 Add staged verification commands/evidence for the crawl slice, application/package slice, fake-provider send slice, and mail-intelligence slice so each boundary has an independently recorded pass/fail result.
 - [x] 15.12 Add operator runbooks and bounded alerts for stuck crawl runs, repeated source denials, stale mail cursors, pending approvals, reconciliation backlog, revoked accounts, and failed retention/purge work.
 - [x] 15.13 Add an authority audit over legacy scripts and adapters proving no direct Gmail/provider write or unguarded external fetch bypasses the current policy/kernel path.
 - [x] 15.14 Add worker batch-size, API response-size, crawl backpressure, mailbox sync backfill, and rate-limit tests so large sources/messages cannot create unbounded memory or UI payloads.
@@ -199,19 +199,19 @@
 - [ ] 16.1 Prepare real, legal, de-identified discovery/parser/dedup pilot artifacts and manifests without modifying the repository's synthetic fixtures.
 - [ ] 16.2 Prepare evidence-match, contact, email, policy/injection, and reconciliation pilot slices according to the existing D0 ownership and labeling plan.
 - [ ] 16.3 Conduct independent review of source/consent/retention, de-identification, model provider terms, Gmail scope, and dedicated-account setup.
-- [ ] 16.4 Run a controlled end-to-end dry run with system-managed send disabled: crawl plan → inbox → package → preview → manual/external-form confirmation → mail sync simulation → reply draft.
-- [ ] 16.5 Run fake-provider/offline harness tests that verify CareerOps confirmation triggers system-managed execution without a manual Gmail step; do not enable live OAuth, external-write, or auto-send flags in this change.
-- [ ] 16.6 Verify rollback by disabling send/read capabilities while preserving application history, drafts, receipts, audit events, and manual tracking.
+- [x] 16.4 Run a controlled end-to-end dry run with system-managed send disabled: crawl plan → inbox → package → preview → manual/external-form confirmation → mail sync simulation → reply draft.
+- [x] 16.5 Run fake-provider/offline harness tests that verify CareerOps confirmation triggers system-managed execution without a manual Gmail step; do not enable live OAuth, external-write, or auto-send flags in this change.
+- [x] 16.6 Verify rollback by disabling send/read capabilities while preserving application history, drafts, receipts, audit events, and manual tracking.
 - [ ] 16.7 Record product metrics for trusted shortlist time, user corrections, package approval, confirmed submission, mail linkage, review latency, and follow-up completion.
-- [ ] 16.8 Update handoff, runbooks, API documentation, frontend documentation, and release qualification evidence with actual results rather than planned claims.
+- [x] 16.8 Update handoff, runbooks, API documentation, frontend documentation, and release qualification evidence with actual results rather than planned claims.
 - [ ] 16.9 Do not claim the full D0 or release gate is complete until real pilot, independent review, privacy/legal, custody, and qualification evidence exist.
 
 ## 17. Milestone gates and scope control
 
-- [ ] 17.1 Gate A — Deliver a read-only discovery slice: user profile → managed crawl plan → provenance-backed job inbox → favorite/ignore, with no external writes.
-- [ ] 17.2 Gate B — Deliver an application-preparation slice: favorite → preparing → confirmed resume/evidence → job-specific package diff → package approval → external-form/manual tracking.
-- [ ] 17.3 Gate C — Deliver the fake-provider system-managed send slice: CareerOps confirmation → durable intent/outbox → worker → fake provider receipt/reconciliation → submitted timeline, with no manual Gmail step and all prohibited runtime flags still disabled.
-- [ ] 17.4 Gate D — Deliver inbound mail intelligence: fixture/dedicated-input sync → thread association or unresolved review → event proposal → user acceptance → legal application transition.
-- [ ] 17.5 Gate E — Deliver reply drafts and follow-up: reminder → constrained draft → CareerOps approval → fake-provider send path → receipt/timeline, with auto-send disabled.
-- [ ] 17.6 Keep live Gmail OAuth, live provider activation, external-write flag enablement, auto-send, third-party form automation, social-source expansion, calendar automation, and multi-user support in separate future changes with their own proposal, threat-model delta, qualification, and approval.
+- [x] 17.1 Gate A — Deliver a read-only discovery slice: user profile → managed crawl plan → provenance-backed job inbox → favorite/ignore, with no external writes.
+- [x] 17.2 Gate B — Deliver an application-preparation slice: favorite → preparing → confirmed resume/evidence → job-specific package diff → package approval → external-form/manual tracking.
+- [x] 17.3 Gate C — Deliver the fake-provider system-managed send slice: CareerOps confirmation → durable intent/outbox → worker → fake provider receipt/reconciliation → submitted timeline, with no manual Gmail step and all prohibited runtime flags still disabled.
+- [x] 17.4 Gate D — Deliver inbound mail intelligence: fixture/dedicated-input sync → thread association or unresolved review → event proposal → user acceptance → legal application transition.
+- [x] 17.5 Gate E — Deliver reply drafts and follow-up: reminder → constrained draft → CareerOps approval → fake-provider send path → receipt/timeline, with auto-send disabled.
+- [x] 17.6 Keep live Gmail OAuth, live provider activation, external-write flag enablement, auto-send, third-party form automation, social-source expansion, calendar automation, and multi-user support in separate future changes with their own proposal, threat-model delta, qualification, and approval.
 - [ ] 17.7 Do not start the next capability expansion until the prior gate has a passing contract/integration result and at least one real-user workflow review with recorded corrections.

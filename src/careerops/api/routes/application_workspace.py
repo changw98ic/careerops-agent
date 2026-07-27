@@ -396,6 +396,9 @@ def confirm_external_submission(
         )
     except Exception as e:
         raise _translate(e) from e
+    trace = getattr(getattr(request.app, "state", None), "career_loop_trace", None)
+    if trace is not None:
+        trace.record_confirmed_submission(channel=channel.value)
     return _to_detail(app)
 
 

@@ -41,6 +41,7 @@ from careerops.application.application_workspace import (
 )
 from careerops.domain.applications import (
     Application,
+    ApplicationCycle,
     ApplicationEvent,
     ApplicationState,
     IllegalTransitionError,
@@ -84,7 +85,7 @@ class _FakeCycleRepo:
     """In-memory cycle repo mirroring the Postgres get_or_create_active contract."""
 
     def __init__(self) -> None:
-        self._active: dict[tuple[UUID, UUID], object] = {}
+        self._active: dict[tuple[UUID, UUID], ApplicationCycle] = {}
 
     def get_or_create_active(
         self,
@@ -94,20 +95,19 @@ class _FakeCycleRepo:
         cycle_id: UUID,
         reason: str = "",
         now: datetime | None = None,
-    ) -> object:
+    ) -> ApplicationCycle:
         key = (candidate_id, canonical_job_id)
         existing = self._active.get(key)
         if existing is not None:
             return existing
 
-        class _Cycle:
-            pass
-
-        cycle = _Cycle()
-        cycle.id = cycle_id  # type: ignore[attr-defined]
-        cycle.candidate_id = candidate_id  # type: ignore[attr-defined]
-        cycle.canonical_job_id = canonical_job_id  # type: ignore[attr-defined]
-        cycle.active = True  # type: ignore[attr-defined]
+        cycle = ApplicationCycle(
+            id=cycle_id,
+            candidate_id=candidate_id,
+            canonical_job_id=canonical_job_id,
+            active=True,
+            created_at=now,
+        )
         self._active[key] = cycle
         return cycle
 

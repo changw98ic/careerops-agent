@@ -1567,6 +1567,12 @@ application_package_versions = sa.Table(
     ),
 )
 
+sa.Index(
+    "ix_application_package_versions_app",
+    application_package_versions.c.application_id,
+    application_package_versions.c.version_number,
+)
+
 follow_up_reminders = sa.Table(
     "follow_up_reminders",
     metadata,
@@ -1821,6 +1827,8 @@ email_accounts = sa.Table(
         name="ck_email_accounts_connection_state",
     ),
 )
+
+sa.Index("ix_email_accounts_candidate", email_accounts.c.candidate_id)
 
 email_threads = sa.Table(
     "email_threads",
@@ -2923,6 +2931,12 @@ inbox_snoozes = sa.Table(
         "canonical_job_id",
         name="uq_inbox_snoozes_candidate_job",
     ),
+)
+
+sa.Index(
+    "ix_inbox_snoozes_candidate_until",
+    inbox_snoozes.c.candidate_id,
+    inbox_snoozes.c.snoozed_until,
 )
 
 

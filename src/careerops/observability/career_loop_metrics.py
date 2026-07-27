@@ -30,6 +30,14 @@ Metric groups:
   mail proposals / reply drafts / package approvals, labelled by ``review_kind``.
 - ``careerops_follow_up_total`` — Counter: follow-up lifecycle events labelled
   by ``event`` (``created`` / ``snoozed`` / ``completed`` / ``cancelled``).
+- ``careerops_trusted_shortlist_seconds`` — Histogram: elapsed time from the
+  first observed posting to the user's trusted shortlist decision.
+- ``careerops_user_corrections_total`` — Counter: user corrections by bounded
+  workflow stage (shortlist / package / mail_linkage / reply_draft).
+- ``careerops_confirmed_submissions_total`` — Counter: confirmed submissions
+  by bounded channel (email / external_form / manual).
+- ``careerops_mail_linkage_total`` — Counter: mail-linkage outcomes
+  (linked / unresolved / corrected).
 
 Gauges:
 
@@ -77,6 +85,9 @@ _MAIL_PROPOSAL_SOURCES = ("rules", "model")
 _REVIEW_KINDS = ("mail_proposal", "reply_draft", "package_approval")
 _FOLLOW_UP_EVENTS = ("created", "snoozed", "completed", "cancelled")
 _PENDING_KINDS = ("package", "reply")
+_CORRECTION_STAGES = ("shortlist", "package", "mail_linkage", "reply_draft")
+_SUBMISSION_CHANNELS = ("email", "external_form", "manual")
+_MAIL_LINKAGE_OUTCOMES = ("linked", "unresolved", "corrected")
 
 
 class CareerLoopMetrics:
@@ -166,6 +177,40 @@ class CareerLoopMetrics:
         for event in _FOLLOW_UP_EVENTS:
             self._follow_ups.labels(event=event)
 
+        self._trusted_shortlist = Histogram(
+            "careerops_trusted_shortlist_seconds",
+            "Elapsed time from first observation to trusted shortlist decision.",
+            buckets=(60.0, 300.0, 900.0, 3600.0, 21600.0, 86400.0, 604800.0),
+            registry=reg,
+        )
+
+        self._user_corrections = Counter(
+            "careerops_user_corrections_total",
+            "User corrections by bounded workflow stage.",
+            ("stage",),
+            registry=reg,
+        )
+        for stage in _CORRECTION_STAGES:
+            self._user_corrections.labels(stage=stage)
+
+        self._confirmed_submissions = Counter(
+            "careerops_confirmed_submissions_total",
+            "Confirmed submissions by bounded channel.",
+            ("channel",),
+            registry=reg,
+        )
+        for channel in _SUBMISSION_CHANNELS:
+            self._confirmed_submissions.labels(channel=channel)
+
+        self._mail_linkage = Counter(
+            "careerops_mail_linkage_total",
+            "Mail-linkage outcomes by bounded result.",
+            ("outcome",),
+            registry=reg,
+        )
+        for outcome in _MAIL_LINKAGE_OUTCOMES:
+            self._mail_linkage.labels(outcome=outcome)
+
         self._pending_approvals = Gauge(
             "careerops_pending_approvals",
             "Currently-pending human approvals by kind.",
@@ -246,6 +291,28 @@ class CareerLoopMetrics:
         """Increment the follow-up lifecycle counter by event."""
         if event in _FOLLOW_UP_EVENTS:
             self._follow_ups.labels(event=event).inc()
+
+    # -- Product outcome signals ------------------------------------------
+
+    def observe_trusted_shortlist(self, *, seconds: float) -> None:
+        """Record time from first observation to a trusted shortlist action."""
+        if seconds >= 0:
+            self._trusted_shortlist.observe(seconds)
+
+    def record_user_correction(self, *, stage: str) -> None:
+        """Record an explicit user correction at a bounded workflow stage."""
+        if stage in _CORRECTION_STAGES:
+            self._user_corrections.labels(stage=stage).inc()
+
+    def record_confirmed_submission(self, *, channel: str) -> None:
+        """Record a user-confirmed submission by bounded channel."""
+        if channel in _SUBMISSION_CHANNELS:
+            self._confirmed_submissions.labels(channel=channel).inc()
+
+    def record_mail_linkage(self, *, outcome: str) -> None:
+        """Record whether a mail event was linked, unresolved, or corrected."""
+        if outcome in _MAIL_LINKAGE_OUTCOMES:
+            self._mail_linkage.labels(outcome=outcome).inc()
 
     # -- Gauges ------------------------------------------------------------
 

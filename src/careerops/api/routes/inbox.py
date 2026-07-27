@@ -54,6 +54,40 @@ router = APIRouter(
 )
 
 
+def _record_inbox_trace(
+    request: Request,
+    *,
+    candidate_id: UUID,
+    canonical_job_id: UUID,
+    decision: str,
+    occurred_at: datetime,
+) -> None:
+    """Record inbox decisions without making observability a workflow dependency."""
+
+    trace = getattr(getattr(request.app, "state", None), "career_loop_trace", None)
+    if trace is None:
+        return
+    trace.record_inbox_decision(decision=decision)
+    if decision != "favorite":
+        return
+    try:
+        detail = _get_inbox_repo(request).get_job_detail_with_evidence(
+            candidate_id, canonical_job_id
+        )
+        first_seen = detail.get("first_seen_at") if detail else None
+        if isinstance(first_seen, str):
+            captured_at = datetime.fromisoformat(first_seen.replace("Z", "+00:00"))
+            if captured_at.tzinfo is not None:
+                trace.record_trusted_shortlist(
+                    first_seen_at=captured_at,
+                    shortlisted_at=occurred_at,
+                )
+    except Exception:
+        # Product instrumentation is best effort; a telemetry/read projection
+        # failure must never change the inbox decision result.
+        return
+
+
 # ---------------------------------------------------------------------------
 # Request / response schemas
 # ---------------------------------------------------------------------------
@@ -193,6 +227,13 @@ def favorite_job(
                     ),
                     now,
                 )
+                _record_inbox_trace(
+                    request,
+                    candidate_id=candidate_id,
+                    canonical_job_id=canonical_job_id,
+                    decision="favorite",
+                    occurred_at=now,
+                )
                 return FavoriteIgnoreResponse(
                     application_id=str(updated.id),
                     state=updated.state.value,
@@ -221,6 +262,13 @@ def favorite_job(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
+    _record_inbox_trace(
+        request,
+        candidate_id=candidate_id,
+        canonical_job_id=canonical_job_id,
+        decision="favorite",
+        occurred_at=now,
+    )
     return FavoriteIgnoreResponse(
         application_id=str(application.id),
         state=application.state.value,
@@ -257,6 +305,13 @@ def ignore_job(
                         actor_id=str(candidate_id),
                     ),
                     now,
+                )
+                _record_inbox_trace(
+                    request,
+                    candidate_id=candidate_id,
+                    canonical_job_id=canonical_job_id,
+                    decision="ignore",
+                    occurred_at=now,
                 )
                 return FavoriteIgnoreResponse(
                     application_id=str(updated.id),
@@ -295,6 +350,13 @@ def ignore_job(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
+    _record_inbox_trace(
+        request,
+        candidate_id=candidate_id,
+        canonical_job_id=canonical_job_id,
+        decision="ignore",
+        occurred_at=now,
+    )
     return FavoriteIgnoreResponse(
         application_id=str(application.id),
         state=application.state.value,
@@ -336,6 +398,13 @@ def snooze_job(
         raise HTTPException(status_code=404, detail="Job not found")
 
     repo.upsert_snooze(candidate_id, canonical_job_id, snoozed_until)
+    _record_inbox_trace(
+        request,
+        candidate_id=candidate_id,
+        canonical_job_id=canonical_job_id,
+        decision="snooze",
+        occurred_at=now,
+    )
 
     return SnoozeResponse(
         canonical_job_id=str(canonical_job_id),

@@ -73,6 +73,7 @@ from careerops.domain.mail_intelligence import (
     outcome_for_category,
     validate_proposal_transition,
 )
+from careerops.orchestration.capability_resolver import CapabilityDecision, CapabilityKind
 
 # ---------------------------------------------------------------------------
 # In-memory fakes
@@ -237,13 +238,8 @@ def _make_service(
     transition = _RecordingTransitionSink(owner)
 
     class _Resolver:
-        def decide(self, kind: object) -> object:
-            class _D:
-                def __init__(self, released: bool) -> None:
-                    self.released = released
-                    self.reason = "test"
-
-            return _D(capability_released)
+        def decide(self, capability: CapabilityKind) -> CapabilityDecision:
+            return CapabilityDecision(released=capability_released, reason="test")
 
     service = MailIntelligenceService(
         message_repo=messages,
@@ -643,7 +639,9 @@ class TestAcceptReject:
         assert transition.calls[0]["to_state"] is ApplicationState.INTERVIEWING
         # Mail-derived provenance is recorded as a timeline note.
         assert len(timeline.notes) == 1
-        assert timeline.notes[0]["event_data"]["proposal_id"] == str(proposal.id)
+        event_data = timeline.notes[0]["event_data"]
+        assert isinstance(event_data, dict)
+        assert event_data["proposal_id"] == str(proposal.id)
         # The application state reflects the delegated transition.
         assert result.application is not None
         assert result.application.state is ApplicationState.INTERVIEWING

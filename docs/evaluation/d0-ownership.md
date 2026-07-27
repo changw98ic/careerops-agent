@@ -4,7 +4,10 @@
 - Data curator role: repository owner
 - Independent reviewer role: a person who did not implement the evaluated capability
 - Adjudicator: independent reviewer for safety-critical labels; repository owner for non-safety labels after disagreement review
-- Current full-gate evidence: engineering verification complete (1906 tests pass); 0/286 real pilot rows (no real pilot yet)
+- Current full-gate evidence: the engineering verifier derives 294 repository-declared non-synthetic pilot rows against 286 required; externally evidenced real-pilot rows remain 0/286
+- Product-metric instrumentation: Section 16.7 signals are trace-correlated and
+  exported through the application `/metrics` endpoint; no real-pilot scrape
+  or user-value result is asserted by this engineering record.
 
 ## Evidence boundary
 
@@ -106,10 +109,14 @@ hash; they must not overwrite a frozen version to preserve a passing score.
 
 ## Current M-1 status
 
-Schemas, guides, role definitions, the pilot plan, agreement/leakage tooling,
-and the v2 technical-scan path are engineering deliverables. The current plan is
-still `planned`, all nine per-dataset manifests are absent, reviewer/adjudicator
-roles are unassigned, and the full gate reports `0/286` real pilot rows.
+Schemas, guides, role definitions, the pilot plan, nine per-dataset manifests,
+agreement/leakage tooling, and the v2 technical-scan path are engineering
+deliverables. `scripts/verify_m1.py --json` currently derives 294 repository-
+declared non-synthetic rows against the 286-row minimum and passes its scoped
+engineering-consistency check. That result is not a real-pilot qualification:
+source/consent/retention attestations, reviewer/adjudicator identity and
+substantive review, de-identification/privacy/legal review, and custody evidence
+remain externally unverified, so the real-pilot count stays `0/286`.
 
 The only M-1 verifier output scope is `d0_pilot_engineering_consistency`.
 `release_qualification_allowed` must remain strict `false`; any other value

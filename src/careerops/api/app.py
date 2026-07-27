@@ -40,6 +40,7 @@ from careerops.domain.applications import (
     FollowUpReminder,
     ResumeVersion,
 )
+from careerops.domain.email_payloads import EmailAccountSummary
 from careerops.infrastructure.auth import create_console_auth_service
 from careerops.infrastructure.dashboard import RuntimeDashboardSnapshotProvider
 from careerops.infrastructure.database.postgres_application_repo import (
@@ -150,6 +151,7 @@ def create_app(
     app.state.readiness_probe = probe
     app.state.auth_service = auth_service
     app.state.metrics = metrics
+    app.state.career_loop_trace = metrics.trace
 
     # Wire API route repositories and services when using RuntimeResources.
     # Routes gracefully degrade to empty results when these are absent, but
@@ -251,15 +253,15 @@ def create_app(
         )
         # Section-7 application workspace service (tasks 7.2-7.7). Composes the
         # existing application repo (doubles as resume/package/follow-up repo)
-        # with the cycle repo (cycle-bound get-or-create) and the default
-        # job-evidence channel resolver. Package-binding store is wired in
-        # Section 8 (None here → binding reads return None until a package is
-        # approved). Trusted-contact lookup (EMAIL eligibility) arrives in
-        # Section 9; until then EMAIL is surfaced as deferred. Same DI pattern
-        # as the other Section-2/4/6 services.
+        # with the cycle repo and the default job-evidence channel resolver.
         from careerops.application.application_workspace import (
             ApplicationWorkspaceService,
             PackageServiceBindingStore,
+        )
+        from careerops.application.email_payload_service import (
+            AccountLookupError,
+            EmailPayloadService,
+            RepositoryTrustedContactResolver,
         )
 
         # Section-8 package service (tasks 8.2-8.7). The application repo
@@ -274,29 +276,64 @@ def create_app(
             probe.application_repo,  # type: ignore[arg-type]
             probe.application_repo,  # type: ignore[arg-type]
             capability_resolver=probe.capability_resolver,
+            trace=metrics.trace,
         )
         app.state.package_service = package_service
+
+        # Section 9 trusted-contact/account adapters.  Both are candidate/job
+        # scoped and fail closed: repository misses produce no eligible
+        # recipient/account rather than a guessed fallback.
+        trusted_contact_resolver = RepositoryTrustedContactResolver(
+            probe.contact_repo,
+            probe.job_read_repo,
+        )
+
+        def _has_trusted_contact(candidate_id: UUID, canonical_job_id: UUID) -> bool:
+            application = probe.application_repo.find_by_candidate_and_job(
+                candidate_id, canonical_job_id
+            )
+            if application is None:
+                return False
+            return bool(
+                trusted_contact_resolver.resolve(
+                    candidate_id=candidate_id,
+                    application_id=application.id,
+                    canonical_job_id=canonical_job_id,
+                )
+            )
+
         app.state.application_workspace_service = ApplicationWorkspaceService(
             probe.application_repo,
             cycle_repo=probe.application_cycle_repo,
             package_binding_store=PackageServiceBindingStore(package_service),
+            contact_lookup=_has_trusted_contact,
         )
-        # Section-9 email payload service (tasks 9.1-9.6). Composes the
-        # approved-package repo (the application repo doubles as the
-        # package-version repo, same as Section 8) with the application-ownership
-        # reader (the workspace service) and the default contact resolver (no
-        # trusted contact evidence yet → EMAIL stays denied until a real
-        # resolver is wired). Account lookup + attachment provider stay None
-        # until the dedicated-account + content-addressed storage paths ship
-        # (Section 10/11); preview surfaces "not wired" rather than guessing.
-        # This service performs NO provider side effects — it is the preview /
-        # validation / hash-computation layer only.
-        from careerops.application.email_payload_service import EmailPayloadService
+
+        class _CandidateAccountLookup:
+            def __init__(self, repository: Any) -> None:
+                self._repository = repository
+
+            def lookup_for_candidate(self, candidate_id: UUID, account_id: UUID) -> Any:
+                account = self._repository.get_account(candidate_id, account_id)
+                if account is None:
+                    raise AccountLookupError(f"account {account_id} not found")
+                return EmailAccountSummary(
+                    account_id=account.id,
+                    email_address=account.email_address,
+                    status=account.status.value,
+                )
+
+            def lookup(self, account_id: UUID) -> Any:
+                raise AccountLookupError(
+                    f"candidate-scoped account lookup required for {account_id}"
+                )
 
         workspace_service = app.state.application_workspace_service
         app.state.email_payload_service = EmailPayloadService(
             probe.application_repo,  # type: ignore[arg-type]
             workspace_service,  # type: ignore[arg-type]
+            contact_resolver=trusted_contact_resolver,
+            account_lookup=_CandidateAccountLookup(probe.mail_account_repo),  # type: ignore[arg-type]
         )
         # Section-10 system-managed send service (tasks 10.1-10.7). Composes
         # the shared side-effect kernel (built in RuntimeResources for the
@@ -314,12 +351,51 @@ def create_app(
             )
             from careerops.infrastructure.database.outbox import PostgresOutboxStore
 
+            email_payload_service = app.state.email_payload_service
+
+            def _recipient_eligible(request: Any) -> bool:
+                application = probe.application_repo.find_by_id(request.application_id)
+                if (
+                    application is None
+                    or application.candidate_id != request.candidate_id
+                    or (
+                        request.canonical_job_id is not None
+                        and request.canonical_job_id != application.canonical_job_id
+                    )
+                ):
+                    return False
+                verdict = email_payload_service.resolve_trusted_contact(
+                    candidate_id=request.candidate_id,
+                    application_id=request.application_id,
+                    canonical_job_id=application.canonical_job_id,
+                    recipient_email=request.recipient,
+                )
+                return verdict.eligible and (
+                    verdict.email.strip().lower() == request.recipient.strip().lower()
+                )
+
+            def _account_active(request: Any) -> bool:
+                if request.account_id is None:
+                    return False
+                account = probe.mail_account_repo.get_account(
+                    request.candidate_id, request.account_id
+                )
+                return bool(
+                    account is not None
+                    and account.status.value == "active"
+                    and account.email_address.strip().lower()
+                    == request.account_email.strip().lower()
+                )
+
             app.state.system_managed_send_service = SystemManagedSendService(
                 probe.side_effect_kernel,  # type: ignore[arg-type]
                 probe.application_repo,
                 package_reader=package_service,
                 capability_resolver=probe.capability_resolver,
                 outbox_store=PostgresOutboxStore(probe.database),  # type: ignore[arg-type]
+                account_status_lookup=_account_active,
+                recipient_eligible=_recipient_eligible,
+                trace=metrics.trace,
             )
         # Section-12 mail intelligence service (tasks 12.5-12.7). Composes the
         # durable proposal repo + minimized message reader with the workspace
@@ -340,6 +416,7 @@ def create_app(
             timeline_sink=workspace_service,  # type: ignore[arg-type]
             follow_up_scheduler=None,  # Section 13 wires concrete follow-up rules
             capability_resolver=probe.capability_resolver,
+            trace=metrics.trace,
         )
         # Delegate the USER-sourced transition to the workspace service so the
         # proposal never owns the ApplicationRepository. The bound method
@@ -389,6 +466,7 @@ def create_app(
             _FollowUpRepoAdapter(probe.application_repo),  # type: ignore[arg-type]
             probe.application_repo,
             timeline_sink=workspace_service,  # type: ignore[arg-type]
+            trace=metrics.trace,
         )
         app.state.follow_up_service = follow_up_service
         app.state.reply_draft_service = ReplyDraftService(

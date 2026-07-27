@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from typing import Protocol, cast
 
 from careerops.domain.side_effects import (
     ProviderCallResult,
@@ -31,6 +32,12 @@ from careerops.integrations.gmail_sender import (
     GmailSendError,
     OutgoingEmail,
 )
+
+
+class AttachmentPathResolver(Protocol):
+    """Resolve an approved content hash to a provider-readable path."""
+
+    def get(self, content_hash: str) -> str | Path | None: ...
 
 
 class GmailSideEffectProvider:
@@ -53,7 +60,7 @@ class GmailSideEffectProvider:
         self,
         sender: GmailSender,
         receipt_store: GmailReceiptStore | None = None,
-        storage: object | None = None,
+        storage: AttachmentPathResolver | None = None,
     ) -> None:
         self._sender = sender
         self._receipt_store: GmailReceiptStore = (
@@ -104,9 +111,16 @@ class GmailSideEffectProvider:
                     error_code="ATTACHMENT_STORAGE_UNAVAILABLE",
                     failure_class=ProviderFailureClass.VALIDATION,
                 )
+            if not isinstance(attachment_hashes, (list, tuple)):
+                return ProviderCallResult(
+                    kind=ProviderResultKind.FAILURE,
+                    error_code="ATTACHMENT_HASHES_INVALID",
+                    failure_class=ProviderFailureClass.VALIDATION,
+                )
+            hash_values = cast("list[str] | tuple[str, ...]", attachment_hashes)
             resolved: list[Path] = []
-            for hash_val in attachment_hashes:
-                path = self._storage.get(str(hash_val))  # type: ignore[union-attr]
+            for hash_val in hash_values:
+                path = self._storage.get(str(hash_val))
                 if path is None:
                     return ProviderCallResult(
                         kind=ProviderResultKind.FAILURE,

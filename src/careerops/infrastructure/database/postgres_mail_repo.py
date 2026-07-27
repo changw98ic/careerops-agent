@@ -28,6 +28,7 @@ from typing import Any
 from uuid import UUID
 
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 
 from careerops.application.mail_extraction import MailMessageInput
@@ -208,26 +209,29 @@ class PostgresEmailEventProposalRepository:
             "updated_at": proposal.updated_at,
         }
         with self._engine.begin() as conn:
-            pg_insert = sa.dialects.postgresql.insert(email_event_proposals)
-            stmt = pg_insert.values(**values).on_conflict_do_update(
-                index_elements=["id"],
-                set_={  # type: ignore[arg-type]
-                    "application_id": values["application_id"],
-                    "state": values["state"],
-                    "decided_at": values["decided_at"],
-                    "decided_by": values["decided_by"],
-                    "updated_at": values["updated_at"],
-                    "category": values["category"],
-                    "proposed_state": values["proposed_state"],
-                    "extraction": values["extraction"],
-                    "confidence": values["confidence"],
-                    "high_risk": values["high_risk"],
-                    "review_required": values["review_required"],
-                    "prompt_injection_detected": values["prompt_injection_detected"],
-                    "extraction_source": values["extraction_source"],
-                    "rules_version": values["rules_version"],
-                    "model_version": values["model_version"],
-                },
+            stmt = (
+                pg_insert(email_event_proposals)
+                .values(**values)
+                .on_conflict_do_update(
+                    index_elements=["id"],
+                    set_={  # type: ignore[arg-type]
+                        "application_id": values["application_id"],
+                        "state": values["state"],
+                        "decided_at": values["decided_at"],
+                        "decided_by": values["decided_by"],
+                        "updated_at": values["updated_at"],
+                        "category": values["category"],
+                        "proposed_state": values["proposed_state"],
+                        "extraction": values["extraction"],
+                        "confidence": values["confidence"],
+                        "high_risk": values["high_risk"],
+                        "review_required": values["review_required"],
+                        "prompt_injection_detected": values["prompt_injection_detected"],
+                        "extraction_source": values["extraction_source"],
+                        "rules_version": values["rules_version"],
+                        "model_version": values["model_version"],
+                    },
+                )
             )
             conn.execute(stmt)
 

@@ -25,6 +25,7 @@ from typing import Any
 from uuid import UUID
 
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 
 from careerops.domain.reply_draft import (
@@ -209,23 +210,26 @@ class PostgresReplyDraftRepository:
             "updated_at": draft.updated_at,
         }
         with self._engine.begin() as conn:
-            pg_insert = sa.dialects.postgresql.insert(reply_draft_versions)
-            stmt = pg_insert.values(**values).on_conflict_do_update(
-                index_elements=["id"],  # type: ignore[arg-type]
-                set_={
-                    "approval_state": values["approval_state"],
-                    "decided_at": values["decided_at"],
-                    "decided_by": values["decided_by"],
-                    "send_intent_id": values["send_intent_id"],
-                    "send_phase": values["send_phase"],
-                    "validation_issues": values["validation_issues"],
-                    "subject": values["subject"],
-                    "body_text": values["body_text"],
-                    "claims": values["claims"],
-                    "payload_hash": values["payload_hash"],
-                    "application_id": values["application_id"],
-                    "updated_at": values["updated_at"],
-                },
+            stmt = (
+                pg_insert(reply_draft_versions)
+                .values(**values)
+                .on_conflict_do_update(
+                    index_elements=["id"],  # type: ignore[arg-type]
+                    set_={
+                        "approval_state": values["approval_state"],
+                        "decided_at": values["decided_at"],
+                        "decided_by": values["decided_by"],
+                        "send_intent_id": values["send_intent_id"],
+                        "send_phase": values["send_phase"],
+                        "validation_issues": values["validation_issues"],
+                        "subject": values["subject"],
+                        "body_text": values["body_text"],
+                        "claims": values["claims"],
+                        "payload_hash": values["payload_hash"],
+                        "application_id": values["application_id"],
+                        "updated_at": values["updated_at"],
+                    },
+                )
             )
             conn.execute(stmt)
 

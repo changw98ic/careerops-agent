@@ -68,6 +68,7 @@ class TestStuckRunDetection:
             status=MailSyncRunStatus.RUNNING,
             started_at=old_time,
         )
+        assert run.started_at is not None
         duration = (NOW - run.started_at).total_seconds()
         assert duration > 3600, "run is stuck (> 1 hour)"
 
@@ -119,6 +120,7 @@ class TestStaleCursorDetection:
             connection_state=MailConnectionState.CONNECTED,
             last_sync_at=old_time,
         )
+        assert account.last_sync_at is not None
         age = (NOW - account.last_sync_at).total_seconds()
         assert age > 86400, "cursor is stale (> 1 day)"
 

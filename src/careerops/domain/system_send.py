@@ -26,10 +26,13 @@ Iron rules honored:
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
+
+from careerops.domain.email_payloads import normalize_email_body
 
 __all__ = [
     "POLICY_VERSION",
@@ -38,6 +41,7 @@ __all__ = [
     "SystemSendRequest",
     "SystemSendStatus",
     "compute_system_send_idempotency_key",
+    "compute_system_send_payload_hash",
 ]
 
 
@@ -107,6 +111,9 @@ class SystemSendRequest:
     attachment_hashes: tuple[str, ...] = ()
     evidence_refs: tuple[str, ...] = ()
     thread_headers: dict[str, str] = field(default_factory=lambda: {})
+    account_id: UUID | None = None
+    package_payload_hash: str | None = None
+    canonical_job_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,3 +158,51 @@ def compute_system_send_idempotency_key(
         f"system_send:{application_id}:{account_email}:{recipient}:{normalized_payload_hash}"
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def compute_system_send_payload_hash(
+    *,
+    application_id: UUID,
+    account_id: UUID | None,
+    account_email: str,
+    recipient: str,
+    subject: str,
+    body: str,
+    attachment_hashes: tuple[str, ...] = (),
+    attachment_names: tuple[str, ...] = (),
+    thread_headers: dict[str, str] | None = None,
+    evidence_refs: tuple[str, ...] = (),
+) -> str:
+    """Hash the exact sendable representation before creating an intent.
+
+    This mirrors the Section-9 preview hash inputs.  The API-supplied hash is
+    only an assertion from the client; the confirmation path must recompute
+    this value from the request and the approved package before any kernel
+    proposal is created.  Attachment names are read from the approved package
+    when available, so changing an attachment or its rendered name changes the
+    hash as well.
+    """
+    if attachment_names and len(attachment_names) != len(attachment_hashes):
+        raise ValueError("attachment names must match attachment hashes")
+    names = attachment_names or attachment_hashes
+    headers = thread_headers or {}
+    canonical = {
+        "application_id": str(application_id),
+        "account_id": str(account_id) if account_id else "",
+        "account_email": account_email,
+        "recipient": recipient.strip().lower(),
+        "subject": subject,
+        "body": normalize_email_body(body),
+        "attachments": sorted(
+            [
+                {"name": name, "content_hash": content_hash}
+                for name, content_hash in zip(names, attachment_hashes, strict=True)
+            ],
+            key=lambda item: item["name"],
+        ),
+        "in_reply_to": headers.get("in_reply_to", ""),
+        "references": headers.get("references", ""),
+        "evidence_refs": sorted(str(ref) for ref in evidence_refs),
+    }
+    encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()

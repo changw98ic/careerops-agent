@@ -260,6 +260,7 @@ class RealCrawlActivitySink:
                 if not ext_id:
                     continue
                 detail_url = f"{base_url.rstrip('/')}/{ext_id}"
+                detail_description = ""
                 try:
                     detail_resp = self._fetch(detail_url)
                     detail_data = _parse_body(detail_resp.body)
@@ -268,10 +269,11 @@ class RealCrawlActivitySink:
                         source_url=detail_url,
                         fetched_at=detail_resp.fetched_at,
                     )
-                    if detail_record.description:
-                        descriptions[ext_id] = detail_record.description
+                    detail_description = detail_record.description
                 except Exception:
-                    pass  # Skip failed detail fetches; list data is still useful
+                    detail_description = ""  # List data remains useful on detail failure.
+                if detail_description:
+                    descriptions[ext_id] = detail_description
         return descriptions
 
     async def ingest_posting(

@@ -44,7 +44,7 @@ from careerops.application.side_effect_kernel import (
     ProposalInput,
     SideEffectKernel,
 )
-from careerops.application.system_managed_send import SystemManagedSendService, SystemSendRequest
+from careerops.application.system_managed_send import SystemManagedSendService
 from careerops.domain.applications import (
     Application,
     ApplicationEvent,
@@ -52,11 +52,41 @@ from careerops.domain.applications import (
     ApplicationEventType,
     ApplicationState,
 )
-from careerops.domain.system_send import SystemSendRequest
+from careerops.domain.system_send import (
+    SystemSendRequest,
+    compute_system_send_payload_hash,
+)
 from careerops.infrastructure.database.side_effect_memory import InMemorySideEffectStore
 from careerops.integrations.fake_side_effect_provider import FakeSideEffectProvider
 
 NOW = datetime(2026, 7, 26, 12, 0, 0, tzinfo=UTC)
+
+
+def _send_request(*, application_id: UUID, candidate_id: UUID) -> SystemSendRequest:
+    evidence_refs = (f"ev:{uuid4()}",)
+    return SystemSendRequest(
+        application_id=application_id,
+        candidate_id=candidate_id,
+        account_email="sender@example.com",
+        recipient="recruiter@example.com",
+        subject="S",
+        body="B",
+        payload_hash=compute_system_send_payload_hash(
+            application_id=application_id,
+            account_id=None,
+            account_email="sender@example.com",
+            recipient="recruiter@example.com",
+            subject="S",
+            body="B",
+            attachment_hashes=(),
+            thread_headers={},
+            evidence_refs=evidence_refs,
+        ),
+        package_version_id=uuid4(),
+        attachment_hashes=(),
+        thread_headers={},
+        evidence_refs=evidence_refs,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +117,7 @@ def _proposal(*, resource_id: UUID, idempotency_key: str = "audit-1") -> Proposa
         target={"to": "recruiter@example.com"},
         payload={"subject": "S", "body": "B", "payload_hash": "a" * 64},
         attachment_refs=(),
-        evidence_refs=(uuid4(),),
+        evidence_refs=(f"ev:{uuid4()}",),
         trusted_facts={"capability_released": True, "target_allowlisted": True},
         untrusted_claims={},
         authenticated=True,
@@ -122,6 +152,12 @@ def _audit_types(audit: InMemoryAuditWriter, resource_id: UUID) -> list[str]:
     ] or [e.event_type for e in audit.all_events()]
 
 
+def _intent_id(status: object) -> UUID:
+    intent_id = getattr(status, "intent_id", None)
+    assert isinstance(intent_id, UUID)
+    return intent_id
+
+
 # ---------------------------------------------------------------------------
 # Email confirmation + provider receipt (Section 10)
 # ---------------------------------------------------------------------------
@@ -144,23 +180,11 @@ class TestEmailConfirmationAndProviderReceiptAudit:
         )
         svc = SystemManagedSendService(kernel, repo, recipient_eligible=_test_recipient_eligible)  # type: ignore[arg-type]
         status = svc.confirm_send(
-            SystemSendRequest(
-                application_id=app_id,
-                candidate_id=cid,
-                account_email="sender@example.com",
-                recipient="recruiter@example.com",
-                subject="S",
-                body="B",
-                payload_hash="a" * 64,
-                package_version_id=uuid4(),
-                attachment_hashes=(),
-                thread_headers={},
-                evidence_refs=(uuid4(),),
-            ),
+            _send_request(application_id=app_id, candidate_id=cid),
             candidate_id=cid,
             now=NOW,
         )
-        svc.worker_step(status.intent_id, candidate_id=cid, now=NOW)
+        svc.worker_step(_intent_id(status), candidate_id=cid, now=NOW)
 
         all_events = audit.all_events()
         types = [e.event_type for e in all_events]
@@ -182,23 +206,11 @@ class TestEmailConfirmationAndProviderReceiptAudit:
         )
         svc = SystemManagedSendService(kernel, repo, recipient_eligible=_test_recipient_eligible)  # type: ignore[arg-type]
         status = svc.confirm_send(
-            SystemSendRequest(
-                application_id=app_id,
-                candidate_id=cid,
-                account_email="sender@example.com",
-                recipient="recruiter@example.com",
-                subject="S",
-                body="B",
-                payload_hash="a" * 64,
-                package_version_id=uuid4(),
-                attachment_hashes=(),
-                thread_headers={},
-                evidence_refs=(uuid4(),),
-            ),
+            _send_request(application_id=app_id, candidate_id=cid),
             candidate_id=cid,
             now=NOW,
         )
-        svc.worker_step(status.intent_id, candidate_id=cid, now=NOW)
+        svc.worker_step(_intent_id(status), candidate_id=cid, now=NOW)
 
         executed = next(e for e in audit.all_events() if e.event_type == "side_effect_executed")
         # The execution audit names the provider (FakeSideEffectProvider), not
@@ -222,24 +234,12 @@ class TestEmailConfirmationAndProviderReceiptAudit:
             )
         )
         svc = SystemManagedSendService(kernel, repo, recipient_eligible=_test_recipient_eligible)  # type: ignore[arg-type]
-        request = SystemSendRequest(
-            application_id=app_id,
-            candidate_id=cid,
-            account_email="sender@example.com",
-            recipient="recruiter@example.com",
-            subject="S",
-            body="B",
-            payload_hash="a" * 64,
-            package_version_id=uuid4(),
-            attachment_hashes=(),
-            thread_headers={},
-            evidence_refs=(uuid4(),),
-        )
+        request = _send_request(application_id=app_id, candidate_id=cid)
         status = svc.confirm_send(request, candidate_id=cid, now=NOW)
-        svc.worker_step(status.intent_id, candidate_id=cid, now=NOW)
+        svc.worker_step(_intent_id(status), candidate_id=cid, now=NOW)
         before = len(audit.all_events())
         # A second worker pass (replay) appends nothing.
-        svc.worker_step(status.intent_id, candidate_id=cid, now=NOW)
+        svc.worker_step(_intent_id(status), candidate_id=cid, now=NOW)
         after = len(audit.all_events())
         assert before == after, "replay must not duplicate audit events"
 
@@ -256,24 +256,12 @@ class TestEmailConfirmationAndProviderReceiptAudit:
         )
         svc = SystemManagedSendService(kernel, repo, recipient_eligible=_test_recipient_eligible)  # type: ignore[arg-type]
         status = svc.confirm_send(
-            SystemSendRequest(
-                application_id=app_id,
-                candidate_id=cid,
-                account_email="sender@example.com",
-                recipient="recruiter@example.com",
-                subject="S",
-                body="B",
-                payload_hash="a" * 64,
-                package_version_id=uuid4(),
-                attachment_hashes=(),
-                thread_headers={},
-                evidence_refs=(uuid4(),),
-            ),
+            _send_request(application_id=app_id, candidate_id=cid),
             candidate_id=cid,
             now=NOW,
         )
-        svc.worker_step(status.intent_id, candidate_id=cid, now=NOW)
-        svc.worker_step(status.intent_id, candidate_id=cid, now=NOW)
+        svc.worker_step(_intent_id(status), candidate_id=cid, now=NOW)
+        svc.worker_step(_intent_id(status), candidate_id=cid, now=NOW)
         submitted = [
             e for e in repo.events if e.event_type is ApplicationEventType.SUBMITTED_VIA_PROVIDER
         ]

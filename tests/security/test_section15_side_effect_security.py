@@ -36,6 +36,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
+from pydantic import SecretStr
 
 from careerops.application.side_effect_kernel import (
     InMemoryAuditWriter,
@@ -48,7 +49,10 @@ from careerops.domain.applications import (
     Application,
     ApplicationState,
 )
-from careerops.domain.system_send import SystemSendRequest
+from careerops.domain.system_send import (
+    SystemSendRequest,
+    compute_system_send_payload_hash,
+)
 from careerops.infrastructure.database.side_effect_memory import InMemorySideEffectStore
 from careerops.integrations.fake_side_effect_provider import (
     FakeSideEffectProvider,
@@ -83,8 +87,8 @@ class TestProviderSecretIsolation:
         # default Settings repr as plaintext beyond model_api_key.
         settings = Settings(
             environment=RuntimeEnvironment.TEST,
-            database_url="postgresql+psycopg://u@127.0.0.1:5432/careerops",
-            redis_url="redis://127.0.0.1:6379/0",
+            database_url=SecretStr("postgresql+psycopg://u@127.0.0.1:5432/careerops"),
+            redis_url=SecretStr("redis://127.0.0.1:6379/0"),
         )
         # The SecretStr fields do not reveal their value in repr.
         assert "get_secret_value" not in repr(settings.database_url)
@@ -105,10 +109,11 @@ class TestProviderSecretIsolation:
     def test_audit_event_payload_never_carries_api_key(self) -> None:
         # Even if a caller tried to smuggle an api_key into event_data, the
         # kernel's own audit events only record structural fields.
+        audit = InMemoryAuditWriter()
         kernel = SideEffectKernel(
             InMemorySideEffectStore(),
             FakeSideEffectProvider(),
-            audit_writer=InMemoryAuditWriter(),
+            audit_writer=audit,
         )
         resource_id = uuid4()
         kernel.propose(
@@ -122,16 +127,14 @@ class TestProviderSecretIsolation:
                 # A smuggled secret in the payload must NOT surface in audit.
                 payload={"subject": "S", "body": "B", "api_key": "AKIA" + "X" * 16},
                 attachment_refs=(),
-                evidence_refs=(uuid4(),),
+                evidence_refs=(f"ev:{uuid4()}",),
                 trusted_facts={"capability_released": True, "target_allowlisted": True},
                 untrusted_claims={"safe": True, "api_key": "leak-attempt"},
                 authenticated=True,
             ),
             now=NOW,
         )
-        proposed = next(
-            e for e in kernel._audit.all_events() if e.event_type == "side_effect_proposed"
-        )
+        proposed = next(e for e in audit.all_events() if e.event_type == "side_effect_proposed")
         body = repr(proposed.event_data)
         # The audit records policy_decision + payload_hash + reason codes, NOT
         # the raw payload, and NOT the untrusted claims.
@@ -176,7 +179,12 @@ class TestNoDirectProviderWrite:
             def append_event(self, event):  # type: ignore[no-untyped-def]
                 pass
 
-        svc = SystemManagedSendService(kernel, _Repo())  # type: ignore[arg-type]
+        svc = SystemManagedSendService(
+            kernel,
+            _Repo(),
+            recipient_eligible=lambda _request: True,
+        )  # type: ignore[arg-type]
+        evidence_refs = (f"ev:{uuid4()}",)
         status = svc.confirm_send(
             SystemSendRequest(
                 application_id=app_id,
@@ -185,11 +193,21 @@ class TestNoDirectProviderWrite:
                 recipient="r@example.com",
                 subject="S",
                 body="B",
-                payload_hash="a" * 64,
+                payload_hash=compute_system_send_payload_hash(
+                    application_id=app_id,
+                    account_id=None,
+                    account_email="s@example.com",
+                    recipient="r@example.com",
+                    subject="S",
+                    body="B",
+                    attachment_hashes=(),
+                    thread_headers={},
+                    evidence_refs=evidence_refs,
+                ),
                 package_version_id=uuid4(),
                 attachment_hashes=(),
                 thread_headers={},
-                evidence_refs=(uuid4(),),
+                evidence_refs=evidence_refs,
             ),
             candidate_id=cid,
             now=NOW,
@@ -198,6 +216,7 @@ class TestNoDirectProviderWrite:
         assert provider.execute_call_count == 0, "confirm must not call the provider"
         assert status.phase.value == "pending"
         # Only the worker drives the provider (through the kernel).
+        assert status.intent_id is not None
         svc.worker_step(status.intent_id, candidate_id=cid, now=NOW)
         assert provider.execute_call_count == 1, "worker calls the provider exactly once"
 
@@ -217,7 +236,7 @@ class TestNoDirectProviderWrite:
                 target={"to": "r@example.com"},
                 payload={"subject": "S", "body": "B"},
                 attachment_refs=(),
-                evidence_refs=(uuid4(),),
+                evidence_refs=(f"ev:{uuid4()}",),
                 trusted_facts={"capability_released": False, "target_allowlisted": True},
                 untrusted_claims={},
                 authenticated=True,
@@ -261,8 +280,8 @@ class TestCapabilityDefaultDeny:
         # False and cannot be flipped True (the model_validator rejects them).
         settings = Settings(
             environment=RuntimeEnvironment.TEST,
-            database_url="postgresql+psycopg://u@127.0.0.1:5432/careerops",
-            redis_url="redis://127.0.0.1:6379/0",
+            database_url=SecretStr("postgresql+psycopg://u@127.0.0.1:5432/careerops"),
+            redis_url=SecretStr("redis://127.0.0.1:6379/0"),
         )
         return SettingsCapabilityResolver(settings)
 
@@ -301,8 +320,8 @@ class TestCapabilityDefaultDeny:
         with pytest.raises(ValueError):
             Settings(
                 environment=RuntimeEnvironment.TEST,
-                database_url="postgresql+psycopg://u@127.0.0.1:5432/careerops",
-                redis_url="redis://127.0.0.1:6379/0",
+                database_url=SecretStr("postgresql+psycopg://u@127.0.0.1:5432/careerops"),
+                redis_url=SecretStr("redis://127.0.0.1:6379/0"),
                 **{flag: True},  # type: ignore[arg-type]
             )
 
@@ -341,7 +360,7 @@ class TestNoLiveProviderWired:
         with pytest.raises(ValueError, match="Google OAuth"):
             Settings(
                 environment=RuntimeEnvironment.TEST,
-                database_url="postgresql+psycopg://u@127.0.0.1:5432/careerops",
-                redis_url="redis://127.0.0.1:6379/0",
+                database_url=SecretStr("postgresql+psycopg://u@127.0.0.1:5432/careerops"),
+                redis_url=SecretStr("redis://127.0.0.1:6379/0"),
                 google_oauth_enabled=True,
             )

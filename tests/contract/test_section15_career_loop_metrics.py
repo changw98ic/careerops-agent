@@ -20,7 +20,7 @@ from prometheus_client import CollectorRegistry
 from careerops.observability.career_loop_metrics import CareerLoopMetrics
 
 
-def _metrics() -> tuple[CareerLoopMetrics, str]:
+def _metrics() -> tuple[CareerLoopMetrics, CollectorRegistry]:
     registry = CollectorRegistry(auto_describe=True)
     metrics = CareerLoopMetrics(registry=registry)
     return metrics, registry

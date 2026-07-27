@@ -109,7 +109,11 @@ _INJECTION_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
 )
 
 # Unicode-confusable zero-width / homoglyph runs that often hide injection.
-_UNICODE_CONFUSABLE = re.compile("[​-‏‪-‮⁠﻿]")
+# Build the character class from code points so the source file itself does
+# not contain bidirectional control characters.
+_UNICODE_CONFUSABLE = re.compile(
+    f"[{chr(0x200B)}-{chr(0x200F)}{chr(0x202A)}-{chr(0x202E)}{chr(0x2060)}{chr(0xFEFF)}]"
+)
 
 
 def _scan_injection(text: str) -> bool:

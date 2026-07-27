@@ -42,7 +42,6 @@ from fastapi.testclient import TestClient
 from careerops.api.auth_dependency import require_api_auth, require_candidate_id
 from careerops.api.errors import install_error_handlers
 from careerops.api.routes.system_send import router as system_send_router
-from careerops.application.outbox import OutboxStore
 from careerops.application.side_effect_kernel import SideEffectKernel
 from careerops.application.system_managed_send import (
     SystemManagedSendService,
@@ -61,6 +60,7 @@ from careerops.domain.system_send import (
     SystemSendPhase,
     SystemSendRequest,
     compute_system_send_idempotency_key,
+    compute_system_send_payload_hash,
 )
 from careerops.infrastructure.database.side_effect_memory import (
     InMemoryOutboxStore,
@@ -120,30 +120,6 @@ class _FakePackageReader:
         return self._package
 
 
-def _payload_hash(package_id: UUID, body: str = "Hello") -> str:
-    # Reuse the kernel's canonical hash so the proposal payload hash matches
-    # what the service records (the kernel recomputes it from target+payload).
-    from careerops.domain.side_effects import canonical_payload_hash
-
-    return canonical_payload_hash(
-        target={
-            "to": "recruiter@company.com",
-            "account": "me@careerops.dev",
-            "application_id": str(UUID(int=1)),
-        },
-        payload={
-            "subject": "Application",
-            "body": body,
-            "payload_hash": "unused",
-            "policy_version": "section10.system_send.v1",
-            "package_version_id": str(package_id),
-            "attachment_hashes": [],
-            "thread_headers": {},
-        },
-        attachment_refs=(),
-    )
-
-
 def _make_request(
     *,
     application_id: UUID,
@@ -151,8 +127,20 @@ def _make_request(
     body: str = "Hello",
     recipient: str = "recruiter@company.com",
     payload_hash: str | None = None,
+    package_payload_hash: str | None = None,
     evidence_refs: tuple[str, ...] = ("ev:contact:1",),
 ) -> SystemSendRequest:
+    exact_hash = compute_system_send_payload_hash(
+        application_id=application_id,
+        account_id=None,
+        account_email="me@careerops.dev",
+        recipient=recipient,
+        subject="Application",
+        body=body,
+        attachment_hashes=(),
+        thread_headers={},
+        evidence_refs=evidence_refs,
+    )
     return SystemSendRequest(
         application_id=application_id,
         candidate_id=CANDIDATE,
@@ -161,7 +149,8 @@ def _make_request(
         subject="Application",
         body=body,
         package_version_id=package_id,
-        payload_hash=payload_hash or _payload_hash(package_id, body),
+        payload_hash=payload_hash or exact_hash,
+        package_payload_hash=package_payload_hash,
         attachment_hashes=(),
         evidence_refs=evidence_refs,
     )
@@ -172,7 +161,7 @@ def _build_service(
     provider: FakeSideEffectProvider | None = None,
     resolver: object | None = None,
     package: _FakePackage | None = None,
-    outbox: OutboxStore | None = None,
+    outbox: InMemoryOutboxStore | None = None,
     account_active: bool = True,
     application_repo: InMemoryApplicationRepository | None = None,
 ) -> tuple[
@@ -200,7 +189,9 @@ def _build_service(
         package_reader=package_reader,
         capability_resolver=resolver or _ReleasingResolver(),  # type: ignore[arg-type]
         outbox_store=outbox_store,
-        account_status_lookup=(lambda _aid: account_active) if account_active is not None else None,
+        account_status_lookup=(lambda _request: account_active)
+        if account_active is not None
+        else None,
         recipient_eligible=_test_recipient_eligible,
     )
     return service, provider, store, outbox_store, app_repo, package_reader
@@ -326,7 +317,11 @@ class TestRevalidationDenials:
     def test_payload_hash_mismatch_denies(self) -> None:
         service, _, _, _, repo, _ = _build_service()
         app = _seed_preparing_app(repo)
-        request = _make_request(application_id=app.id, package_id=uuid4())
+        request = _make_request(
+            application_id=app.id,
+            package_id=uuid4(),
+            package_payload_hash="expected-package-hash",
+        )
         service._packages = _FakePackageReader(  # type: ignore[assignment]
             _FakePackage(package_id=request.package_version_id, payload_hash="stale-hash")
         )
@@ -480,16 +475,29 @@ class TestIdempotency:
         assert status.submitted_at is not None
 
     def test_idempotency_key_is_stable(self) -> None:
-        kwargs = dict(
-            application_id=UUID(int=1),
-            account_email="me@careerops.dev",
-            recipient="r@co.com",
-            normalized_payload_hash="abc",
+        application_id = UUID(int=1)
+        account_email = "me@careerops.dev"
+        recipient = "r@co.com"
+        normalized_payload_hash = "abc"
+        k1 = compute_system_send_idempotency_key(
+            application_id=application_id,
+            account_email=account_email,
+            recipient=recipient,
+            normalized_payload_hash=normalized_payload_hash,
         )
-        k1 = compute_system_send_idempotency_key(**kwargs)
-        k2 = compute_system_send_idempotency_key(**kwargs)
+        k2 = compute_system_send_idempotency_key(
+            application_id=application_id,
+            account_email=account_email,
+            recipient=recipient,
+            normalized_payload_hash=normalized_payload_hash,
+        )
         assert k1 == k2 and len(k1) == 64
-        k3 = compute_system_send_idempotency_key(**{**kwargs, "recipient": "x@co.com"})
+        k3 = compute_system_send_idempotency_key(
+            application_id=application_id,
+            account_email=account_email,
+            recipient="x@co.com",
+            normalized_payload_hash=normalized_payload_hash,
+        )
         assert k1 != k3
 
 

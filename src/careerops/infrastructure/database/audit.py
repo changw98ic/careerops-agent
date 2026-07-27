@@ -4,7 +4,7 @@ import json
 from typing import cast
 from uuid import UUID
 
-from sqlalchemy import Connection, text
+from sqlalchemy import Connection, Engine, text
 
 from careerops.application.audit import (
     AppendedAuditEvent,

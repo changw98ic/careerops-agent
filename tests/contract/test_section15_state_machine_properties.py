@@ -56,6 +56,10 @@ from careerops.domain.email import EmailEventProposalState
 from careerops.domain.mail_intelligence import EmailEventProposalState as MIProposalState
 from careerops.domain.reply_draft import REPLY_DRAFT_TRANSITIONS, ReplyDraftApprovalState
 from careerops.domain.send import ReconciliationStatus
+from careerops.domain.system_send import (
+    SystemSendRequest,
+    compute_system_send_payload_hash,
+)
 
 NOW = datetime(2026, 7, 26, 12, 0, 0, tzinfo=UTC)
 
@@ -272,6 +276,9 @@ class _RecordingStore:
         self.released: list[tuple[UUID, str, bool]] = []
         self.claim_count = 0
 
+    def enqueue(self, event: object) -> None:
+        del event
+
     def claim(
         self,
         *,
@@ -421,7 +428,6 @@ class TestReconciliationProperties:
             ApplicationEventType,
             ApplicationState,
         )
-        from careerops.domain.system_send import SystemSendRequest
         from careerops.infrastructure.database.side_effect_memory import (
             InMemorySideEffectStore,
         )
@@ -460,6 +466,7 @@ class TestReconciliationProperties:
         )
         svc = SystemManagedSendService(kernel, repo, recipient_eligible=_test_recipient_eligible)  # type: ignore[arg-type]
 
+        evidence_refs = (f"ev:{uuid4()}",)
         request = SystemSendRequest(
             application_id=app_id,
             candidate_id=cid,
@@ -467,14 +474,25 @@ class TestReconciliationProperties:
             recipient="recruiter@example.com",
             subject="S",
             body="B",
-            payload_hash="a" * 64,
+            payload_hash=compute_system_send_payload_hash(
+                application_id=app_id,
+                account_id=None,
+                account_email="sender@example.com",
+                recipient="recruiter@example.com",
+                subject="S",
+                body="B",
+                attachment_hashes=(),
+                thread_headers={},
+                evidence_refs=evidence_refs,
+            ),
             package_version_id=uuid4(),
             attachment_hashes=(),
             thread_headers={},
-            evidence_refs=(uuid4(),),
+            evidence_refs=evidence_refs,
         )
         status = svc.confirm_send(request, candidate_id=cid, now=NOW)
         # First worker pass: confirmed receipt -> one submitted event.
+        assert status.intent_id is not None
         sent1 = svc.worker_step(status.intent_id, candidate_id=cid, now=NOW)
         assert sent1.phase.value == "sent"
         submitted_events = [
@@ -519,7 +537,7 @@ class TestAppendOnlyHistory:
         ]
         ids = [e.id for e in events]
         assert len(ids) == len(set(ids)), "event ids must be unique (append-only)"
-        occurred = [e.occurred_at for e in events]
+        occurred = [e.occurred_at for e in events if e.occurred_at is not None]
         assert occurred == sorted(occurred), "history is chronologically ordered"
 
     def test_frozen_dataclass_replace_keeps_original_immutable(self) -> None:

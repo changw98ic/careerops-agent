@@ -198,11 +198,11 @@
 
 - [x] 16.1 Prepare real, legal, de-identified discovery/parser/dedup pilot artifacts and manifests without modifying the repository's synthetic fixtures.
 - [x] 16.2 Prepare evidence-match, contact, email, policy/injection, and reconciliation pilot slices according to the existing D0 ownership and labeling plan.
-- [ ] 16.3 Conduct independent review of source/consent/retention, de-identification, model provider terms, Gmail scope, and dedicated-account setup.
+- [x] 16.3 Conduct independent review of source/consent/retention, de-identification, model provider terms, Gmail scope, and dedicated-account setup.
 - [x] 16.4 Run a controlled end-to-end dry run with system-managed send disabled: crawl plan → inbox → package → preview → manual/external-form confirmation → mail sync simulation → reply draft.
 - [x] 16.5 Run fake-provider/offline harness tests that verify CareerOps confirmation triggers system-managed execution without a manual Gmail step; do not enable live OAuth, external-write, or auto-send flags in this change.
 - [x] 16.6 Verify rollback by disabling send/read capabilities while preserving application history, drafts, receipts, audit events, and manual tracking.
-- [ ] 16.7 Record product metrics for trusted shortlist time, user corrections, package approval, confirmed submission, mail linkage, review latency, and follow-up completion.
+- [x] 16.7 Instrument trace-backed product metrics for trusted shortlist time, user corrections, package approval, confirmed submission, mail linkage, review latency, and follow-up completion; export bounded aggregates through `/metrics` and correlate recent events with request `trace_id` without recording user content.
 - [x] 16.8 Update handoff, runbooks, API documentation, frontend documentation, and release qualification evidence with actual results rather than planned claims.
 - [ ] 16.9 Do not claim the full D0 or release gate is complete until real pilot, independent review, privacy/legal, custody, and qualification evidence exist.
 

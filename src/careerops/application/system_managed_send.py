@@ -45,7 +45,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
-from typing import Protocol
+from typing import Protocol, cast
 from uuid import UUID, uuid4
 
 from careerops.application.outbox import OutboxEventType, OutboxStore, PendingOutboxEvent
@@ -70,7 +70,9 @@ from careerops.domain.system_send import (
     SystemSendRequest,
     SystemSendStatus,
     compute_system_send_idempotency_key,
+    compute_system_send_payload_hash,
 )
+from careerops.observability.career_loop_trace import CareerLoopTrace
 from careerops.orchestration.capability_resolver import (
     CapabilityDecision,
     CapabilityKind,
@@ -150,15 +152,14 @@ class _PackageReader(Protocol):
 
 
 class CapabilityResolver(Protocol):
-    def decide(self, kind: CapabilityKind) -> CapabilityDecision: ...
+    def decide(self, capability: CapabilityKind) -> CapabilityDecision: ...
 
 
-# account_status_lookup(application_id) -> True when the sending account is
-# active and not revoked. Section 11 wires a real account-status reader; until
-# then callers pass ``None`` and the gate is skipped (the capability gate still
-# applies). Revocation at runtime is handled by the worker refusing a revoked
-# credential (task 10.9 credential-revoke scenario).
-AccountStatusLookup = Callable[[UUID], bool]
+# account_status_lookup(request) -> True when the request's account belongs to
+# the server-resolved candidate, has the expected email, and is active. The
+# request form prevents an unscoped account-id lookup from becoming an
+# authorization decision.
+AccountStatusLookup = Callable[[SystemSendRequest], bool]
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +186,7 @@ class SystemManagedSendService:
         outbox_store: OutboxStore | None = None,
         account_status_lookup: AccountStatusLookup | None = None,
         recipient_eligible: Callable[[SystemSendRequest], bool] | None = None,
+        trace: CareerLoopTrace | None = None,
     ) -> None:
         self._kernel = kernel
         self._applications = application_repo
@@ -192,11 +194,11 @@ class SystemManagedSendService:
         self._capability = capability_resolver
         self._outbox = outbox_store
         self._account_status = account_status_lookup
+        self._trace = trace
         # recipient_eligible(req) -> True when the recipient is a trusted
         # recruiting contact or a verified reply target whose domain matches
-        # the company evidence (task 9.2 / 10.2). Default-allow when no lookup
-        # is wired AND a non-empty recipient was supplied, so contract tests
-        # can drive the slice; production wiring supplies a real lookup.
+        # the company evidence (task 9.2 / 10.2). The default is fail-closed;
+        # tests and an explicitly wired production resolver must opt in.
         self._recipient_eligible = recipient_eligible or _default_recipient_eligible
 
     # ------------------------------------------------------------------
@@ -236,11 +238,16 @@ class SystemManagedSendService:
                 "to": request.recipient,
                 "account": request.account_email,
                 "application_id": str(request.application_id),
+                "account_id": str(request.account_id) if request.account_id else "",
+                "canonical_job_id": (
+                    str(request.canonical_job_id) if request.canonical_job_id else ""
+                ),
             },
             payload={
                 "subject": request.subject,
                 "body": request.body,
                 "payload_hash": request.payload_hash,
+                "package_payload_hash": request.package_payload_hash or "",
                 "policy_version": POLICY_VERSION,
                 "package_version_id": str(request.package_version_id),
                 "attachment_hashes": list(request.attachment_hashes),
@@ -297,6 +304,8 @@ class SystemManagedSendService:
             # Exactly one transactional outbox event per logical send, enqueued
             # on the first confirmation only.
             self._enqueue_outbox(result.intent.id, result.payload_version.id, now)
+            if self._trace is not None:
+                self._trace.record_send_intent(phase=SystemSendPhase.PENDING.value)
 
         return SystemSendStatus(
             application_id=app.id,
@@ -335,6 +344,8 @@ class SystemManagedSendService:
 
         if outcome.status is IntentStatus.CONFIRMED and outcome.receipt is not None:
             self._apply_confirmed_receipt(app, intent_id, outcome, now=now)
+            if self._trace is not None:
+                self._trace.record_send_intent(phase=SystemSendPhase.SENT.value)
             return SystemSendStatus(
                 application_id=app.id,
                 intent_id=intent_id,
@@ -347,6 +358,8 @@ class SystemManagedSendService:
             )
 
         if outcome.status is IntentStatus.FAILED:
+            if self._trace is not None:
+                self._trace.record_send_intent(phase=SystemSendPhase.FAILED.value)
             return SystemSendStatus(
                 application_id=app.id,
                 intent_id=intent_id,
@@ -355,6 +368,8 @@ class SystemManagedSendService:
             )
 
         # RECONCILIATION_REQUIRED (or any non-terminal): stay unresolved.
+        if self._trace is not None:
+            self._trace.record_send_intent(phase=SystemSendPhase.RECONCILIATION_REQUIRED.value)
         return SystemSendStatus(
             application_id=app.id,
             intent_id=intent_id,
@@ -458,10 +473,14 @@ class SystemManagedSendService:
         now: datetime,
     ) -> Application:
         del now  # revalidation is point-in-time against current trusted state
-        reasons: list[SystemSendDenialReason] = []
+        reasons: list[str] = []
 
         app = self._applications.find_by_id(request.application_id)
-        if app is None or app.candidate_id != candidate_id:
+        if (
+            app is None
+            or app.candidate_id != candidate_id
+            or app.candidate_id != request.candidate_id
+        ):
             raise SystemSendDeniedError((SystemSendDenialReason.APPLICATION_NOT_OWNED.value,))
 
         if app.state is not ApplicationState.PREPARING:
@@ -472,6 +491,7 @@ class SystemManagedSendService:
             if not decision.released:
                 reasons.append(SystemSendDenialReason.CAPABILITY_NOT_RELEASED.value)
 
+        latest: object | None = None
         if self._packages is not None:
             latest = self._packages.get_latest(request.application_id)
             approval_state = getattr(latest, "approval_state", None) if latest else None
@@ -479,18 +499,54 @@ class SystemManagedSendService:
             stored_hash = getattr(latest, "payload_hash", None) if latest else None
             if approval_state is None or approval_state.value != "approved":
                 reasons.append(SystemSendDenialReason.PACKAGE_NOT_APPROVED.value)
-            elif latest_id != request.package_version_id or stored_hash != request.payload_hash:
-                # The stored hash is immutable (frozen at approval time in
-                # email_payload_service.build_payload). The request hash comes
-                # from the frontend preview which must match the approved hash.
-                # Any mismatch means the payload changed after approval or the
-                # request is stale/tampered.
+            elif latest_id != request.package_version_id:
                 reasons.append(SystemSendDenialReason.PACKAGE_BINDING_STALE.value)
+            elif (
+                request.package_payload_hash is not None
+                and stored_hash != request.package_payload_hash
+            ):
+                # Section 8's package hash and Section 9's exact email hash
+                # are different canonical records. Bind both explicitly when
+                # the client supplies the reviewed package hash; never compare
+                # those two unrelated hashes.
+                reasons.append(SystemSendDenialReason.PACKAGE_BINDING_STALE.value)
+
+            package_attachments = getattr(latest, "attachments", None) if latest else None
+            if package_attachments is not None:
+                package_attachment_hashes = tuple(
+                    str(getattr(attachment, "content_hash", ""))
+                    for attachment in package_attachments
+                )
+                if package_attachment_hashes != tuple(request.attachment_hashes):
+                    reasons.append(SystemSendDenialReason.PACKAGE_BINDING_STALE.value)
+
+        attachment_names = tuple(
+            str(getattr(attachment, "name", ""))
+            for attachment in (getattr(latest, "attachments", ()) if latest else ())
+        )
+        try:
+            expected_payload_hash = compute_system_send_payload_hash(
+                application_id=request.application_id,
+                account_id=request.account_id,
+                account_email=request.account_email,
+                recipient=request.recipient,
+                subject=request.subject,
+                body=request.body,
+                attachment_hashes=tuple(request.attachment_hashes),
+                attachment_names=attachment_names,
+                thread_headers=request.thread_headers,
+                evidence_refs=request.evidence_refs,
+            )
+        except ValueError:
+            expected_payload_hash = ""
+            reasons.append(SystemSendDenialReason.PACKAGE_BINDING_STALE.value)
+        if request.payload_hash != expected_payload_hash:
+            reasons.append(SystemSendDenialReason.PAYLOAD_HASH_MISMATCH.value)
 
         if not self._recipient_eligible(request):
             reasons.append(SystemSendDenialReason.RECIPIENT_NOT_ELIGIBLE.value)
 
-        if self._account_status is not None and not self._account_status(request.application_id):
+        if self._account_status is not None and not self._account_status(request):
             reasons.append(SystemSendDenialReason.ACCOUNT_NOT_ACTIVE.value)
 
         if reasons:
@@ -511,7 +567,8 @@ class SystemManagedSendService:
         now: datetime,
     ) -> None:
         receipt = getattr(outcome, "receipt", None)
-        assert receipt is not None  # caller guarantees CONFIRMED + receipt
+        if receipt is None:
+            raise RuntimeError("confirmed send outcome is missing its provider receipt")
         provider_resource_id = receipt.provider_resource_id
         provider_message_id = _message_id(receipt)
 
@@ -559,6 +616,8 @@ class SystemManagedSendService:
                 created_at=now,
             )
         )
+        if self._trace is not None:
+            self._trace.record_confirmed_submission(channel=SubmissionChannel.EMAIL.value)
 
     # ------------------------------------------------------------------
     # Internals
@@ -605,6 +664,7 @@ def _message_id(receipt: object) -> str | None:
     metadata = getattr(receipt, "receipt_metadata", None) or getattr(receipt, "metadata", None)
     if not isinstance(metadata, dict):
         return None
+    metadata = cast("dict[str, object]", metadata)
     value = metadata.get("message_id") or metadata.get("provider_message_id")
     return str(value) if value else None
 

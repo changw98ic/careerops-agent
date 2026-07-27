@@ -799,6 +799,7 @@ class TestReplySend:
         assert outcome.phase == ReplySendPhase.SENT
         assert len(port.calls) == 1
         # idempotent: repeat send reuses the in-flight outcome (no 2nd effect)
+        assert outcome.intent_id is not None
         outcome2 = port.status(intent_id=outcome.intent_id, candidate_id=app.candidate_id)
         assert outcome2.phase == ReplySendPhase.SENT
 

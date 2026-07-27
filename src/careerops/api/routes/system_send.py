@@ -75,15 +75,21 @@ class SystemSendConfirmRequest(BaseModel):
     """
 
     account_email: str
+    account_id: str | None = None
     recipient: str
     subject: str
     body: str
     package_version_id: str
     payload_hash: str
+    package_payload_hash: str | None = None
+    canonical_job_id: str | None = None
     job_version_id: str | None = None
     resume_version_id: str | None = None
     attachment_hashes: list[str] = Field(default_factory=list)
     evidence_ids: list[str] = Field(default_factory=list)
+    in_reply_to: str = ""
+    references_header: str = ""
+    message_id_header: str = ""
 
 
 class SystemSendStatusResponse(BaseModel):
@@ -144,15 +150,23 @@ def _to_request(application_id: UUID, candidate_id: UUID, body: SystemSendConfir
         application_id=application_id,
         candidate_id=candidate_id,
         account_email=body.account_email,
+        account_id=UUID(body.account_id) if body.account_id else None,
         recipient=body.recipient,
         subject=body.subject,
         body=body.body,
         package_version_id=UUID(body.package_version_id),
         payload_hash=body.payload_hash,
+        package_payload_hash=body.package_payload_hash,
+        canonical_job_id=UUID(body.canonical_job_id) if body.canonical_job_id else None,
         job_version_id=UUID(body.job_version_id) if body.job_version_id else None,
         resume_version_id=UUID(body.resume_version_id) if body.resume_version_id else None,
         attachment_hashes=tuple(body.attachment_hashes),
         evidence_refs=tuple(body.evidence_ids),
+        thread_headers={
+            "in_reply_to": body.in_reply_to,
+            "references": body.references_header,
+            "message_id": body.message_id_header,
+        },
     )
 
 

@@ -7,6 +7,8 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import Response
 
+from careerops.observability.career_loop_trace import bind_trace_id
+
 REQUEST_ID_HEADER = "X-Request-ID"
 _SAFE_REQUEST_ID = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
 
@@ -16,6 +18,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         supplied = request.headers.get(REQUEST_ID_HEADER, "")
         trace_id = supplied if _SAFE_REQUEST_ID.fullmatch(supplied) else uuid4().hex
         request.state.trace_id = trace_id
-        response = await call_next(request)
-        response.headers[REQUEST_ID_HEADER] = trace_id
-        return response
+        with bind_trace_id(trace_id):
+            response = await call_next(request)
+            response.headers[REQUEST_ID_HEADER] = trace_id
+            return response

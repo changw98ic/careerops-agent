@@ -69,6 +69,7 @@ from careerops.domain.mail_intelligence import (
     category_to_proposed_state,
     validate_proposal_transition,
 )
+from careerops.observability.career_loop_trace import CareerLoopTrace
 from careerops.orchestration.capability_resolver import (
     CapabilityDecision,
     CapabilityKind,
@@ -176,7 +177,7 @@ class FollowUpScheduler(Protocol):
 class CapabilityResolver(Protocol):
     """Minimal resolver surface for model-enrichment gating."""
 
-    def decide(self, kind: CapabilityKind) -> CapabilityDecision: ...
+    def decide(self, capability: CapabilityKind) -> CapabilityDecision: ...
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +228,7 @@ class MailIntelligenceService:
         deterministic_extractor: DeterministicMailExtractor | None = None,
         model_extractor: MailModelExtractor | None = None,
         stale_days: int = STALE_MESSAGE_DAYS,
+        trace: CareerLoopTrace | None = None,
     ) -> None:
         self._messages = message_repo
         self._proposals = proposal_repo
@@ -237,6 +239,7 @@ class MailIntelligenceService:
         self._deterministic = deterministic_extractor or DeterministicMailExtractor()
         self._model = model_extractor
         self._stale_days = stale_days
+        self._trace = trace
 
     # ------------------------------------------------------------------
     # 12.5 — extract + propose (idempotent)
@@ -298,6 +301,8 @@ class MailIntelligenceService:
             updated_at=now,
         )
         self._proposals.save(proposal)
+        if self._trace is not None and application_id is None:
+            self._trace.record_mail_linkage(outcome="unresolved")
         return proposal
 
     # ------------------------------------------------------------------
@@ -359,6 +364,13 @@ class MailIntelligenceService:
         application = self._apply_acceptance(proposal, candidate_id, now)
         accepted = self._mark_decided(proposal, EmailEventProposalState.ACCEPTED, candidate_id, now)
         self._proposals.save(accepted)
+        if self._trace is not None:
+            self._trace.record_mail_linkage(outcome="linked")
+            self._trace.record_review_latency(
+                review_kind="mail_proposal",
+                created_at=proposal.created_at,
+                decided_at=now,
+            )
         return ProposalDecisionResult(
             proposal=accepted, application=application, already_decided=False
         )
@@ -390,6 +402,12 @@ class MailIntelligenceService:
 
         rejected = self._mark_decided(proposal, EmailEventProposalState.REJECTED, candidate_id, now)
         self._proposals.save(rejected)
+        if self._trace is not None:
+            self._trace.record_review_latency(
+                review_kind="mail_proposal",
+                created_at=proposal.created_at,
+                decided_at=now,
+            )
         return ProposalDecisionResult(proposal=rejected, application=None, already_decided=False)
 
     # ------------------------------------------------------------------
@@ -513,7 +531,10 @@ class MailIntelligenceService:
                 note=note,
                 now=now,
             )
-            application = self._refresh_application(application.id, candidate_id)
+            refreshed = self._refresh_application(application.id, candidate_id)
+            if refreshed is None:
+                raise ProposalNotOwnedError(proposal.id)
+            application = refreshed
         # Always append the mail-derived provenance note (state change or not)
         # so the unified timeline cites the source message + proposal.
         if self._timeline is not None:

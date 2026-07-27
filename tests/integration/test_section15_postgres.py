@@ -30,6 +30,7 @@ from uuid import UUID, uuid4
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy import exc as sa_exc
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("CAREEROPS_TEST_DATABASE_URL"),
@@ -254,7 +255,7 @@ class TestUniqueKeyConstraints:
                 ),
                 {"aid": uuid4(), "cid": cid, "jid": jid},
             )
-            with pytest.raises(sa.exc.IntegrityError):
+            with pytest.raises(sa_exc.IntegrityError):
                 conn.execute(
                     sa.text(
                         "INSERT INTO careerops.applications"
@@ -284,7 +285,7 @@ class TestUniqueKeyConstraints:
                 ),
                 {"rid": uuid4(), "cid": cid, "hash": "a" * 64},
             )
-            with pytest.raises(sa.exc.IntegrityError):
+            with pytest.raises(sa_exc.IntegrityError):
                 conn.execute(
                     sa.text(
                         "INSERT INTO careerops.resume_versions "
@@ -358,7 +359,7 @@ class TestCheckConstraints:
                 ),
                 {"id": cid},
             )
-            with pytest.raises(sa.exc.IntegrityError):
+            with pytest.raises(sa_exc.IntegrityError):
                 conn.execute(
                     sa.text(
                         "INSERT INTO careerops.applications "
@@ -369,7 +370,7 @@ class TestCheckConstraints:
                 )
 
     def test_invalid_follow_up_state_rejected(self, engine: sa.Engine) -> None:
-        with engine.begin() as conn, pytest.raises(sa.exc.IntegrityError):
+        with engine.begin() as conn, pytest.raises(sa_exc.IntegrityError):
             conn.execute(
                 sa.text(
                     "INSERT INTO careerops.follow_up_reminders "
@@ -389,7 +390,7 @@ class TestCheckConstraints:
                 ),
                 {"id": cid},
             )
-            with pytest.raises(sa.exc.IntegrityError):
+            with pytest.raises(sa_exc.IntegrityError):
                 conn.execute(
                     sa.text(
                         "INSERT INTO careerops.applications "

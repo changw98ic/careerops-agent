@@ -43,6 +43,7 @@ from careerops.domain.applications import (
     ResumeVersion,
 )
 from careerops.domain.candidates import EvidenceItem, EvidenceKind
+from careerops.orchestration.capability_resolver import CapabilityDecision, CapabilityKind
 
 # ---------------------------------------------------------------------------
 # In-memory fakes
@@ -275,11 +276,8 @@ class TestTailoringReviewOnly:
         ev_id = uuid4()
 
         class _Enabled:
-            def decide(self, kind: object) -> object:
-                class _D:
-                    released = True
-
-                return _D()
+            def decide(self, capability: CapabilityKind) -> CapabilityDecision:
+                return CapabilityDecision(released=True, reason="test")
 
         def _suggest(
             version: ApplicationPackageVersion, evidence: list[EvidenceItem]
@@ -443,15 +441,20 @@ class TestApproval:
             claims=(PackageClaimVersion("Python", evidence_ids=(uuid4(),)),),
             now=now,
         )
-        approve_kwargs = dict(
+        a1 = svc.approve(
             application_id=draft.application_id,
             candidate_id=cid,
             version_id=draft.id,
             actor_id="u",
             now=now,
         )
-        a1 = svc.approve(**approve_kwargs)
-        a2 = svc.approve(**approve_kwargs)
+        a2 = svc.approve(
+            application_id=draft.application_id,
+            candidate_id=cid,
+            version_id=draft.id,
+            actor_id="u",
+            now=now,
+        )
         assert a1.id == a2.id and a2.approval_state is PackageApprovalState.APPROVED
 
 

@@ -55,11 +55,14 @@ from careerops.domain.email import (
 )
 from careerops.domain.mail_sync import (
     LinkConfidence,
+    LinkConfirmationDecision,
     MailConnectionState,
     MailSyncRun,
     MailSyncRunStatus,
     ThreadAssociationEvidence,
+    ThreadLinkSnapshot,
     ThreadLinkStatus,
+    UnresolvedThreadLink,
     validate_read_scope,
 )
 
@@ -266,9 +269,9 @@ class _FakeThreadLinkRepo:
         self._threads_by_provider: dict[tuple[UUID, str], UUID] = {}
         self._messages: dict[UUID, EmailMessage] = {}
         self._messages_by_account: dict[UUID, set[str]] = {}
-        self._links: dict[UUID, object] = {}  # thread_id -> snapshot
-        self._unresolved: dict[UUID, object] = {}  # link_id -> unresolved
-        self._decisions: dict[UUID, object] = {}  # link_id -> decision
+        self._links: dict[UUID, ThreadLinkSnapshot] = {}  # thread_id -> snapshot
+        self._unresolved: dict[UUID, UnresolvedThreadLink] = {}  # link_id -> unresolved
+        self._decisions: dict[UUID, LinkConfirmationDecision] = {}  # link_id -> decision
 
     def provider_ids_for_account(self, account_id: UUID) -> frozenset[str]:
         return frozenset(self._messages_by_account.get(account_id, set()))
@@ -298,10 +301,10 @@ class _FakeThreadLinkRepo:
             message.provider_message_id
         )
 
-    def get_link(self, candidate_id: UUID, thread_id: UUID):
+    def get_link(self, candidate_id: UUID, thread_id: UUID) -> ThreadLinkSnapshot | None:
         return self._links.get(thread_id)
 
-    def upsert_link(self, snapshot, *, now: datetime) -> None:
+    def upsert_link(self, snapshot: ThreadLinkSnapshot, *, now: datetime) -> None:
         from uuid import uuid4
 
         from careerops.domain.mail_sync import (
@@ -390,18 +393,20 @@ class _FakeThreadLinkRepo:
         ]
         return {"items": items[:limit], "next_cursor": None, "has_more": False}
 
-    def get_unresolved(self, candidate_id: UUID, link_id: UUID):
+    def get_unresolved(self, candidate_id: UUID, link_id: UUID) -> UnresolvedThreadLink | None:
         u = self._unresolved.get(link_id)
         if u is None or u.candidate_id != candidate_id:
             return None
         return u
 
-    def record_confirmation(self, decision, *, now: datetime):
+    def record_confirmation(
+        self, decision: LinkConfirmationDecision, *, now: datetime
+    ) -> ThreadLinkSnapshot | None:
         u = self._unresolved.pop(decision.link_id, None)
         if u is None:
             return None
         self._decisions[decision.link_id] = decision
-        from careerops.domain.mail_sync import ThreadLinkSnapshot, ThreadLinkStatus
+        from careerops.domain.mail_sync import ThreadLinkStatus
 
         snapshot = self._links.get(u.thread_id)
         if snapshot is not None:
@@ -424,7 +429,9 @@ class _FakeThreadLinkRepo:
             return new
         return None
 
-    def prior_confirmation(self, candidate_id: UUID, link_id: UUID):
+    def prior_confirmation(
+        self, candidate_id: UUID, link_id: UUID
+    ) -> LinkConfirmationDecision | None:
         d = self._decisions.get(link_id)
         if d is None or d.candidate_id != candidate_id:
             return None
@@ -803,6 +810,7 @@ class TestThreadAssociation:
         )
         assert snapshot.status is ThreadLinkStatus.UNRESOLVED
         link_id = snapshot.link_id
+        assert link_id is not None
         # User confirms app_a.
         decision = service.confirm_link(
             candidate_id=candidate_id,
@@ -813,6 +821,7 @@ class TestThreadAssociation:
         assert decision.confirmed_application_id == app_a
         # The snapshot is now CONFIRMED and reused.
         confirmed_snapshot = threads.get_link(candidate_id, thread_id)
+        assert confirmed_snapshot is not None
         assert confirmed_snapshot.status is ThreadLinkStatus.CONFIRMED
         assert confirmed_snapshot.application_id == app_a
         # Repeat decision is idempotent (raises already-resolved carrying prior).

@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import TypedDict
 from uuid import UUID, uuid4
 
 import pytest
@@ -118,6 +119,37 @@ class _StaticAttachmentProvider:
 
     def describe(self, content_hash: str) -> dict[str, object] | None:
         return self._specs.get(content_hash)
+
+
+class _BuildPayloadKwargs(TypedDict, total=False):
+    candidate_id: UUID
+    application_id: UUID
+    account: EmailAccountSummary
+    recipient: TrustedContactVerdict
+    subject: str
+    body: str
+    attachments: tuple[EmailAttachment, ...]
+    evidence_refs: tuple[UUID, ...]
+    in_reply_to: str
+    references_header: str
+    message_id_header: str
+    now: datetime
+
+
+class _PreviewSubmissionKwargs(TypedDict, total=False):
+    candidate_id: UUID
+    application_id: UUID
+    canonical_job_id: UUID
+    account_id: UUID
+    recipient_email: str
+    subject: str
+    body: str
+    attachment_hashes: tuple[str, ...]
+    evidence_refs: tuple[UUID, ...]
+    in_reply_to: str
+    references_header: str
+    message_id_header: str
+    now: datetime
 
 
 # ---------------------------------------------------------------------------
@@ -337,16 +369,16 @@ class TestPayloadHashMutation:
             canonical_job_id=s.job_id,
             recipient_email=TRUSTED_EMAIL,
         )
-        kwargs = dict(
-            candidate_id=s.cid,
-            application_id=s.app_id,
-            account=s.acct,
-            recipient=verdict,
-            body="Body",
-            now=NOW,
-        )
-        p1 = s.svc.build_payload(subject="Subject A", **kwargs)
-        p2 = s.svc.build_payload(subject="Subject B", **kwargs)
+        kwargs: _BuildPayloadKwargs = {
+            "candidate_id": s.cid,
+            "application_id": s.app_id,
+            "account": s.acct,
+            "recipient": verdict,
+            "body": "Body",
+            "now": NOW,
+        }
+        p1 = s.svc.build_payload(subject="Subject A", **kwargs)  # type: ignore[call-arg]
+        p2 = s.svc.build_payload(subject="Subject B", **kwargs)  # type: ignore[call-arg]
         assert p1.payload_hash != p2.payload_hash
 
     def test_body_change_changes_hash(self) -> None:
@@ -357,16 +389,16 @@ class TestPayloadHashMutation:
             canonical_job_id=s.job_id,
             recipient_email=TRUSTED_EMAIL,
         )
-        kwargs = dict(
-            candidate_id=s.cid,
-            application_id=s.app_id,
-            account=s.acct,
-            recipient=verdict,
-            subject="Subject",
-            now=NOW,
-        )
-        p1 = s.svc.build_payload(body="Body one", **kwargs)
-        p2 = s.svc.build_payload(body="Body two", **kwargs)
+        kwargs: _BuildPayloadKwargs = {
+            "candidate_id": s.cid,
+            "application_id": s.app_id,
+            "account": s.acct,
+            "recipient": verdict,
+            "subject": "Subject",
+            "now": NOW,
+        }
+        p1 = s.svc.build_payload(body="Body one", **kwargs)  # type: ignore[call-arg]
+        p2 = s.svc.build_payload(body="Body two", **kwargs)  # type: ignore[call-arg]
         assert p1.payload_hash != p2.payload_hash
 
     def test_attachment_change_changes_hash(self) -> None:
@@ -389,17 +421,17 @@ class TestPayloadHashMutation:
             media_type="application/pdf",
             size_bytes=100,
         )
-        kwargs = dict(
-            candidate_id=s.cid,
-            application_id=s.app_id,
-            account=s.acct,
-            recipient=verdict,
-            subject="Subject",
-            body="Body",
-            now=NOW,
-        )
-        p1 = s.svc.build_payload(attachments=(att1,), **kwargs)
-        p2 = s.svc.build_payload(attachments=(att2,), **kwargs)
+        kwargs: _BuildPayloadKwargs = {
+            "candidate_id": s.cid,
+            "application_id": s.app_id,
+            "account": s.acct,
+            "recipient": verdict,
+            "subject": "Subject",
+            "body": "Body",
+            "now": NOW,
+        }
+        p1 = s.svc.build_payload(attachments=(att1,), **kwargs)  # type: ignore[call-arg]
+        p2 = s.svc.build_payload(attachments=(att2,), **kwargs)  # type: ignore[call-arg]
         assert p1.payload_hash != p2.payload_hash
 
     def test_account_change_changes_hash(self) -> None:
@@ -411,16 +443,16 @@ class TestPayloadHashMutation:
             recipient_email=TRUSTED_EMAIL,
         )
         acct_b = EmailAccountSummary(account_id=uuid4(), email_address="other@careerops.example")
-        kwargs = dict(
-            candidate_id=s.cid,
-            application_id=s.app_id,
-            recipient=verdict,
-            subject="Subject",
-            body="Body",
-            now=NOW,
-        )
-        p1 = s.svc.build_payload(account=s.acct, **kwargs)
-        p2 = s.svc.build_payload(account=acct_b, **kwargs)
+        kwargs: _BuildPayloadKwargs = {
+            "candidate_id": s.cid,
+            "application_id": s.app_id,
+            "recipient": verdict,
+            "subject": "Subject",
+            "body": "Body",
+            "now": NOW,
+        }
+        p1 = s.svc.build_payload(account=s.acct, **kwargs)  # type: ignore[call-arg]
+        p2 = s.svc.build_payload(account=acct_b, **kwargs)  # type: ignore[call-arg]
         assert p1.payload_hash != p2.payload_hash
 
 
@@ -650,16 +682,16 @@ class TestPreviewSendParity:
         the user reviewed equal the bytes the provider would receive.
         """
         s = _slice()
-        kwargs = dict(
-            candidate_id=s.cid,
-            application_id=s.app_id,
-            canonical_job_id=s.job_id,
-            account_id=s.acct.account_id,
-            recipient_email=TRUSTED_EMAIL,
-            subject="Application",
-            body="Hello there",
-            now=NOW,
-        )
+        kwargs: _PreviewSubmissionKwargs = {
+            "candidate_id": s.cid,
+            "application_id": s.app_id,
+            "canonical_job_id": s.job_id,
+            "account_id": s.acct.account_id,
+            "recipient_email": TRUSTED_EMAIL,
+            "subject": "Application",
+            "body": "Hello there",
+            "now": NOW,
+        }
         p1 = s.svc.preview_submission(**kwargs)
         p2 = s.svc.preview_submission(**kwargs)
         assert p1.sendable and p2.sendable

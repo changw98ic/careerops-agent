@@ -1,6 +1,11 @@
 {
   "version": 1,
-  "status": "contract_verified_integration_passing",
+  "status": "engineering_consistency_verified_real_pilot_pending",
+  "evidence_scope": "d0_pilot_engineering_consistency",
+  "blocking_reasons": [
+    "real pilot source/consent/retention, human review, privacy/legal, and custody attestations are not externally verified"
+  ],
+  "release_qualification_allowed": false,
   "authoritative_plan": ".omx/plans/careerops-agent-mvp-plan.md",
   "risk_decisions": ".omx/plans/careerops-agent-risk-closure.md",
   "contracts": {

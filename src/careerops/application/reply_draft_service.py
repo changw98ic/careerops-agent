@@ -81,6 +81,7 @@ from careerops.domain.reply_draft import (
     scan_body_for_unsupported_claims,
     validate_reply_claims,
 )
+from careerops.observability.career_loop_trace import CareerLoopTrace
 from careerops.orchestration.capability_resolver import (
     CapabilityDecision,
     CapabilityKind,
@@ -193,7 +194,7 @@ class ApplicationTimelineSink(Protocol):
 class CapabilityResolver(Protocol):
     """Minimal resolver surface for send-capability gating (13.6)."""
 
-    def decide(self, kind: CapabilityKind) -> CapabilityDecision: ...
+    def decide(self, capability: CapabilityKind) -> CapabilityDecision: ...
 
 
 # ---------------------------------------------------------------------------
@@ -325,11 +326,13 @@ class FollowUpService:
         *,
         rule_version: str = FOLLOW_UP_RULE_VERSION_S13,
         timeline_sink: ApplicationTimelineSink | None = None,
+        trace: CareerLoopTrace | None = None,
     ) -> None:
         self._follow_ups = follow_up_repo
         self._applications = application_repo
         self._rule_version = rule_version
         self._timeline = timeline_sink
+        self._trace = trace
 
     # ------------------------------------------------------------------
     # reads
@@ -421,6 +424,8 @@ class FollowUpService:
                 created_at=now,
             )
         )
+        if self._trace is not None:
+            self._trace.record_follow_up(event="created")
         return reminder
 
     # ------------------------------------------------------------------
@@ -446,6 +451,8 @@ class FollowUpService:
             now,
             event_data={"snoozed_until": snoozed_until.isoformat()},
         )
+        if self._trace is not None:
+            self._trace.record_follow_up(event="snoozed")
         return updated
 
     def reschedule_follow_up(
@@ -492,6 +499,8 @@ class FollowUpService:
             now,
             event_data={"reason": reason},
         )
+        if self._trace is not None:
+            self._trace.record_follow_up(event="cancelled")
         return updated
 
     def complete_follow_up(
@@ -513,6 +522,8 @@ class FollowUpService:
             note="Follow-up reminder completed",
             source=ApplicationEventSource.USER,
         )
+        if self._trace is not None:
+            self._trace.record_follow_up(event="completed")
         return updated
 
     # ------------------------------------------------------------------

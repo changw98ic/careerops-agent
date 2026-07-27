@@ -35,6 +35,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+from typing import Protocol
 from uuid import UUID
 
 from careerops.domain.applications import (
@@ -203,7 +204,7 @@ class PackageBinding:
     evidence_refs: tuple[UUID, ...] = ()
 
 
-class PackageBindingStore:
+class PackageBindingStore(Protocol):
     """Protocol: read the current package binding for an application.
 
     The concrete package implementation lives in Section 8; this is the stable
@@ -213,8 +214,7 @@ class PackageBindingStore:
     external-form/manual submissions do NOT require an approved package.
     """
 
-    def get_binding(self, application_id: UUID) -> PackageBinding | None:
-        raise NotImplementedError
+    def get_binding(self, application_id: UUID) -> PackageBinding | None: ...
 
 
 # ---------------------------------------------------------------------------

@@ -41,11 +41,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Protocol
+from typing import Protocol, cast
 from uuid import UUID
 
 from careerops.domain.application_packages import ApplicationPackageVersion
 from careerops.domain.applications import PackageApprovalState
+from careerops.domain.contacts import ContactAction, RecruitingContact
 from careerops.domain.email_payloads import (
     AttachmentRetentionState,
     AttachmentValidationError,
@@ -66,9 +67,13 @@ __all__ = [
     "AccountLookupError",
     "ApplicationNotOwnedError",
     "ApprovedPackageRequiredError",
+    "CandidateScopedAccountLookup",
+    "CanonicalJobReader",
+    "ContactEvidenceReader",
     "EmailPayloadService",
     "NoTrustedContactError",
     "PackageVersionRepository",
+    "RepositoryTrustedContactResolver",
     "ResolvedContactCandidate",
     "SubmissionPreview",
     "TrustedContactResolver",
@@ -184,6 +189,12 @@ class AccountLookup(Protocol):
     def lookup(self, account_id: UUID) -> EmailAccountSummary: ...
 
 
+class CandidateScopedAccountLookup(Protocol):
+    """Optional stronger lookup used by candidate-owned runtime wiring."""
+
+    def lookup_for_candidate(self, candidate_id: UUID, account_id: UUID) -> EmailAccountSummary: ...
+
+
 class AttachmentProvider(Protocol):
     """Protocol: fetch safe-material inputs for an attachment (9.5).
 
@@ -194,6 +205,77 @@ class AttachmentProvider(Protocol):
     """
 
     def describe(self, content_hash: str) -> dict[str, object] | None: ...
+
+
+class ContactEvidenceReader(Protocol):
+    """Read contact evidence scoped to one company."""
+
+    def find_by_company(self, company_id: UUID) -> list[RecruitingContact]: ...
+
+
+class CanonicalJobReader(Protocol):
+    """Read the canonical job needed to bind contacts to a company."""
+
+    def find_canonical_by_id(self, canonical_job_id: UUID) -> object | None: ...
+
+
+class RepositoryTrustedContactResolver:
+    """Resolve only repository-backed, high-confidence recruiting contacts.
+
+    This adapter is deliberately stricter than the display/listing path.  A
+    contact must be public, domain-matched, and explicitly allowed to initiate
+    contact; the canonical job supplies the company binding.  Missing job or
+    contact evidence returns an empty result, which keeps both preview and
+    confirmation fail-closed.
+    """
+
+    def __init__(
+        self,
+        contact_reader: ContactEvidenceReader,
+        job_reader: CanonicalJobReader,
+    ) -> None:
+        self._contacts = contact_reader
+        self._jobs = job_reader
+
+    def resolve(
+        self,
+        *,
+        candidate_id: UUID,
+        application_id: UUID,
+        canonical_job_id: UUID,
+    ) -> list[ResolvedContactCandidate]:
+        del candidate_id  # contact records are company-scoped; application linkage is retained
+        job = self._jobs.find_canonical_by_id(canonical_job_id)
+        company_id = getattr(job, "company_id", None) if job is not None else None
+        if not isinstance(company_id, UUID):
+            return []
+
+        resolved: list[ResolvedContactCandidate] = []
+        for contact in self._contacts.find_by_company(company_id):
+            if (
+                contact.company_id != company_id
+                or not contact.publicly_listed
+                or not contact.domain_match
+                or ContactAction.INITIATE_CONTACT not in contact.allowed_actions
+            ):
+                continue
+            domain = recipient_domain(contact.email)
+            if not domain:
+                continue
+            resolved.append(
+                ResolvedContactCandidate(
+                    email=contact.email,
+                    company_domain=domain,
+                    contact_type=contact.role or contact.source.value,
+                    confidence=contact.confidence.value,
+                    source_evidence_url=contact.source_url,
+                    source_evidence_text=contact.source_text,
+                    domain_match=contact.domain_match,
+                    verified_at=contact.verified_at,
+                    application_linkage_id=application_id,
+                )
+            )
+        return resolved
 
 
 class _DefaultContactResolver:
@@ -231,7 +313,7 @@ class SubmissionPreview:
 
     application_id: UUID
     payload: InitialApplicationEmailPayload | None
-    errors: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=lambda: list[str]())
     recipient_verdict: TrustedContactVerdict | None = None
 
     @property
@@ -353,11 +435,18 @@ class EmailPayloadService:
             reasons.append(RecipientDenialReason.INVALID_ADDRESS)
 
         # Domain check: recipient domain must match the trusted company domain.
-        trusted_domain = company_domain.strip().lower()
+        trusted_domain = (
+            (match.company_domain if match is not None else company_domain).strip().lower()
+        )
         if trusted_domain and target_domain and target_domain != trusted_domain:
             reasons.append(RecipientDenialReason.DOMAIN_MISMATCH)
         elif not trusted_domain:
             reasons.append(RecipientDenialReason.UNVERIFIED_DOMAIN)
+
+        if match is not None and not match.domain_match:
+            reasons.append(RecipientDenialReason.DOMAIN_MISMATCH)
+        if match is not None and not match.source_evidence_url.strip():
+            reasons.append(RecipientDenialReason.MISSING_SOURCE_EVIDENCE)
 
         if not reasons and match is not None:
             return TrustedContactVerdict(
@@ -487,12 +576,14 @@ class EmailPayloadService:
             raise AttachmentValidationError(
                 "<unknown>", f"no content found for hash {content_hash}"
             )
+        raw_size = spec.get("size_bytes", 0)
+        size_bytes = raw_size if isinstance(raw_size, int) else 0
         return validate_attachment(
             name=str(spec.get("name", "")),
             content_hash=content_hash,
             declared_media_type=str(spec.get("declared_media_type", "")),
             detected_media_type=str(spec.get("detected_media_type", "")),
-            size_bytes=int(spec.get("size_bytes", 0)),
+            size_bytes=size_bytes,
             retention_state=AttachmentRetentionState(
                 spec.get("retention_state", AttachmentRetentionState.RETAINED.value)
             ),
@@ -559,7 +650,14 @@ class EmailPayloadService:
             errors.append("account lookup not wired")
         else:
             try:
-                account = self._account_lookup.lookup(account_id)
+                scoped_lookup = getattr(self._account_lookup, "lookup_for_candidate", None)
+                if callable(scoped_lookup):
+                    account = cast(EmailAccountSummary, scoped_lookup(candidate_id, account_id))
+                else:
+                    # Kept for small in-memory/test adapters. Production
+                    # wiring supplies lookup_for_candidate so an account from
+                    # another candidate can never enter a preview.
+                    account = self._account_lookup.lookup(account_id)
             except AccountLookupError as exc:
                 errors.append(str(exc))
             else:

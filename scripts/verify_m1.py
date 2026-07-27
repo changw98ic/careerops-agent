@@ -1761,6 +1761,16 @@ def verify_full_pilot(root: Path = ROOT) -> tuple[list[str], dict[str, Any]]:
     if pilot.get("split_policy") != FROZEN_SPLIT_POLICY:
         errors.append("pilot split_policy does not match the frozen policy")
 
+    blocking_reasons = gate.get("blocking_reasons")
+    if isinstance(blocking_reasons, list):
+        for reason in blocking_reasons:
+            if isinstance(reason, str) and reason.strip():
+                errors.append(f"M-1 blocking reason: {reason}")
+            else:
+                errors.append("M-1 blocking reasons must be non-empty strings")
+    elif blocking_reasons is not None:
+        errors.append("m1-gate blocking_reasons must be an array")
+
     expected = gate.get("full_gate_requires")
     if not isinstance(expected, dict):
         errors.append("full_gate_requires must be an object")

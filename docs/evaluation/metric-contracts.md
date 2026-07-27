@@ -1,6 +1,6 @@
 # CareerOps Agent metric contracts
 
-- Status: accepted metric baseline; real D0 pilot and product evaluators pending
+- Status: accepted metric baseline; trace-backed runtime instrumentation implemented; real D0 pilot and product evaluators pending
 - Date: 2026-07-18
 - Dataset policy: group-aware development 60%, validation 20%, sealed holdout 20% unless a versioned manifest states a pre-implementation exception
 
@@ -19,6 +19,12 @@ Every evaluation artifact records metric ID/version, commit SHA, dataset/schema/
 ## Evidence boundary
 
 The D0 engineering tools and product metric evaluators are separate layers:
+
+- The product-loop runtime records the Section 16.7 signals from request
+  trace-correlated business events. Prometheus exposes bounded aggregates at
+  `/metrics`; the safe request `trace_id` is retained only in a bounded local
+  diagnostic buffer and is never a metric label. This proves instrumentation
+  and collection behavior, not that a real pilot has occurred.
 
 - M-1 verifier output is scoped only to `d0_pilot_engineering_consistency`.
   `release_qualification_allowed` must remain strict `false`; M-1 cannot
@@ -43,9 +49,11 @@ manifest. They are not identity authentication, legal attestation, a trusted
 timestamp, holdout access control, or a cryptographic seal.
 
 `make verify-m1-contracts` validates static ADR/metric/schema/guide contracts
-only. `python3 -S scripts/verify_m1.py --json` is the full evidence Gate and must
-remain failing while the repository has `0/286` real pilot rows. A future
-engineering pass still cannot substitute for M7's separate trusted human,
+only. `python3 -S scripts/verify_m1.py --json` is the engineering-consistency
+evidence check; it currently passes with 294 repository-declared rows against
+286 required while the externally evidenced real-pilot count remains `0/286`.
+Release Qualification and M7 must remain blocked. A future engineering pass
+still cannot substitute for M7's separate trusted human,
 legal, privacy, holdout-custody, security, and product release evidence.
 
 ## 2. Metric definitions

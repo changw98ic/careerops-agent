@@ -51,6 +51,7 @@ from careerops.domain.applications import (
     ResumeVersion,
 )
 from careerops.domain.candidates import EvidenceItem
+from careerops.observability.career_loop_trace import CareerLoopTrace
 from careerops.orchestration.capability_resolver import (
     CapabilityDecision,
     CapabilityKind,
@@ -84,7 +85,7 @@ ModelSuggester = Callable[
 class CapabilityResolver(Protocol):
     """Minimal resolver surface the package service needs for tailoring gating."""
 
-    def decide(self, kind: CapabilityKind) -> CapabilityDecision: ...
+    def decide(self, capability: CapabilityKind) -> CapabilityDecision: ...
 
 
 class PackageVersionRepository(Protocol):
@@ -158,6 +159,7 @@ class PackageService:
         capability_resolver: CapabilityResolver | None = None,
         model_suggester: ModelSuggester | None = None,
         stale_threshold_days: int = STALE_SOURCE_THRESHOLD_DAYS,
+        trace: CareerLoopTrace | None = None,
     ) -> None:
         self._packages = package_repo
         self._resumes = resume_repo
@@ -165,6 +167,7 @@ class PackageService:
         self._capability_resolver = capability_resolver
         self._model_suggester = model_suggester
         self._stale_threshold_days = stale_threshold_days
+        self._trace = trace
 
     # ------------------------------------------------------------------
     # reads
@@ -311,6 +314,8 @@ class PackageService:
             now=now,
         )
         self._packages.save_package_version(new_version)
+        if self._trace is not None:
+            self._trace.record_user_correction(stage="package")
         return new_version
 
     # ------------------------------------------------------------------
@@ -407,6 +412,13 @@ class PackageService:
             now=now,
         )
         if reasons:
+            version = self.get_version(application_id, version_id)
+            if self._trace is not None:
+                self._trace.record_package_approval(
+                    outcome="rejected",
+                    created_at=version.created_at,
+                    decided_at=now,
+                )
             raise PackageApprovalValidationError(reasons)
         version = self.get_version(application_id, version_id)
         if version.approval_state is PackageApprovalState.APPROVED:
@@ -434,6 +446,12 @@ class PackageService:
             updated_at=now,
         )
         self._packages.save_package_version(approved)
+        if self._trace is not None:
+            self._trace.record_package_approval(
+                outcome="approved",
+                created_at=version.created_at,
+                decided_at=now,
+            )
         return approved
 
     # ------------------------------------------------------------------

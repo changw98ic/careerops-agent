@@ -10,6 +10,7 @@ from contextlib import suppress
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Protocol, cast
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from redis import Redis as SyncRedis
 from redis.asyncio import Redis as AsyncRedis
@@ -23,10 +24,29 @@ from careerops.application.ports.readiness import (
 from careerops.config import RuntimeEnvironment, Settings
 from careerops.infrastructure.database.engine import create_database_engine
 from careerops.infrastructure.storage.local import LocalContentAddressedStorage
+from careerops.integrations.fake_side_effect_provider import SideEffectProvider
 from careerops.observability.metrics import Metrics
 from careerops.orchestration.mapping_store import ReviewMappingStore
 
 _COMPONENTS = ("database", "redis", "temporal", "storage")
+
+
+def _langgraph_conn_string(raw_url: str) -> str:
+    """Return a psycopg URL pinned to the dedicated LangGraph schema."""
+
+    conn_string = raw_url.replace("postgresql+psycopg://", "postgresql://")
+    parsed = urlsplit(conn_string)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query["options"] = "-csearch_path=langgraph,public"
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            urlencode(query),
+            parsed.fragment,
+        )
+    )
 
 
 class AsyncRedisClient(Protocol):
@@ -345,7 +365,9 @@ class RuntimeResources:
         from careerops.infrastructure.database.audit import PostgresAuditWriterEngine
 
         audit_writer = PostgresAuditWriterEngine(self.database) if is_production else None
-        kernel = SideEffectKernel(side_effect_store, side_effect_provider, audit_writer=audit_writer)  # type: ignore[arg-type]
+        kernel = SideEffectKernel(
+            side_effect_store, side_effect_provider, audit_writer=audit_writer
+        )  # type: ignore[arg-type]
         review_mapping: ReviewMappingStore = InMemoryReviewMappingStore()
 
         # Wire LLM token recording via the model client factory (ADR 0006).
@@ -396,8 +418,7 @@ class RuntimeResources:
         from langgraph.checkpoint.postgres import PostgresSaver
 
         raw_url = self._settings.database_url.get_secret_value()
-        # from_conn_string expects psycopg DSN: strip the +psycopg driver suffix.
-        conn_string = raw_url.replace("postgresql+psycopg://", "postgresql://")
+        conn_string = _langgraph_conn_string(raw_url)
         ctx = PostgresSaver.from_conn_string(conn_string)
         saver: PostgresSaver = ctx.__enter__()  # type: ignore[attr-defined]
         saver.setup()
@@ -406,7 +427,7 @@ class RuntimeResources:
         self._postgres_saver_ctx = ctx  # type: ignore[attr-defined]
         return saver
 
-    def _build_side_effect_provider(self) -> object:
+    def _build_side_effect_provider(self) -> SideEffectProvider:
         """Build the production side-effect provider.
 
         Uses ``GmailSideEffectProvider`` when both ``auto_send_enabled`` and

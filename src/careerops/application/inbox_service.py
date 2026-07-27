@@ -213,9 +213,9 @@ def _remote_passes(
     if remote_rules.hybrid_allowed and ("hybrid" in text_norm or has_remote_signal):
         return True, ""
 
-    # If remote is required but no signals found
-    if remote_rules.remote_allowed and not has_remote_signal and not has_onsite_signal:
-        return False, "remote_unknown"
+    # If remote is preferred but no signals found:
+    # - onsite signal present, no remote signal → exclude (explicitly onsite)
+    # - no signals at all → pass (many remote jobs don't explicitly say "remote")
     if remote_rules.remote_allowed and has_onsite_signal and not has_remote_signal:
         return False, "remote_not_eligible"
 
@@ -434,11 +434,16 @@ class HardFilterEngine:
 # ---------------------------------------------------------------------------
 
 _SKILL_PATTERNS = re.compile(
-    r"\b(Python|Java|Go|Rust|TypeScript|JavaScript|React|Vue|Angular|"
-    r"PostgreSQL|MySQL|Redis|Docker|Kubernetes|AWS|GCP|Azure|"
-    r"Machine Learning|Deep Learning|NLP|LLM|"
-    r"FastAPI|Django|Flask|Spring|Node\.js|"
-    r"SQL|NoSQL|GraphQL|REST|gRPC)\b",
+    r"\b(Python|Java|Go|Rust|TypeScript|JavaScript|React|Vue|Angular|Dart|"
+    r"PostgreSQL|MySQL|Redis|SQLite|Docker|Kubernetes|AWS|GCP|Azure|"
+    r"Machine Learning|Deep Learning|NLP|LLM|RAG|"
+    r"FastAPI|Django|Flask|Spring|Node\.js|Flutter|"
+    r"SQL|NoSQL|GraphQL|REST|gRPC|"
+    r"LangChain|LangGraph|LlamaIndex|CrewAI|AutoGen|DSPy|"
+    r"Claude Agent SDK|OpenAI Agents SDK|Google ADK|Semantic Kernel|"
+    r"MCP|Agent|Agentic|RAG|"
+    r"Temporal|Kafka|Pulsar|Elasticsearch|"
+    r"Git|CI/CD|Terraform|Ansible)\b",
     re.IGNORECASE,
 )
 

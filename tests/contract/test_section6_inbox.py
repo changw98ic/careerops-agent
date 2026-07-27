@@ -327,12 +327,13 @@ class TestHardGatePrecedence:
 
 class TestUnknownRemote:
     """A job with no remote information when the user requires remote is
-    excluded with REMOTE_UNKNOWN as the blocking reason."""
+    passed (many remote jobs don't explicitly say 'remote'). Only jobs
+    with explicit onsite signals are excluded."""
 
-    def test_no_remote_signals_excluded_with_reason(self) -> None:
+    def test_no_remote_signals_passes(self) -> None:
         """When profile requires remote (remote_allowed=True) and the job
         description contains no remote keywords and no onsite keywords,
-        the job is excluded with REMOTE_UNKNOWN."""
+        the job passes (many remote jobs don't explicitly say 'remote')."""
         engine = HardFilterEngine()
         profile = _make_profile(
             remote_rules=RemoteRules(remote_allowed=True),
@@ -349,15 +350,11 @@ class TestUnknownRemote:
             job_compensation=None,
             profile=profile,
         )
-        assert decision.verdict is FilterVerdict.EXCLUDED
-        assert BlockingReason.REMOTE_UNKNOWN in decision.blocking_reasons
-        # Evidence refs must carry the reason
-        assert "remote" in decision.evidence_refs
-        assert decision.evidence_refs["remote"] == "remote_unknown"
+        assert decision.verdict is FilterVerdict.RECOMMENDED
 
-    def test_empty_job_text_excluded(self) -> None:
-        """Even an empty job text with no signals is excluded when remote
-        is required."""
+    def test_empty_job_text_passes(self) -> None:
+        """Even an empty job text with no signals passes when remote
+        is required (no onsite signal = not excluded)."""
         engine = HardFilterEngine()
         profile = _make_profile(
             remote_rules=RemoteRules(remote_allowed=True),
@@ -373,8 +370,7 @@ class TestUnknownRemote:
             job_compensation=None,
             profile=profile,
         )
-        assert decision.verdict is FilterVerdict.EXCLUDED
-        assert BlockingReason.REMOTE_UNKNOWN in decision.blocking_reasons
+        assert decision.verdict is FilterVerdict.RECOMMENDED
 
 
 # ---------------------------------------------------------------------------

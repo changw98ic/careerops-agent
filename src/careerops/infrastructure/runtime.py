@@ -342,7 +342,10 @@ class RuntimeResources:
             side_effect_store = InMemorySideEffectStore()
             side_effect_provider = FakeSideEffectProvider()
 
-        kernel = SideEffectKernel(side_effect_store, side_effect_provider)  # type: ignore[arg-type]
+        from careerops.infrastructure.database.audit import PostgresAuditWriterEngine
+
+        audit_writer = PostgresAuditWriterEngine(self.database) if is_production else None
+        kernel = SideEffectKernel(side_effect_store, side_effect_provider, audit_writer=audit_writer)  # type: ignore[arg-type]
         review_mapping: ReviewMappingStore = InMemoryReviewMappingStore()
 
         # Wire LLM token recording via the model client factory (ADR 0006).

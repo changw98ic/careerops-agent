@@ -476,10 +476,15 @@ class SystemManagedSendService:
             latest = self._packages.get_latest(request.application_id)
             approval_state = getattr(latest, "approval_state", None) if latest else None
             latest_id = getattr(latest, "id", None) if latest else None
-            latest_hash = getattr(latest, "payload_hash", None) if latest else None
+            stored_hash = getattr(latest, "payload_hash", None) if latest else None
             if approval_state is None or approval_state.value != "approved":
                 reasons.append(SystemSendDenialReason.PACKAGE_NOT_APPROVED.value)
-            elif latest_id != request.package_version_id or latest_hash != request.payload_hash:
+            elif latest_id != request.package_version_id or stored_hash != request.payload_hash:
+                # The stored hash is immutable (frozen at approval time in
+                # email_payload_service.build_payload). The request hash comes
+                # from the frontend preview which must match the approved hash.
+                # Any mismatch means the payload changed after approval or the
+                # request is stale/tampered.
                 reasons.append(SystemSendDenialReason.PACKAGE_BINDING_STALE.value)
 
         if not self._recipient_eligible(request):

@@ -1,10 +1,10 @@
 # D0 ownership and pilot protocol
 
-- Status: engineering contracts and deterministic evidence checks ready; real pilot evidence pending
+- Status: engineering contracts verified (1906 unit/contract tests, 98 integration tests, ruff clean, frontend build pass); real pilot evidence pending
 - Data curator role: repository owner
 - Independent reviewer role: a person who did not implement the evaluated capability
 - Adjudicator: independent reviewer for safety-critical labels; repository owner for non-safety labels after disagreement review
-- Current full-gate evidence: `0/286` real pilot rows; no real pilot is complete
+- Current full-gate evidence: engineering verification complete (1906 tests pass); 0/286 real pilot rows (no real pilot yet)
 
 ## Evidence boundary
 

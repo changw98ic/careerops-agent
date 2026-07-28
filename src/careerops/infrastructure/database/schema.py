@@ -3313,7 +3313,6 @@ sa.Index(
     agent_run_reviews.c.candidate_id,
     agent_run_reviews.c.run_id,
 )
-
 # ---------------------------------------------------------------------------
 # Smart form intake (review-only, short-lived, candidate-owned)
 # ---------------------------------------------------------------------------

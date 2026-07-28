@@ -18,6 +18,7 @@ const Inbox = () => import('./views/Inbox.vue')
 const InboxDetail = () => import('./views/InboxDetail.vue')
 const MailFollowUp = () => import('./views/MailFollowUp.vue')
 const ReplyReviewQueue = () => import('./views/ReplyReviewQueue.vue')
+const AgentWorkbench = () => import('./views/AgentWorkbench.vue')
 const NotFound = () => import('./views/NotFound.vue')
 
 const routes = [
@@ -39,6 +40,7 @@ const routes = [
   { path: '/inbox/:id', name: 'inbox-detail', component: InboxDetail, meta: { auth: true } },
   { path: '/mail-follow-up', name: 'mail-follow-up', component: MailFollowUp, meta: { auth: true, title: '邮件跟进' } },
   { path: '/reply-queue', name: 'reply-queue', component: ReplyReviewQueue, meta: { auth: true, title: '回复评审' } },
+  { path: '/ai-workbench', name: 'ai-workbench', component: AgentWorkbench, meta: { auth: true, title: '智能工作台' } },
   { path: '/bootstrap', name: 'bootstrap', component: () => import('./views/Bootstrap.vue') },
   { path: '/404', name: 'not-found', component: NotFound },
   { path: '/:pathMatch(.*)*', name: 'catch-all', redirect: '/404' },

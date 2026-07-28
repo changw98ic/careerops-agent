@@ -112,6 +112,78 @@ class CandidateProfileRequiredError(CareerOpsHTTPException):
         super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
 
 
+class SmartIntakeDisabledError(CareerOpsHTTPException):
+    error_code = ErrorCode.SMART_INTAKE_DISABLED
+    message_default = "Smart intake is disabled"
+
+    @classmethod
+    def _status_code(cls) -> int:
+        return HTTPStatus.FORBIDDEN
+
+    def __init__(self, message: str = "", **kwargs: object) -> None:
+        super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
+
+
+class SmartPreviewNotFoundError(CareerOpsHTTPException):
+    error_code = ErrorCode.SMART_PREVIEW_NOT_FOUND
+    message_default = "Smart intake preview not found"
+
+    @classmethod
+    def _status_code(cls) -> int:
+        return HTTPStatus.NOT_FOUND
+
+    def __init__(self, message: str = "", **kwargs: object) -> None:
+        super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
+
+
+class SmartPreviewInProgressError(CareerOpsHTTPException):
+    error_code = ErrorCode.SMART_PREVIEW_IN_PROGRESS
+    message_default = "An equivalent smart intake preview is already running"
+
+    @classmethod
+    def _status_code(cls) -> int:
+        return HTTPStatus.CONFLICT
+
+    def __init__(self, message: str = "", **kwargs: object) -> None:
+        super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
+
+
+class IdempotencyKeyReusedError(CareerOpsHTTPException):
+    error_code = ErrorCode.IDEMPOTENCY_KEY_REUSED
+    message_default = "Idempotency key was reused with different input"
+
+    @classmethod
+    def _status_code(cls) -> int:
+        return HTTPStatus.CONFLICT
+
+    def __init__(self, message: str = "", **kwargs: object) -> None:
+        super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
+
+
+class StaleSmartIntakePreviewError(CareerOpsHTTPException):
+    error_code = ErrorCode.STALE_SMART_INTAKE_PREVIEW
+    message_default = "The form changed after this preview was created"
+
+    @classmethod
+    def _status_code(cls) -> int:
+        return HTTPStatus.CONFLICT
+
+    def __init__(self, message: str = "", **kwargs: object) -> None:
+        super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
+
+
+class SmartPreviewExpiredError(CareerOpsHTTPException):
+    error_code = ErrorCode.SMART_PREVIEW_EXPIRED
+    message_default = "Smart intake preview has expired"
+
+    @classmethod
+    def _status_code(cls) -> int:
+        return HTTPStatus.GONE
+
+    def __init__(self, message: str = "", **kwargs: object) -> None:
+        super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
+
+
 class NotFoundError(CareerOpsHTTPException):
     error_code = ErrorCode.NOT_FOUND
     message_default = "Resource not found"
@@ -316,7 +388,16 @@ def error_response(
             trace_id=_trace_id(request),
         )
     )
-    return JSONResponse(status_code=status_code, content=body.model_dump(mode="json"))
+    headers = (
+        {"Cache-Control": "no-store"}
+        if request.url.path.startswith("/api/v1/smart-intake/")
+        else None
+    )
+    return JSONResponse(
+        status_code=status_code,
+        content=body.model_dump(mode="json"),
+        headers=headers,
+    )
 
 
 # ---------------------------------------------------------------------------

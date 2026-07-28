@@ -31,6 +31,7 @@ from careerops.api.routes.profile import router as profile_router
 from careerops.api.routes.reply_drafts import router as reply_drafts_router
 from careerops.api.routes.resumes import router as resumes_router
 from careerops.api.routes.review import install_review_endpoint
+from careerops.api.routes.smart_intake import router as smart_intake_router
 from careerops.api.routes.system_send import router as system_send_router
 from careerops.application.dashboard import DashboardSnapshotProvider
 from careerops.application.ports.readiness import ReadinessProbe
@@ -134,6 +135,13 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
+        # Capability rollback is also a data-lifecycle boundary: once the
+        # trusted flag is off, remove any unapplied preview values before the
+        # process serves requests. Decision metadata remains append-only.
+        if isinstance(probe, RuntimeResources) and not resolved.smart_intake_enabled:
+            smart_intake_service = getattr(_app.state, "smart_intake_service", None)
+            if smart_intake_service is not None:
+                smart_intake_service.revoke_unapplied(actor_id="smart-intake-capability-disabled")
         try:
             yield
         finally:
@@ -175,6 +183,7 @@ def create_app(
         )
         from careerops.application.profile_service import ProfileService
         from careerops.application.resume_service import ResumeService
+        from careerops.application.smart_intake import SmartIntakeService
 
         app.state.matching_repository = probe.matching_read_repo
         app.state.evidence_import_service = EvidenceImportService(probe.matching_read_repo)
@@ -200,6 +209,17 @@ def create_app(
         app.state.evidence_repository = probe.evidence_repo
         app.state.application_cycle_repository = probe.application_cycle_repo
         app.state.capability_resolver = probe.capability_resolver
+        app.state.smart_intake_rate_limiter = RedisAuthRateLimiter(probe.redis_sync)
+        app.state.smart_intake_service = SmartIntakeService(
+            probe.database,
+            profile_repository=probe.profile_repo,
+            job_repository=probe.job_read_repo,
+            resume_repository=probe.application_repo,
+            evidence_repository=probe.evidence_repo,
+            model_client=probe.model_client,  # type: ignore[arg-type]
+            rate_limiter=app.state.smart_intake_rate_limiter,
+            metrics=metrics,
+        )
         # Section-3 application services (tasks 3.1 / 3.3 / 3.6). Each wraps a
         # Section-2 repository; routes pull them through ``require_repository``
         # so a missing service surfaces as 503 rather than a silent empty
@@ -520,6 +540,7 @@ def create_app(
     # server-side inside each handler via ``require_candidate_id``.
     app.include_router(profile_router, dependencies=[Depends(require_api_auth)])
     app.include_router(resumes_router, dependencies=[Depends(require_api_auth)])
+    app.include_router(smart_intake_router, dependencies=[Depends(require_api_auth)])
     app.include_router(evidence_router, dependencies=[Depends(require_api_auth)])
     # Section-4 additive routers (crawl sources / plans / runs). Same auth
     # guard as the existing v1 routers; candidate ownership is resolved
@@ -724,6 +745,18 @@ _ERROR_RESPONSE_SCHEMAS: dict[str, dict[str, object]] = {
                                 "trace_id": "abc123",
                             }
                         },
+                        "smart_intake_disabled": {
+                            "summary": "SMART_INTAKE_DISABLED",
+                            "value": {
+                                "error": {
+                                    "code": "SMART_INTAKE_DISABLED",
+                                    "message": "Smart intake is disabled",
+                                    "retryable": False,
+                                    "details": None,
+                                    "trace_id": "abc123",
+                                }
+                            },
+                        },
                     },
                 },
             }
@@ -738,6 +771,23 @@ _ERROR_RESPONSE_SCHEMAS: dict[str, dict[str, object]] = {
                     "error": {
                         "code": "NOT_FOUND",
                         "message": "Resource not found",
+                        "retryable": False,
+                        "details": None,
+                        "trace_id": "abc123",
+                    }
+                },
+            }
+        },
+    },
+    "410": {
+        "description": "Preview expired or was purged",
+        "content": {
+            "application/json": {
+                "schema": {"$ref": "#/components/schemas/ErrorResponse"},
+                "example": {
+                    "error": {
+                        "code": "SMART_PREVIEW_EXPIRED",
+                        "message": "Smart intake preview has expired",
                         "retryable": False,
                         "details": None,
                         "trace_id": "abc123",
@@ -861,6 +911,13 @@ def _install_openapi_error_responses(app: FastAPI) -> None:
                                     "DENIED_POLICY",
                                     "UNRESOLVED_EMAIL_LINK",
                                     "RECONCILIATION_REQUIRED",
+                                    "PAYLOAD_TOO_LARGE",
+                                    "SMART_INTAKE_DISABLED",
+                                    "SMART_PREVIEW_NOT_FOUND",
+                                    "SMART_PREVIEW_IN_PROGRESS",
+                                    "IDEMPOTENCY_KEY_REUSED",
+                                    "STALE_SMART_INTAKE_PREVIEW",
+                                    "SMART_PREVIEW_EXPIRED",
                                 ],
                             },
                             "message": {"type": "string"},

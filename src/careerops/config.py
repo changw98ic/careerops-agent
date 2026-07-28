@@ -88,6 +88,9 @@ class Settings(BaseSettings):
     # disabled — model output is review-only regardless of this flag.
     crawl_plan_management_enabled: bool = True
     model_tailoring_enabled: bool = False
+    # Smart form intake is a review-only convenience path. It is deliberately
+    # disabled until the operator completes the rollout and privacy checks.
+    smart_intake_enabled: bool = False
 
     @model_validator(mode="after")
     def reject_unreleased_capabilities(self) -> Self:

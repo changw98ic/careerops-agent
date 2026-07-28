@@ -14,6 +14,7 @@ _LIMITS = {
     AuthAction.SESSION_ROTATE: (10, timedelta(minutes=5)),
     AuthAction.SESSION_REVOKE: (30, timedelta(minutes=1)),
     AuthAction.REVIEW: (30, timedelta(minutes=1)),
+    AuthAction.SMART_INTAKE: (10, timedelta(minutes=10)),
 }
 
 

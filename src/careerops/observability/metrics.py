@@ -55,6 +55,7 @@ class Metrics:
         )
         capability_values = {
             "model_provider": settings.model_provider != "disabled",
+            "smart_intake": settings.smart_intake_enabled,
             "google_oauth": settings.google_oauth_enabled,
             "external_writes": settings.external_writes_enabled,
             "auto_send": settings.auto_send_enabled,
@@ -109,6 +110,25 @@ class Metrics:
             "Interview invitations received in response to applications.",
             registry=self.registry,
         )
+        self._smart_intake_previews = Counter(
+            "careerops_smart_intake_previews_total",
+            "Smart-intake preview outcomes with bounded target/state labels.",
+            ("target", "state"),
+            registry=self.registry,
+        )
+        self._smart_intake_decisions = Counter(
+            "careerops_smart_intake_decisions_total",
+            "Smart-intake field decisions with bounded target/action labels.",
+            ("target", "decision"),
+            registry=self.registry,
+        )
+        self._smart_intake_latency = Histogram(
+            "careerops_smart_intake_latency_seconds",
+            "Smart-intake preview latency with bounded target/operation labels.",
+            ("target", "operation"),
+            buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 15.0, 30.0),
+            registry=self.registry,
+        )
 
     def observe_http(
         self,
@@ -161,6 +181,38 @@ class Metrics:
         """Increment the interview-received counter (v1 instrumentation pipeline)."""
         if amount > 0:
             self._interview_received.inc(amount)
+
+    def record_smart_intake_preview(self, *, target: str, state: str) -> None:
+        safe_target = target if target in {"profile", "interview_context"} else "other"
+        safe_state = (
+            state
+            if state
+            in {
+                "ready",
+                "unavailable",
+                "abstained",
+                "invalid",
+                "stale",
+                "expired",
+                "revoked",
+            }
+            else "other"
+        )
+        self._smart_intake_previews.labels(target=safe_target, state=safe_state).inc()
+
+    def record_smart_intake_decision(self, *, target: str, decision: str) -> None:
+        safe_target = target if target in {"profile", "interview_context"} else "other"
+        safe_decision = decision if decision in {"accept", "edit", "reject", "unknown"} else "other"
+        self._smart_intake_decisions.labels(target=safe_target, decision=safe_decision).inc()
+
+    def observe_smart_intake_latency(
+        self, *, target: str, operation: str, duration_seconds: float
+    ) -> None:
+        safe_target = target if target in {"profile", "interview_context"} else "other"
+        safe_operation = operation if operation in {"preview", "apply"} else "other"
+        self._smart_intake_latency.labels(target=safe_target, operation=safe_operation).observe(
+            max(0.0, duration_seconds)
+        )
 
     def render(self) -> bytes:
         return generate_latest(self.registry)

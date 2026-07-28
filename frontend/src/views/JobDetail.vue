@@ -124,7 +124,7 @@ import {
   SendOutlined,
 } from '@ant-design/icons-vue'
 import message from 'ant-design-vue/es/message'
-import { api, parseApiError } from '../api/client.js'
+import { api, formatApiError, parseApiError } from '../api/client.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -271,7 +271,7 @@ function parseErrorMessage(err) {
   if (msg.includes('500')) return '服务器错误，请稍后重试。'
   if (msg.includes('503')) return '邮件服务未配置。'
   if (msg.includes('502')) return '邮件发送失败，请检查收件人地址。'
-  return msg
+  return formatApiError(err, msg)
 }
 
 function stateColor(state) {

@@ -15,6 +15,7 @@ x-careerops-environment: &careerops-environment
   CAREEROPS_TEMPORAL_TASK_QUEUE: careerops-m0
   CAREEROPS_STORAGE_ROOT: /app/data/objects
   CAREEROPS_MODEL_PROVIDER: disabled
+  CAREEROPS_SMART_INTAKE_ENABLED: "false"
   CAREEROPS_GOOGLE_OAUTH_ENABLED: "false"
   CAREEROPS_EXTERNAL_WRITES_ENABLED: "false"
   CAREEROPS_AUTO_SEND_ENABLED: "false"
@@ -27,7 +28,6 @@ x-app-service: &app-service
   build:
     context: .
     dockerfile: Dockerfile
-  image: careerops:0.1.0
   restart: unless-stopped
   networks:
     - backend
@@ -38,7 +38,6 @@ services:
     build:
       context: .
       dockerfile: deploy/postgres/Dockerfile
-    image: careerops-postgres:17.5
     restart: unless-stopped
     networks:
       - backend
@@ -48,6 +47,8 @@ services:
       POSTGRES_DB: ${CAREEROPS_DB_NAME:?CAREEROPS_DB_NAME is required}
       CAREEROPS_DB_RUNTIME_USER: ${CAREEROPS_DB_RUNTIME_USER:?CAREEROPS_DB_RUNTIME_USER is required}
       CAREEROPS_DB_RUNTIME_PASSWORD: ${CAREEROPS_DB_RUNTIME_PASSWORD:?CAREEROPS_DB_RUNTIME_PASSWORD is required}
+      CAREEROPS_DB_RETENTION_USER: ${CAREEROPS_DB_RETENTION_USER:?CAREEROPS_DB_RETENTION_USER is required}
+      CAREEROPS_DB_RETENTION_PASSWORD: ${CAREEROPS_DB_RETENTION_PASSWORD:?CAREEROPS_DB_RETENTION_PASSWORD is required}
       CAREEROPS_TEMPORAL_DB_USER: ${CAREEROPS_TEMPORAL_DB_USER:?CAREEROPS_TEMPORAL_DB_USER is required}
       CAREEROPS_TEMPORAL_DB_PASSWORD: ${CAREEROPS_TEMPORAL_DB_PASSWORD:?CAREEROPS_TEMPORAL_DB_PASSWORD is required}
       CAREEROPS_TEMPORAL_DB_NAME: ${CAREEROPS_TEMPORAL_DB_NAME:?CAREEROPS_TEMPORAL_DB_NAME is required}
@@ -184,6 +185,19 @@ services:
       timeout: 5s
       retries: 12
       start_period: 20s
+
+  smart-intake-retention:
+    <<: *app-service
+    command: ["careerops-smart-intake-retention"]
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+    environment:
+      <<: *careerops-environment
+      CAREEROPS_DATABASE_URL: >-
+        postgresql+psycopg://${CAREEROPS_DB_RETENTION_USER:?CAREEROPS_DB_RETENTION_USER is required}:${CAREEROPS_DB_RETENTION_PASSWORD:?CAREEROPS_DB_RETENTION_PASSWORD is required}@postgres:5432/${CAREEROPS_DB_NAME:?CAREEROPS_DB_NAME is required}
+      CAREEROPS_DATABASE_ROLE: retention
+      CAREEROPS_SMART_INTAKE_RETENTION_INTERVAL_SECONDS: "3600"
 
 networks:
   backend:

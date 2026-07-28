@@ -82,7 +82,7 @@ import {
   ReloadOutlined,
   SearchOutlined,
 } from '@ant-design/icons-vue'
-import { api } from '../api/client.js'
+import { api, formatApiError } from '../api/client.js'
 
 const companies = ref([])
 const searchInput = ref('')
@@ -147,7 +147,7 @@ async function fetchCompanies(cursor) {
     total.value = data.total || 0
     nextCursor.value = data.next_cursor ?? null
   } catch (err) {
-    error.value = err.message || '加载公司列表失败，请稍后重试。'
+    error.value = formatApiError(err, '加载公司列表失败，请稍后重试。')
   } finally {
     loading.value = false
     loadingMore.value = false

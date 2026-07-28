@@ -71,6 +71,8 @@ EXPECTED_TABLES = {
     "resume_versions",
     "agent_runs",
     "agent_run_reviews",
+    "smart_intake_previews",
+    "smart_intake_decisions",
     "schedule_proposals",
     "send_attempts",
     "send_receipts",

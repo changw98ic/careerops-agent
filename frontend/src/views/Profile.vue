@@ -63,6 +63,15 @@
     <template v-else>
       <!-- Editor -->
       <a-card class="detail-card" title="编辑偏好">
+        <SmartIntakePanel
+          target="profile"
+          title="用自然语言预填求职画像"
+          :context="{ profile_version_id: activeVersion?.id || null }"
+          :base-snapshot="form"
+          :current-snapshot="form"
+          :feature-enabled="smartIntakeUiEnabled"
+          @applied="applySmartProfilePatch"
+        />
         <a-form layout="vertical" :model="form">
           <a-divider orientation="left" plain>目标职位</a-divider>
           <div v-if="form.target_roles.length === 0" class="muted row-hint">
@@ -305,7 +314,8 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { PlusOutlined } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
-import { api, parseApiError } from '../api/client.js'
+import { api, formatApiError, parseApiError, smartIntakeUiEnabled } from '../api/client.js'
+import SmartIntakePanel from '../components/SmartIntakePanel.vue'
 
 const activeVersion = ref(null)
 const versions = ref([])
@@ -406,6 +416,69 @@ function resetForm() {
   validationError.value = ''
 }
 
+function applySmartProfilePatch({ patch, baseline }) {
+  const fields = patch || {}
+  let conflicts = 0
+  for (const [path, value] of Object.entries(fields)) {
+    const locationMatch = /^locations\[(\d+)\]\./.exec(path)
+    if (locationMatch) {
+      const locationIndex = Number(locationMatch[1])
+      const baselineLocation = baseline?.locations?.[locationIndex]
+      const currentLocation = form.locations?.[locationIndex]
+      // Smart intake emits preferred locations only. Never let a low-risk
+      // name/radius patch inherit or overwrite a required/excluded location.
+      if (
+        (baselineLocation && baselineLocation.kind !== 'preferred') ||
+        (currentLocation && currentLocation.kind !== 'preferred')
+      ) {
+        conflicts += 1
+        continue
+      }
+      if (!currentLocation) {
+        form.locations[locationIndex] = { name: '', kind: 'preferred', radius_km: null }
+      }
+    }
+    if (!sameValue(getAt(baseline, path), getAt(form, path))) {
+      conflicts += 1
+      continue
+    }
+    setAt(form, path, clone(value))
+  }
+  if (conflicts) {
+    message.warning(`${conflicts} 项表单在预览后已被修改，已保留当前值。`)
+  } else if (Object.keys(fields).length) {
+    message.success('智能建议已写入当前草稿；请检查后手工保存。')
+  }
+}
+
+function pathParts(path) {
+  return path.replaceAll('[', '.').replaceAll(']', '').split('.').filter(Boolean)
+}
+
+function getAt(root, path) {
+  return pathParts(path).reduce((current, part) => current?.[part], root)
+}
+
+function setAt(root, path, value) {
+  const parts = pathParts(path)
+  let current = root
+  for (let index = 0; index < parts.length - 1; index += 1) {
+    const part = parts[index]
+    const next = parts[index + 1]
+    if (current[part] == null) current[part] = /^\d+$/.test(next) ? [] : {}
+    current = current[part]
+  }
+  current[parts.at(-1)] = value
+}
+
+function clone(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value))
+}
+
+function sameValue(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
 function buildPayload() {
   return {
     target_roles: form.target_roles
@@ -443,7 +516,7 @@ async function loadActive() {
     } else if (info.isDependencyNotReady) {
       unavailable.value = true
     } else {
-      error.value = info.message || '加载画像失败，请稍后重试。'
+      error.value = formatApiError(err, '加载画像失败，请稍后重试。')
     }
   }
 }
@@ -456,7 +529,7 @@ async function loadHistory() {
   } catch (err) {
     const info = parseApiError(err)
     if (!info.isDependencyNotReady) {
-      error.value = info.message || '加载历史版本失败。'
+      error.value = formatApiError(err, '加载历史版本失败。')
     }
   } finally {
     historyLoading.value = false
@@ -487,9 +560,9 @@ async function save() {
     if (info.isDependencyNotReady) {
       unavailable.value = true
     } else if (info.status === 409 || info.code === 'INVALID_STATE') {
-      validationError.value = info.message || '偏好校验未通过。'
+      validationError.value = formatApiError(err, '偏好校验未通过。')
     } else {
-      error.value = info.message || '保存失败，请稍后重试。'
+      error.value = formatApiError(err, '保存失败，请稍后重试。')
     }
   } finally {
     saving.value = false
@@ -510,9 +583,9 @@ async function activate(id) {
     if (info.isDependencyNotReady) {
       unavailable.value = true
     } else if (info.status === 409 || info.code === 'INVALID_STATE') {
-      validationError.value = info.message || '该版本无法被激活（校验失败）。'
+      validationError.value = formatApiError(err, '该版本无法被激活（校验失败）。')
     } else {
-      error.value = info.message || '激活失败。'
+      error.value = formatApiError(err, '激活失败。')
     }
   } finally {
     activatingId.value = ''

@@ -198,7 +198,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { api, parseApiError } from '../api/client.js'
+import { api, formatApiError, parseApiError } from '../api/client.js'
 
 const route = useRoute()
 
@@ -261,7 +261,7 @@ async function loadRun() {
     } else if (info.status === 404) {
       notFound.value = true
     } else {
-      error.value = info.message || '加载运行详情失败。'
+      error.value = formatApiError(err, '加载运行详情失败。')
     }
   } finally {
     loading.value = false

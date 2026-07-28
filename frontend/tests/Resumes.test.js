@@ -19,6 +19,7 @@ vi.mock('../src/api/client.js', () => ({
     retryable: !!err?.retryable,
     isDependencyNotReady: err?.status === 503 || err?.code === 'DEPENDENCY_NOT_READY',
   }),
+  formatApiError: (err, fallback) => err?.messageText || err?.message || fallback,
   setCsrfToken: vi.fn(),
 }))
 

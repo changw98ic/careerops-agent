@@ -127,7 +127,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { api, parseApiError } from '../api/client.js'
+import { api, formatApiError, parseApiError } from '../api/client.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -228,7 +228,7 @@ async function fetchRuns(cursor) {
     if (info.isDependencyNotReady) {
       unavailable.value = true
     } else {
-      error.value = info.message || '加载运行列表失败，请稍后重试。'
+      error.value = formatApiError(err, '加载运行列表失败，请稍后重试。')
     }
   } finally {
     loading.value = false

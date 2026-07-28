@@ -291,6 +291,11 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
         "/api/v1/agents/runs/{run_id}",
         "/api/v1/agents/runs/{run_id}/review",
         "/api/v1/agents/runs/{run_id}/reviews",
+        # Review-only smart form intake previews and draft decisions.
+        "/api/v1/smart-intake/capability",
+        "/api/v1/smart-intake/previews",
+        "/api/v1/smart-intake/previews/{preview_id}",
+        "/api/v1/smart-intake/previews/{preview_id}/apply",
     }
 
 

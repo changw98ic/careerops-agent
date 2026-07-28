@@ -300,7 +300,7 @@ import {
   StarOutlined,
 } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
-import { api, parseApiError } from '../api/client.js'
+import { api, formatApiError, parseApiError } from '../api/client.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -365,7 +365,7 @@ async function fetchDetail() {
     } else if (parsed.status === 404) {
       // Will show 404 result
     } else {
-      error.value = parsed.message || '加载职位详情失败，请稍后重试。'
+      error.value = formatApiError(err, '加载职位详情失败，请稍后重试。')
     }
   } finally {
     loading.value = false
@@ -391,7 +391,7 @@ async function onFavorite() {
     }
   } catch (err) {
     const parsed = parseApiError(err)
-    error.value = parsed.message || '操作失败，请稍后重试。'
+    error.value = formatApiError(err, '操作失败，请稍后重试。')
   } finally {
     actionLoading.value = ''
   }
@@ -451,7 +451,7 @@ async function onIgnore() {
     }
   } catch (err) {
     const parsed = parseApiError(err)
-    error.value = parsed.message || '操作失败，请稍后重试。'
+    error.value = formatApiError(err, '操作失败，请稍后重试。')
   } finally {
     actionLoading.value = ''
   }
@@ -508,7 +508,7 @@ async function confirmSnooze() {
     router.push('/inbox')
   } catch (err) {
     const parsed = parseApiError(err)
-    error.value = parsed.message || '操作失败，请稍后重试。'
+    error.value = formatApiError(err, '操作失败，请稍后重试。')
   } finally {
     snoozing.value = false
   }

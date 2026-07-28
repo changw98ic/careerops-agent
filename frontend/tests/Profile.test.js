@@ -24,6 +24,8 @@ vi.mock('../src/api/client.js', () => ({
       err?.code === 'DEPENDENCY_NOT_READY' ||
       err?.code === 'UNAVAILABLE_DEPENDENCY',
   }),
+  formatApiError: (err, fallback) => err?.messageText || err?.message || fallback,
+  smartIntakeUiEnabled: false,
   setCsrfToken: vi.fn(),
 }))
 

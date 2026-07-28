@@ -179,7 +179,7 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
-import { api, parseApiError } from '../api/client.js'
+import { api, formatApiError, parseApiError } from '../api/client.js'
 
 const loading = ref(false)
 const loadingMore = ref(false)
@@ -253,7 +253,7 @@ async function fetchAccount() {
       account.connected = false
       account.sync_available = false
     } else {
-      error.value = info.message || String(err)
+      error.value = formatApiError(err, '邮件账户状态加载失败，请稍后重试。')
     }
   }
 }
@@ -270,7 +270,7 @@ async function fetchThreads(cursor) {
   } catch (err) {
     const info = parseApiError(err)
     if (!info.isDependencyNotReady && info.status !== 403) {
-      error.value = info.message || String(err)
+      error.value = formatApiError(err, '邮件线程加载失败，请稍后重试。')
     }
   }
 }
@@ -282,7 +282,7 @@ async function fetchUnresolved() {
   } catch (err) {
     const info = parseApiError(err)
     if (!info.isDependencyNotReady && info.status !== 403) {
-      error.value = info.message || String(err)
+      error.value = formatApiError(err, '待关联邮件加载失败，请稍后重试。')
     }
   }
 }
@@ -294,7 +294,7 @@ async function fetchRuns() {
   } catch (err) {
     const info = parseApiError(err)
     if (!info.isDependencyNotReady && info.status !== 403) {
-      error.value = info.message || String(err)
+      error.value = formatApiError(err, '同步历史加载失败，请稍后重试。')
     }
   }
 }
@@ -327,7 +327,7 @@ async function syncNow() {
     await refreshAll()
   } catch (err) {
     const info = parseApiError(err)
-    error.value = info.message || String(err)
+    error.value = formatApiError(err, '邮件同步失败，请稍后重试。')
   } finally {
     syncing.value = false
   }
@@ -343,7 +343,7 @@ async function confirmLink(linkId) {
     await Promise.all([fetchUnresolved(), fetchThreads(null)])
   } catch (err) {
     const info = parseApiError(err)
-    error.value = info.message || String(err)
+    error.value = formatApiError(err, '邮件关联失败，请稍后重试。')
   } finally {
     confirming.value = null
   }

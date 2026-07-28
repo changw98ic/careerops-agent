@@ -2,8 +2,8 @@
   <div class="page-shell">
     <div class="page-header">
       <div>
-        <h1>职位收件箱</h1>
-        <p>浏览并筛选职位机会，点击查看详情。</p>
+        <h1>职位管理</h1>
+        <p>浏览并筛选已归一化职位机会，点击查看详情。</p>
       </div>
       <a-tag color="blue">{{ total }} 条记录</a-tag>
     </div>
@@ -84,7 +84,7 @@ import {
   ReloadOutlined,
   SearchOutlined,
 } from '@ant-design/icons-vue'
-import { api } from '../api/client.js'
+import { api, formatApiError } from '../api/client.js'
 
 const router = useRouter()
 
@@ -152,7 +152,7 @@ async function fetchJobs(cursor) {
     total.value = data.total || 0
     nextCursor.value = data.next_cursor ?? null
   } catch (err) {
-    error.value = err.message || '加载职位列表失败，请稍后重试。'
+    error.value = formatApiError(err, '加载职位列表失败，请稍后重试。')
   } finally {
     loading.value = false
     loadingMore.value = false

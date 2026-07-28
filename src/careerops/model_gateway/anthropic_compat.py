@@ -24,6 +24,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol, cast
@@ -48,6 +49,7 @@ _HTTP_TOO_MANY_REQUESTS: int = 429
 _MAX_RETRY_AFTER_SECONDS: float = 120.0
 _MAX_RESPONSE_BYTES: int = 1_000_000
 _MAX_USAGE_TOKENS: int = 10_000_000
+_ACTIVE_DEADLINE: ContextVar[float | None] = ContextVar("careerops_model_deadline", default=None)
 
 
 def _sleep(seconds: float) -> None:
@@ -276,62 +278,68 @@ class AnthropicCompatClient:
         user_content = self._compose_user_content(request)
 
         call_timeout = request.timeout_seconds or self._config.timeout_seconds
-        raw = self._call_messages(
-            system=request.system_prompt,
-            user=user_content,
-            max_tokens=request.max_tokens,
-            timeout=call_timeout,
-        )
-        input_tokens, output_tokens = _usage_of(raw)
-
-        repair_attempted = False
+        deadline_token = _ACTIVE_DEADLINE.set(time.monotonic() + call_timeout)
         try:
-            result = _extract_json(raw)
-            _validate_schema(result, request.schema)
-        except ModelInvocationError:
-            # One structure-repair attempt covering BOTH parse and schema errors.
-            repair_attempted = True
-            repaired = self._call_messages(
-                system=(
-                    "You must respond with a single valid JSON object only, "
-                    "no prose and no code fences."
-                ),
-                user=(
-                    "Your previous response failed the required JSON structure. "
-                    "Return ONLY the corrected JSON object for this task:\n\n"
-                    f"{request.user_prompt}"
-                ),
+            raw = self._call_messages(
+                system=request.system_prompt,
+                user=user_content,
                 max_tokens=request.max_tokens,
                 timeout=call_timeout,
             )
-            result = _extract_json(repaired)  # raises if still invalid JSON
-            _validate_schema(result, request.schema)  # raises if still schema-invalid
-            extra_in, extra_out = _usage_of(repaired)
-            input_tokens += extra_in
-            output_tokens += extra_out
+            input_tokens, output_tokens = _usage_of(raw)
 
-        # ADR 0006: record aggregate token COUNTS only (never content), and only
-        # when the provider actually returned a usage block.
-        self._record_usage(input_tokens, output_tokens)
+            repair_attempted = False
+            try:
+                result = _extract_json(raw)
+                _validate_schema(result, request.schema)
+            except ModelInvocationError:
+                # One structure-repair attempt covering BOTH parse and schema
+                # errors. The original fenced input is included again; the
+                # provider's prior raw response is never echoed into the prompt.
+                repair_attempted = True
+                repaired = self._call_messages(
+                    system=(
+                        "You must respond with a single valid JSON object only, "
+                        "no prose and no code fences."
+                    ),
+                    user=(
+                        "Your previous response failed the required JSON structure. "
+                        "Return ONLY the corrected JSON object for this task.\n\n"
+                        f"{self._compose_user_content(request)}"
+                    ),
+                    max_tokens=request.max_tokens,
+                    timeout=call_timeout,
+                )
+                result = _extract_json(repaired)  # raises if still invalid JSON
+                _validate_schema(result, request.schema)  # raises if still schema-invalid
+                extra_in, extra_out = _usage_of(repaired)
+                input_tokens += extra_in
+                output_tokens += extra_out
 
-        confidence = (
-            float(result.get("confidence", 0.0))
-            if isinstance(result.get("confidence", 0.0), (int, float))
-            else 0.0
-        )
+            # ADR 0006: record aggregate token COUNTS only (never content), and
+            # only when the provider actually returned a usage block.
+            self._record_usage(input_tokens, output_tokens)
 
-        return StructuredModelResponse(
-            task_type=request.task_type,
-            result=result,
-            confidence=confidence,
-            model_id=self._model,
-            prompt_version=request.metadata.get("prompt_version", "v1"),
-            is_review_only=True,  # model output is always advisory
-            repair_attempted=repair_attempted,
-            trace_id=request.trace_id or current_trace_id(),
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-        )
+            confidence = (
+                float(result.get("confidence", 0.0))
+                if isinstance(result.get("confidence", 0.0), (int, float))
+                else 0.0
+            )
+
+            return StructuredModelResponse(
+                task_type=request.task_type,
+                result=result,
+                confidence=confidence,
+                model_id=self._model,
+                prompt_version=request.metadata.get("prompt_version", "v1"),
+                is_review_only=True,  # model output is always advisory
+                repair_attempted=repair_attempted,
+                trace_id=request.trace_id or current_trace_id(),
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
+        finally:
+            _ACTIVE_DEADLINE.reset(deadline_token)
 
     def _record_usage(self, input_tokens: int, output_tokens: int) -> None:
         recorder = self._usage_recorder
@@ -368,6 +376,7 @@ class AnthropicCompatClient:
         user: str,
         max_tokens: int,
         timeout: float,
+        deadline: float | None = None,
     ) -> str:
         """Call the Messages API once, retrying HTTP 429 with backoff.
 
@@ -381,6 +390,7 @@ class AnthropicCompatClient:
         Returns a :class:`_MessagesText` (a ``str``) so the aggregate token
         counts ride along without changing the ``-> str`` contract.
         """
+        deadline = deadline if deadline is not None else _ACTIVE_DEADLINE.get()
         body: dict[str, object] = {
             "model": self._model,
             "max_tokens": max_tokens,
@@ -392,6 +402,9 @@ class AnthropicCompatClient:
 
         payload = json.dumps(body).encode("utf-8")
         for attempt in range(_MAX_429_RETRIES + 1):
+            remaining = deadline - time.monotonic() if deadline is not None else timeout
+            if remaining <= 0:
+                raise ModelInvocationError("model API deadline exceeded")
             req = urllib.request.Request(
                 self._endpoint,
                 data=payload,
@@ -403,13 +416,16 @@ class AnthropicCompatClient:
                 method="POST",
             )
             try:
-                with _open_request(req, timeout=timeout) as resp:
+                with _open_request(req, timeout=min(timeout, remaining)) as resp:
                     raw_body = _read_bounded_response(resp)
                     data = json.loads(raw_body.decode("utf-8"))
             except urllib.error.HTTPError as e:
                 if e.code == _HTTP_TOO_MANY_REQUESTS and attempt < _MAX_429_RETRIES:
                     retry_after = _parse_retry_after(e.headers.get("Retry-After"))
-                    _sleep(_backoff_seconds(attempt, retry_after))
+                    wait = _backoff_seconds(attempt, retry_after)
+                    if deadline is not None and wait >= max(0.0, deadline - time.monotonic()):
+                        raise ModelInvocationError("model API deadline exceeded") from e
+                    _sleep(wait)
                     continue
                 raise ModelInvocationError(f"model API HTTP {e.code}") from e
             except urllib.error.URLError as e:

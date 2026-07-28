@@ -55,9 +55,13 @@ class TestMigration0030Structure:
         module = _load_migration_0030()
         assert callable(module.get("upgrade"))
 
-    def test_migration_has_downgrade_noop(self) -> None:
+    def test_migration_has_guarded_downgrade(self) -> None:
         module = _load_migration_0030()
         assert callable(module.get("downgrade"))
+        downgrade = str(module["_DOWNGRADE"])
+        assert "rollback-forward" in downgrade
+        assert "DROP TABLE IF EXISTS careerops.agent_attempts" in downgrade
+        assert "GRANT SELECT, INSERT, UPDATE ON careerops.agent_runs" in downgrade
 
 
 # ---------------------------------------------------------------------------
@@ -340,6 +344,7 @@ class TestOfflineRendering:
             "_V_AGENT_ATTEMPTS",
             "_V_AGENT_STAGE_EVENTS",
             "_GRANTS",
+            "_DOWNGRADE",
         ]
         for key in required_keys:
             assert key in module, f"Missing SQL fragment: {key}"

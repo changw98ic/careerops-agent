@@ -59,6 +59,7 @@ ALTER TABLE {SCHEMA}.agent_run_reviews
 _REVIEW_FK_AND_CHECKS = f"""
 ALTER TABLE {SCHEMA}.agent_run_reviews
   DROP CONSTRAINT IF EXISTS agent_run_reviews_run_id_fkey,
+  DROP CONSTRAINT IF EXISTS fk_agent_run_reviews_run_id_agent_runs,
   ADD CONSTRAINT fk_agent_run_reviews_run_candidate
     FOREIGN KEY (run_id,candidate_id)
     REFERENCES {SCHEMA}.agent_runs(id,candidate_id) ON DELETE RESTRICT,
@@ -86,10 +87,19 @@ CREATE TABLE {SCHEMA}.agent_contexts (
   created_at timestamptz NOT NULL DEFAULT now(),
   expires_at timestamptz NOT NULL,
   invalidation_reason varchar(64),
-  UNIQUE (id,candidate_id),
-  CHECK (operation = allowed_operation),
-  CHECK (expires_at > created_at)
+  CONSTRAINT uq_agent_contexts_id_candidate UNIQUE (id,candidate_id),
+  CONSTRAINT ck_agent_contexts_digest_algorithm CHECK (digest_algorithm = 'sha256'),
+  CONSTRAINT ck_agent_contexts_source_version_snapshot_object
+    CHECK (jsonb_typeof(source_version_snapshot) = 'object'),
+  CONSTRAINT ck_agent_contexts_source_digests_object
+    CHECK (jsonb_typeof(source_digests) = 'object'),
+  CONSTRAINT ck_agent_contexts_state
+    CHECK (state IN ('active','stale','expired','revoked')),
+  CONSTRAINT ck_agent_contexts_operation_match CHECK (operation = allowed_operation),
+  CONSTRAINT ck_agent_contexts_expires_after_created CHECK (expires_at > created_at)
 );
+CREATE INDEX ix_agent_contexts_candidate_state
+  ON {SCHEMA}.agent_contexts(candidate_id,state);
 """
 
 _FK_RUNS_CONTEXT = f"""
@@ -116,10 +126,19 @@ CREATE TABLE {SCHEMA}.agent_actions (
   expires_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (candidate_id,action_key,source_event_key),
-  FOREIGN KEY (context_id,candidate_id)
-    REFERENCES {SCHEMA}.agent_contexts(id,candidate_id) ON DELETE RESTRICT
+  CONSTRAINT uq_agent_actions_candidate_key_event
+    UNIQUE (candidate_id,action_key,source_event_key),
+  CONSTRAINT fk_agent_actions_context_candidate
+    FOREIGN KEY (context_id,candidate_id)
+    REFERENCES {SCHEMA}.agent_contexts(id,candidate_id) ON DELETE RESTRICT,
+  CONSTRAINT ck_agent_actions_queue_version_positive CHECK (queue_version > 0),
+  CONSTRAINT ck_agent_actions_state
+    CHECK (state IN ('proposed','accepted','snoozed','dismissed','completed','expired','blocked')),
+  CONSTRAINT ck_agent_actions_rank_nonnegative CHECK (deterministic_rank >= 0),
+  CONSTRAINT ck_agent_actions_source_refs_array CHECK (jsonb_typeof(source_refs)='array')
 );
+CREATE INDEX ix_agent_actions_candidate_state
+  ON {SCHEMA}.agent_actions(candidate_id,state);
 """
 
 _CREATE_ATTEMPTS = f"""
@@ -139,11 +158,21 @@ CREATE TABLE {SCHEMA}.agent_attempts (
   lease_expires_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   finished_at timestamptz,
-  UNIQUE (run_id,attempt_no),
-  UNIQUE (id,run_id,candidate_id),
-  FOREIGN KEY (run_id,candidate_id)
-    REFERENCES {SCHEMA}.agent_runs(id,candidate_id) ON DELETE RESTRICT
+  CONSTRAINT uq_agent_attempts_run_attempt_no UNIQUE (run_id,attempt_no),
+  CONSTRAINT uq_agent_attempts_id_run_candidate UNIQUE (id,run_id,candidate_id),
+  CONSTRAINT fk_agent_attempts_run_candidate
+    FOREIGN KEY (run_id,candidate_id)
+    REFERENCES {SCHEMA}.agent_runs(id,candidate_id) ON DELETE RESTRICT,
+  CONSTRAINT ck_agent_attempts_attempt_no_positive CHECK (attempt_no > 0),
+  CONSTRAINT ck_agent_attempts_lease_epoch_nonnegative CHECK (lease_epoch >= 0),
+  CONSTRAINT ck_agent_attempts_cancel_epoch_nonnegative CHECK (cancel_epoch >= 0),
+  CONSTRAINT ck_agent_attempts_state
+    CHECK (state IN ('queued','running','waiting_review','succeeded','failed',
+      'cancel_requested','cancelled','stale','blocked')),
+  CONSTRAINT ck_agent_attempts_retry_budget_nonnegative CHECK (retry_budget >= 0)
 );
+CREATE INDEX ix_agent_attempts_run_candidate
+  ON {SCHEMA}.agent_attempts(run_id,candidate_id);
 """
 
 _CREATE_STAGE_EVENTS = f"""
@@ -165,11 +194,23 @@ CREATE TABLE {SCHEMA}.agent_stage_events (
   duration_ms integer CHECK (duration_ms IS NULL OR duration_ms >= 0),
   redacted_payload jsonb NOT NULL CHECK (jsonb_typeof(redacted_payload)='object'),
   retention_until timestamptz NOT NULL,
-  UNIQUE (event_key),
-  UNIQUE (attempt_id,sequence),
-  FOREIGN KEY (attempt_id,run_id,candidate_id)
-    REFERENCES {SCHEMA}.agent_attempts(id,run_id,candidate_id) ON DELETE RESTRICT
+  CONSTRAINT uq_agent_stage_events_event_key UNIQUE (event_key),
+  CONSTRAINT uq_agent_stage_events_attempt_sequence UNIQUE (attempt_id,sequence),
+  CONSTRAINT fk_agent_stage_events_attempt_run_candidate
+    FOREIGN KEY (attempt_id,run_id,candidate_id)
+    REFERENCES {SCHEMA}.agent_attempts(id,run_id,candidate_id) ON DELETE RESTRICT,
+  CONSTRAINT ck_agent_stage_events_sequence_positive CHECK (sequence > 0),
+  CONSTRAINT ck_agent_stage_events_status
+    CHECK (status IN ('started','completed','blocked','failed','cancelled')),
+  CONSTRAINT ck_agent_stage_events_duration_nonnegative
+    CHECK (duration_ms IS NULL OR duration_ms >= 0),
+  CONSTRAINT ck_agent_stage_events_payload_object
+    CHECK (jsonb_typeof(redacted_payload)='object')
 );
+CREATE INDEX ix_agent_stage_events_attempt_sequence
+  ON {SCHEMA}.agent_stage_events(attempt_id,sequence);
+CREATE INDEX ix_agent_stage_events_run_candidate
+  ON {SCHEMA}.agent_stage_events(run_id,candidate_id);
 """
 
 _CREATE_IDEMPOTENCY_RECEIPTS = f"""
@@ -186,8 +227,17 @@ CREATE TABLE {SCHEMA}.agent_idempotency_receipts (
   receipt jsonb NOT NULL CHECK (jsonb_typeof(receipt)='object'),
   created_at timestamptz NOT NULL DEFAULT now(),
   expires_at timestamptz NOT NULL,
-  UNIQUE (actor_id,candidate_id,resource_type,resource_id,operation,idempotency_key),
-  CHECK (resource_id <> '00000000-0000-0000-0000-000000000000'::uuid OR resource_type IN ('agent_context','agent_action_queue','crawl_plan'))
+  CONSTRAINT uq_agent_idempotency_receipts_identity
+    UNIQUE (actor_id,candidate_id,resource_type,resource_id,operation,idempotency_key),
+  CONSTRAINT ck_agent_idempotency_receipts_body_hash
+    CHECK (char_length(canonical_body_hash)=64),
+  CONSTRAINT ck_agent_idempotency_receipts_status
+    CHECK (response_status BETWEEN 200 AND 499),
+  CONSTRAINT ck_agent_idempotency_receipts_receipt_object
+    CHECK (jsonb_typeof(receipt)='object'),
+  CONSTRAINT ck_agent_idempotency_receipts_zero_resource_scope
+    CHECK (resource_id <> '00000000-0000-0000-0000-000000000000'::uuid
+      OR resource_type IN ('agent_context','agent_action_queue','crawl_plan'))
 );
 """
 
@@ -755,6 +805,95 @@ GRANT EXECUTE ON FUNCTION {SCHEMA}.read_agent_legacy_state(uuid,uuid) TO careero
 GRANT EXECUTE ON FUNCTION {SCHEMA}.write_agent_legacy_state(uuid,uuid,varchar,jsonb) TO careerops_legacy_agent;
 """
 
+# --- Guarded downgrade ---------------------------------------------------------
+
+_DOWNGRADE = f"""
+-- Production rollback is rollback-forward.  A destructive teardown is only
+-- allowed for an empty disposable schema, which is what migration round-trip
+-- checks use.  Never silently discard a run, review, context, action, attempt,
+-- stage event, or idempotency receipt.
+DO $$
+DECLARE
+  v_rows bigint;
+BEGIN
+  SELECT
+      (SELECT count(*) FROM {SCHEMA}.agent_runs)
+    + (SELECT count(*) FROM {SCHEMA}.agent_run_reviews)
+    + (SELECT count(*) FROM {SCHEMA}.agent_contexts)
+    + (SELECT count(*) FROM {SCHEMA}.agent_actions)
+    + (SELECT count(*) FROM {SCHEMA}.agent_attempts)
+    + (SELECT count(*) FROM {SCHEMA}.agent_stage_events)
+    + (SELECT count(*) FROM {SCHEMA}.agent_idempotency_receipts)
+    INTO v_rows;
+  IF v_rows > 0 THEN
+    RAISE EXCEPTION
+      'migration 0030 downgrade refused: % Agent rows exist; use rollback-forward', v_rows
+      USING ERRCODE = '55000';
+  END IF;
+END;
+$$;
+
+DROP VIEW IF EXISTS {SCHEMA}.v_agent_stage_events_candidate;
+DROP VIEW IF EXISTS {SCHEMA}.v_agent_attempts_candidate;
+DROP VIEW IF EXISTS {SCHEMA}.v_agent_actions_candidate;
+DROP VIEW IF EXISTS {SCHEMA}.v_agent_contexts_candidate;
+DROP VIEW IF EXISTS {SCHEMA}.v_agent_runs_candidate;
+
+DROP TRIGGER IF EXISTS agent_stage_events_append_only ON {SCHEMA}.agent_stage_events;
+DROP TRIGGER IF EXISTS agent_runs_normalize_legacy ON {SCHEMA}.agent_runs;
+
+DROP FUNCTION IF EXISTS {SCHEMA}.reject_agent_stage_event_mutation();
+DROP FUNCTION IF EXISTS {SCHEMA}.normalize_agent_legacy_state();
+DROP FUNCTION IF EXISTS {SCHEMA}.acquire_agent_attempt(uuid,uuid,uuid,uuid,timestamptz);
+DROP FUNCTION IF EXISTS {SCHEMA}.renew_agent_attempt(uuid,uuid,uuid,uuid,bigint,bigint,timestamptz);
+DROP FUNCTION IF EXISTS {SCHEMA}.append_agent_stage_event(uuid,uuid,uuid,uuid,uuid,bigint,bigint,uuid,integer,varchar,varchar,varchar,varchar,boolean,varchar,boolean,timestamptz,integer,jsonb,timestamptz);
+DROP FUNCTION IF EXISTS {SCHEMA}.reconcile_agent_run(uuid,uuid,uuid,uuid,bigint,bigint,varchar,varchar,varchar,timestamptz);
+DROP FUNCTION IF EXISTS {SCHEMA}.reserve_agent_idempotency(varchar,uuid,varchar,uuid,varchar,varchar,varchar,timestamptz);
+DROP FUNCTION IF EXISTS {SCHEMA}.finalize_agent_idempotency(uuid,smallint,jsonb);
+DROP FUNCTION IF EXISTS {SCHEMA}.purge_agent_console(timestamptz);
+DROP FUNCTION IF EXISTS {SCHEMA}.read_agent_legacy_state(uuid,uuid);
+DROP FUNCTION IF EXISTS {SCHEMA}.write_agent_legacy_state(uuid,uuid,varchar,jsonb);
+
+DROP TABLE IF EXISTS {SCHEMA}.agent_stage_events;
+DROP TABLE IF EXISTS {SCHEMA}.agent_attempts;
+DROP TABLE IF EXISTS {SCHEMA}.agent_actions;
+DROP TABLE IF EXISTS {SCHEMA}.agent_idempotency_receipts;
+
+ALTER TABLE {SCHEMA}.agent_runs
+  DROP CONSTRAINT IF EXISTS fk_agent_runs_context_candidate;
+DROP TABLE IF EXISTS {SCHEMA}.agent_contexts;
+
+DROP INDEX IF EXISTS {SCHEMA}.uq_agent_run_reviews_candidate_key;
+ALTER TABLE {SCHEMA}.agent_run_reviews
+  DROP CONSTRAINT IF EXISTS agent_run_reviews_run_id_fkey,
+  DROP CONSTRAINT IF EXISTS fk_agent_run_reviews_run_id_agent_runs,
+  DROP CONSTRAINT IF EXISTS fk_agent_run_reviews_run_candidate,
+  DROP CONSTRAINT IF EXISTS ck_agent_run_reviews_request_hash,
+  DROP CONSTRAINT IF EXISTS ck_agent_run_reviews_field_decisions,
+  ADD CONSTRAINT fk_agent_run_reviews_run_id_agent_runs
+    FOREIGN KEY (run_id) REFERENCES {SCHEMA}.agent_runs(id) ON DELETE RESTRICT;
+ALTER TABLE {SCHEMA}.agent_run_reviews
+  DROP COLUMN IF EXISTS idempotency_key,
+  DROP COLUMN IF EXISTS field_decisions,
+  DROP COLUMN IF EXISTS request_hash;
+
+ALTER TABLE {SCHEMA}.agent_runs
+  DROP CONSTRAINT IF EXISTS ck_agent_runs_execution_state,
+  DROP CONSTRAINT IF EXISTS ck_agent_runs_capability_state,
+  DROP CONSTRAINT IF EXISTS ck_agent_runs_review_state;
+DROP INDEX IF EXISTS {SCHEMA}.uq_agent_runs_id_candidate;
+ALTER TABLE {SCHEMA}.agent_runs
+  DROP COLUMN IF EXISTS execution_state,
+  DROP COLUMN IF EXISTS capability_state,
+  DROP COLUMN IF EXISTS review_state,
+  DROP COLUMN IF EXISTS legacy_state,
+  DROP COLUMN IF EXISTS context_id,
+  DROP COLUMN IF EXISTS current_attempt;
+
+GRANT SELECT, INSERT, UPDATE ON {SCHEMA}.agent_runs TO careerops_api;
+GRANT SELECT, INSERT ON {SCHEMA}.agent_run_reviews TO careerops_api;
+"""
+
 
 def upgrade() -> None:
     # -----------------------------------------------------------------------
@@ -839,6 +978,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Downgrade is a no-op per contract: rollback is forward-only.
-    # Destructive downgrade would break running attempts and orphan audit data.
-    pass
+    # Production data requires rollback-forward.  This guarded teardown exists
+    # so disposable migration databases can return to 0029/base without
+    # leaving child objects that block the older 0025 agent_runs downgrade.
+    op.execute(sa.text(_DOWNGRADE))

@@ -84,9 +84,9 @@ def test_initial_migration_round_trip_and_database_guards(database_url: str) -> 
                 """
             )
         )
-        # Three reference guards, blob/object/outbox state guards, one deferred
-        # active-blob registration guard, and the Smart Intake decision guard.
-        assert trigger_count == len(APPEND_ONLY_TABLES) + 8
+        # The append-only guards plus lifecycle/reference guards and the Agent
+        # console legacy-state normalization trigger.
+        assert trigger_count == len(APPEND_ONLY_TABLES) + 9
         assert not connection.scalar(
             sa.text(
                 "SELECT has_table_privilege('careerops_api', 'careerops.audit_events', 'INSERT')"

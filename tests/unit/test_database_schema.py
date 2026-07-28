@@ -75,6 +75,7 @@ EXPECTED_TABLES = {
     "agent_actions",
     "agent_attempts",
     "agent_stage_events",
+    "agent_idempotency_receipts",
     "smart_intake_previews",
     "smart_intake_decisions",
     "schedule_proposals",

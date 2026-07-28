@@ -3245,6 +3245,12 @@ agent_runs = sa.Table(
     sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
     sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
     sa.Column("reviewed_at", sa.DateTime(timezone=True), nullable=True),
+    sa.Column("execution_state", sa.Text(), server_default="queued", nullable=False),
+    sa.Column("capability_state", sa.Text(), server_default="enabled", nullable=False),
+    sa.Column("review_state", sa.Text(), server_default="not_required", nullable=False),
+    sa.Column("legacy_state", sa.Text(), nullable=True),
+    sa.Column("context_id", sa.Uuid(), nullable=True),
+    sa.Column("current_attempt", sa.Integer(), server_default="0", nullable=False),
     sa.UniqueConstraint(
         "candidate_id",
         "capability",
@@ -3269,26 +3275,45 @@ agent_runs = sa.Table(
     sa.CheckConstraint("jsonb_typeof(input_identities) = 'object'", name="input_object"),
     sa.CheckConstraint("jsonb_typeof(evidence_ids) = 'array'", name="evidence_array"),
     sa.CheckConstraint("jsonb_typeof(result) = 'object'", name="result_object"),
-    sa.UniqueConstraint(
-        "id",
-        "candidate_id",
-        name="uq_agent_runs_id_candidate",
+    sa.ForeignKeyConstraint(
+        ["context_id", "candidate_id"],
+        [
+            f"{DATABASE_SCHEMA}.agent_contexts.id",
+            f"{DATABASE_SCHEMA}.agent_contexts.candidate_id",
+        ],
+        name="fk_agent_runs_context_candidate",
+        ondelete="SET NULL",
+    ),
+    sa.CheckConstraint(
+        "execution_state IN ('queued', 'running', 'waiting_review', 'succeeded', 'failed', "
+        "'cancel_requested', 'cancelled', 'stale', 'blocked')",
+        name="execution_state",
+    ),
+    sa.CheckConstraint(
+        "capability_state IN ('enabled', 'disabled_by_policy', 'not_configured', "
+        "'dependency_not_ready', 'blocked_by_prerequisite', 'stale', 'failed')",
+        name="capability_state",
+    ),
+    sa.CheckConstraint(
+        "review_state IN ('not_required', 'pending', 'accepted', 'rejected', 'edited')",
+        name="review_state",
     ),
 )
 
 sa.Index("ix_agent_runs_candidate_state", agent_runs.c.candidate_id, agent_runs.c.state)
 sa.Index("ix_agent_runs_candidate_created", agent_runs.c.candidate_id, agent_runs.c.created_at)
+sa.Index(
+    "uq_agent_runs_id_candidate",
+    agent_runs.c.id,
+    agent_runs.c.candidate_id,
+    unique=True,
+)
 
 agent_run_reviews = sa.Table(
     "agent_run_reviews",
     metadata,
     sa.Column("id", sa.Uuid(), primary_key=True),
-    sa.Column(
-        "run_id",
-        sa.Uuid(),
-        sa.ForeignKey(f"{DATABASE_SCHEMA}.agent_runs.id", ondelete="RESTRICT"),
-        nullable=False,
-    ),
+    sa.Column("run_id", sa.Uuid(), nullable=False),
     sa.Column(
         "candidate_id",
         sa.Uuid(),
@@ -3307,6 +3332,26 @@ agent_run_reviews = sa.Table(
     sa.Column(
         "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     ),
+    sa.Column("idempotency_key", sa.String(128), nullable=True),
+    sa.Column("field_decisions", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column("request_hash", sa.String(64), nullable=True),
+    sa.ForeignKeyConstraint(
+        ["run_id", "candidate_id"],
+        [
+            f"{DATABASE_SCHEMA}.agent_runs.id",
+            f"{DATABASE_SCHEMA}.agent_runs.candidate_id",
+        ],
+        name="fk_agent_run_reviews_run_candidate",
+        ondelete="RESTRICT",
+    ),
+    sa.CheckConstraint(
+        "request_hash IS NULL OR char_length(request_hash) = 64",
+        name="request_hash",
+    ),
+    sa.CheckConstraint(
+        "field_decisions IS NULL OR jsonb_typeof(field_decisions) = 'array'",
+        name="field_decisions",
+    ),
     sa.CheckConstraint(
         "decision IN ('accepted', 'rejected', 'edited')",
         name="decision_values",
@@ -3318,6 +3363,14 @@ sa.Index(
     "ix_agent_run_reviews_candidate_run",
     agent_run_reviews.c.candidate_id,
     agent_run_reviews.c.run_id,
+)
+sa.Index(
+    "uq_agent_run_reviews_candidate_key",
+    agent_run_reviews.c.candidate_id,
+    agent_run_reviews.c.run_id,
+    agent_run_reviews.c.idempotency_key,
+    unique=True,
+    postgresql_where=agent_run_reviews.c.idempotency_key.is_not(None),
 )
 
 # ---------------------------------------------------------------------------
@@ -3602,6 +3655,60 @@ sa.Index(
     "ix_agent_stage_events_run_candidate",
     agent_stage_events.c.run_id,
     agent_stage_events.c.candidate_id,
+)
+
+agent_idempotency_receipts = sa.Table(
+    "agent_idempotency_receipts",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "actor_id",
+        sa.String(128),
+        nullable=False,
+    ),
+    sa.Column(
+        "candidate_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.candidates.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column("resource_type", sa.String(64), nullable=False),
+    sa.Column("resource_id", sa.Uuid(), nullable=False),
+    sa.Column("operation", sa.String(64), nullable=False),
+    sa.Column("idempotency_key", sa.String(128), nullable=False),
+    sa.Column("canonical_body_hash", sa.String(64), nullable=False),
+    sa.Column("response_status", sa.SmallInteger(), nullable=False),
+    sa.Column("receipt", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+    sa.UniqueConstraint(
+        "actor_id",
+        "candidate_id",
+        "resource_type",
+        "resource_id",
+        "operation",
+        "idempotency_key",
+        name="uq_agent_idempotency_receipts_identity",
+    ),
+    sa.CheckConstraint(
+        "char_length(canonical_body_hash) = 64",
+        name="body_hash",
+    ),
+    sa.CheckConstraint(
+        "response_status BETWEEN 200 AND 499",
+        name="status",
+    ),
+    sa.CheckConstraint(
+        "jsonb_typeof(receipt) = 'object'",
+        name="receipt_object",
+    ),
+    sa.CheckConstraint(
+        "resource_id <> '00000000-0000-0000-0000-000000000000'::uuid "
+        "OR resource_type IN ('agent_context', 'agent_action_queue', 'crawl_plan')",
+        name="zero_resource_scope",
+    ),
 )
 
 # ---------------------------------------------------------------------------

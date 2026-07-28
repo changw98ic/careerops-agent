@@ -4,7 +4,11 @@ The migration file is `migrations/versions/0030_agent_console_orchestration.py`
 with `revision = "0030_agent_console_orchestration"` and
 `down_revision = "0029"`. The repository's current head is `0029`; the new
 revision must not create a branch. This is an expand/contract migration:
-downgrade is a no-op and rollback is forward-only.
+production rollback is forward-only. A guarded downgrade is provided only for
+an empty disposable schema so migration round-trip checks can remove every
+0030-owned object without leaving dependencies for the older 0025 downgrade.
+If any Agent row exists, the downgrade fails closed and the operator must use
+the rollback-forward procedure below.
 
 The SQL below is the normative shape. UUID/timestamp defaults use the existing
 repository conventions. The implementation may choose SQLAlchemy/Alembic
@@ -395,10 +399,14 @@ events 365 days unless a legal/operational hold is recorded. Purge is tested
 for lock contention, retry, legal hold, partial failure, idempotent rerun, and
 no API-role bypass.
 
-There is no destructive downgrade. Rollback-forward disables new scheduling,
-lets running attempts stop/reconcile, restores the previous read projection
-from `legacy_state` where needed, and preserves all stage/audit history. A
-rollback report records the revision, stopped workflow IDs, pending attempts,
-data checksums, and operator approval. `DB-01` must run upgrade from 0029,
+Production never performs a destructive downgrade. Rollback-forward disables
+new scheduling, lets running attempts stop/reconcile, restores the previous
+read projection from `legacy_state` where needed, and preserves all
+stage/audit history. The Alembic downgrade first checks that all Agent tables
+are empty; only then does it remove 0030 views, functions, tables, constraints,
+and compatibility columns and restore the 0025 foreign key and grants. A
+non-empty database fails closed with a rollback-forward error. A rollback
+report records the revision, stopped workflow IDs, pending attempts, data
+checksums, and operator approval. `DB-01` must run upgrade from 0029,
 old/new rolling compatibility, backfill, constraint/privilege checks, purge,
 and the rollback-forward procedure on disposable PostgreSQL.

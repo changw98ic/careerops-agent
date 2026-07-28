@@ -23,6 +23,7 @@ class AuthAction(StrEnum):
     SESSION_ROTATE = "session_rotate"
     SESSION_REVOKE = "session_revoke"
     REVIEW = "review"
+    SMART_INTAKE = "smart_intake"
 
 
 class AuthOutcome(StrEnum):

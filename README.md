@@ -429,10 +429,8 @@ docker compose down --volumes --remove-orphans
 #  Volume careerops-redis-data     Removed
 #  Volume careerops-object-data    Removed
 
-# Remove built images:
-docker rmi careerops:0.1.0 careerops-postgres:17.5 2>/dev/null
-# Untagged: careerops:0.1.0
-# Untagged: careerops-postgres:17.5
+# Remove locally built images for this Compose project:
+docker compose down --rmi local
 ```
 
 ---

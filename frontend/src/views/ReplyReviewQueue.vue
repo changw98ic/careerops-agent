@@ -200,7 +200,7 @@
 // approved low-risk reply may be sent via the reused Section 10 chain. Auto-send
 // is permanently disabled; high-risk categories permanently denied system send.
 import { onMounted, ref, computed } from 'vue'
-import { api, parseApiError } from '../api/client.js'
+import { api, formatApiError, parseApiError } from '../api/client.js'
 
 const loading = ref(false)
 const acting = ref(false)
@@ -365,7 +365,7 @@ function handleError(err) {
   if (parsed.status === 503) {
     unavailable.value = true
   } else {
-    error.value = parsed.message || String(err)
+    error.value = formatApiError(err, '回复审核操作失败，请稍后重试。')
   }
 }
 

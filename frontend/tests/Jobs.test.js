@@ -6,6 +6,7 @@ vi.mock('../src/api/client.js', () => ({
   api: {
     listJobs: (...args) => mockListJobs(...args),
   },
+  formatApiError: (err, fallback) => err?.message || fallback,
   setCsrfToken: vi.fn(),
 }))
 
@@ -94,7 +95,7 @@ describe('Jobs.vue', () => {
   it('renders the page header', async () => {
     const wrapper = mountJobs()
     await flushPromises()
-    expect(wrapper.text()).toContain('职位收件箱')
+    expect(wrapper.text()).toContain('职位管理')
     expect(wrapper.text()).toContain('2 条记录')
   })
 

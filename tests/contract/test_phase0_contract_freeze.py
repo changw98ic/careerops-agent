@@ -242,12 +242,14 @@ def test_resolver_fails_closed_on_unknown_capability(
 
 
 def test_capability_kind_contract_is_the_phase0_set() -> None:
-    """The Phase-0 capability enum ships exactly the five members the design
+    """The capability enum ships exactly the explicitly released contract set;
+    smart intake is separately default-disabled by its operator flag.
     Decision 11 table calls for. Additions are deliberate (Iron Rule 2:
     additive only) and require updating the resolver dispatch."""
     expected = {
         "crawl_plan_management",
         "model_tailoring",
+        "smart_intake",
         "gmail_read",
         "system_managed_send",
         "auto_send",

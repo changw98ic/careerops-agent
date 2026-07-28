@@ -33,7 +33,9 @@ The Vite dev server starts at `http://localhost:5173` and proxies these paths to
 | `/login` | `http://127.0.0.1:8000` |
 | `/bootstrap` | `http://127.0.0.1:8000` |
 
-No environment variables are required. All API configuration is handled by the proxy.
+The smart form entry point is default-deny. Set `VITE_SMART_INTAKE_ENABLED=true` only in a
+frontend build paired with backend `CAREEROPS_SMART_INTAKE_ENABLED=true`; otherwise Profile and
+AgentWorkbench show the manual fallback and do not present an interactive AI CTA.
 
 ## Bootstrap and Session Flow
 
@@ -80,6 +82,9 @@ All API calls go through `/api/v1/...` which Vite proxies to the backend. The ke
 | `/api/v1/companies` | GET | List companies |
 | `/api/v1/applications` | GET | List applications |
 | `/api/v1/dashboard/stats` | GET | Dashboard aggregates |
+| `/api/v1/smart-intake/previews` | POST | Create/reuse a review-only smart form preview |
+| `/api/v1/smart-intake/previews/:id` | GET | Read a candidate-owned preview |
+| `/api/v1/smart-intake/previews/:id/apply` | POST | Record decisions and return a local draft patch |
 
 The API client (`src/api/client.js`) automatically attaches the CSRF token to mutating requests via the `X-CSRF-Token` header.
 

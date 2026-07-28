@@ -105,7 +105,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { FilterOutlined, ReloadOutlined } from '@ant-design/icons-vue'
-import { api } from '../api/client.js'
+import { api, formatApiError } from '../api/client.js'
 
 const apps = ref([])
 const stateFilter = ref('')
@@ -205,7 +205,7 @@ async function fetchApps(cursor) {
     total.value = data.total || 0
     nextCursor.value = data.next_cursor ?? null
   } catch (err) {
-    error.value = err.message || '加载申请列表失败，请稍后重试。'
+    error.value = formatApiError(err, '加载申请列表失败，请稍后重试。')
   } finally {
     loading.value = false
     loadingMore.value = false
@@ -230,7 +230,7 @@ async function submit(id) {
     await api.submitApplication(id)
     await resetAndFetch()
   } catch (err) {
-    error.value = err.message || '操作失败，请稍后重试。'
+    error.value = formatApiError(err, '操作失败，请稍后重试。')
   } finally {
     submittingId.value = ''
   }

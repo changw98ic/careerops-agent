@@ -98,8 +98,35 @@ export function parseApiError(err) {
     details: err?.details ?? null,
     retryable: !!err?.retryable,
     isDependencyNotReady,
+    isCandidateProfileRequired: code === 'CANDIDATE_PROFILE_REQUIRED',
   }
 }
+
+/**
+ * Convert an API error into copy that is safe and useful in the UI.
+ * Backend envelopes may contain trace-oriented details; views should never
+ * render the raw `status: {json}` string directly.
+ */
+export function formatApiError(err, fallback = '操作失败，请稍后重试。') {
+  const info = parseApiError(err)
+  if (info.isCandidateProfileRequired) return '请先完成职业画像配置，可从左侧「个人档案」开始。'
+  if (info.code === 'DENIED_POLICY') return '当前能力未启用，暂时无法访问。'
+  if (info.code === 'SMART_INTAKE_DISABLED') return '智能预填尚未启用，手工表单仍然可用。'
+  if (info.code === 'SMART_PREVIEW_IN_PROGRESS') return '已有相同预览正在生成，请稍候或刷新。'
+  if (info.code === 'SMART_PREVIEW_NOT_FOUND') return '智能预览不存在或已被清理，请重新生成。'
+  if (info.code === 'SMART_PREVIEW_EXPIRED') return '智能预览已过期，请重新生成。'
+  if (info.code === 'STALE_SMART_INTAKE_PREVIEW') return '表单或上下文已变化，请重新生成预览。'
+  if (info.code === 'IDEMPOTENCY_KEY_REUSED') return '请求内容或审查选择已变化，请重新生成当前预览。'
+  if (info.code === 'RATE_LIMITED') return '智能预填请求过于频繁，请稍后再试。'
+  if (info.isDependencyNotReady) return fallback
+  if (!info.message || /^\d+\s*:\s*\{/.test(info.message)) return fallback
+  return info.message
+}
+
+// Both the backend capability flag and this explicit build-time flag are
+// required before the AI entry point becomes interactive. The safe default is
+// false, so a disabled backend never presents a misleading generation CTA.
+export const smartIntakeUiEnabled = import.meta.env.VITE_SMART_INTAKE_ENABLED === 'true'
 
 export const api = {
   getMe: () => request('/api/v1/me'),
@@ -289,4 +316,30 @@ export const api = {
     request(`/api/v1/follow-ups/${reminderId}/cancel`, { method: 'POST', body: data }),
   completeFollowUp: (reminderId) =>
     request(`/api/v1/follow-ups/${reminderId}/complete`, { method: 'POST' }),
+  // -- Matching + review-only agent workbench --
+  listMatches: (params) =>
+    request('/api/v1/matches?' + new URLSearchParams(params || {})),
+  runMatch: (data) => request('/api/v1/matches/run', { method: 'POST', body: data }),
+  startResumeReview: (data) =>
+    request('/api/v1/agents/resume-review', { method: 'POST', body: data }),
+  startInterviewPreparation: (data) =>
+    request('/api/v1/agents/interview-preparation', { method: 'POST', body: data }),
+  listAgentRuns: (params) =>
+    request('/api/v1/agents/runs?' + new URLSearchParams(params || {})),
+  getAgentRun: (runId) => request(`/api/v1/agents/runs/${runId}`),
+  reviewAgentRun: (runId, data) =>
+    request(`/api/v1/agents/runs/${runId}/review`, { method: 'POST', body: data }),
+  listAgentReviews: (runId) => request(`/api/v1/agents/runs/${runId}/reviews`),
+
+  // -- Smart form intake (review-only draft proposals) --
+  getSmartIntakeCapability: () => request('/api/v1/smart-intake/capability'),
+  createSmartIntakePreview: (data) =>
+    request('/api/v1/smart-intake/previews', { method: 'POST', body: data }),
+  getSmartIntakePreview: (previewId) =>
+    request(`/api/v1/smart-intake/previews/${previewId}`),
+  applySmartIntakePreview: (previewId, data) =>
+    request(`/api/v1/smart-intake/previews/${previewId}/apply`, {
+      method: 'POST',
+      body: data,
+    }),
 }

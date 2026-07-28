@@ -69,6 +69,13 @@ class TestOpenApiErrorResponses:
             "DENIED_POLICY",
             "UNRESOLVED_EMAIL_LINK",
             "RECONCILIATION_REQUIRED",
+            "PAYLOAD_TOO_LARGE",
+            "SMART_INTAKE_DISABLED",
+            "SMART_PREVIEW_NOT_FOUND",
+            "SMART_PREVIEW_IN_PROGRESS",
+            "IDEMPOTENCY_KEY_REUSED",
+            "STALE_SMART_INTAKE_PREVIEW",
+            "SMART_PREVIEW_EXPIRED",
         }
         assert set(code_enum) == expected_codes
 

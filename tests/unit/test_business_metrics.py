@@ -78,3 +78,19 @@ def test_http_requests_counter_registered() -> None:
     m = _metrics()
     rendered = m.render().decode()
     assert "careerops_http_requests_total" in rendered
+
+
+def test_smart_intake_metrics_use_bounded_labels() -> None:
+    m = _metrics()
+    m.record_smart_intake_preview(target="profile", state="ready")
+    m.record_smart_intake_decision(target="profile", decision="edit")
+    m.observe_smart_intake_latency(target="profile", operation="apply", duration_seconds=0.1)
+    rendered = m.render().decode()
+    assert 'careerops_smart_intake_previews_total{state="ready",target="profile"} 1.0' in rendered
+    assert (
+        'careerops_smart_intake_decisions_total{decision="edit",target="profile"} 1.0' in rendered
+    )
+    assert (
+        'careerops_smart_intake_latency_seconds_count{operation="apply",target="profile"} 1.0'
+        in rendered
+    )

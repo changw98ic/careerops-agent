@@ -89,14 +89,16 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
+      - name: Run frontend tests
+        run: npm test -- --run
       - name: Build frontend
         run: npm run build
       - name: Check bundle size (initial JS gzip < 250 KB)
         run: |
           INITIAL_JS=$(sed -n 's/.*<script type="module"[^>]*src="\([^"]*\.js\)".*/\1/p' dist/index.html | head -1)
           INITIAL_JS="dist/${INITIAL_JS#/}"
-          if [ -z "$INITIAL_JS" ]; then
-            echo "::error::No JS bundle found in dist/assets"
+          if [ -z "$INITIAL_JS" ] || [ ! -f "$INITIAL_JS" ]; then
+            echo "::error::No JS bundle found at $INITIAL_JS"
             exit 1
           fi
           SIZE=$(gzip -c "$INITIAL_JS" | wc -c)
@@ -116,6 +118,8 @@ jobs:
       CAREEROPS_DB_NAME: careerops
       CAREEROPS_DB_RUNTIME_USER: careerops_runtime
       CAREEROPS_DB_RUNTIME_PASSWORD: ci-only-runtime-password
+      CAREEROPS_DB_RETENTION_USER: careerops_retention_runtime
+      CAREEROPS_DB_RETENTION_PASSWORD: ci-only-retention-password
       CAREEROPS_REDIS_PASSWORD: ci-only-redis-password
       CAREEROPS_TEMPORAL_DB_USER: temporal_runtime
       CAREEROPS_TEMPORAL_DB_PASSWORD: ci-only-temporal-password
@@ -133,7 +137,7 @@ jobs:
         run: |
           curl --fail --silent http://127.0.0.1:8000/api/v1/health/ready
           curl --fail --silent http://127.0.0.1:8000/login | grep -q 'CareerOps</title>'
-          test "$(docker compose ps --services --status running | sort | tr '\n' ' ')" = "api postgres redis temporal temporal-ui workflow-worker "
+          test "$(docker compose ps --services --status running | sort | tr '\n' ' ')" = "api postgres redis smart-intake-retention temporal temporal-ui workflow-worker "
       - name: Capture service state
         if: always()
         run: docker compose ps

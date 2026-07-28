@@ -138,7 +138,7 @@
 import { onMounted, ref } from 'vue'
 import { ReloadOutlined, UploadOutlined } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
-import { api, parseApiError } from '../api/client.js'
+import { api, formatApiError, parseApiError } from '../api/client.js'
 
 // Mirrors backend constants (resume_service.SUPPORTED_RESUME_MEDIA_TYPES).
 const ACCEPT_TYPES = ['text/plain', 'text/markdown', 'application/pdf']
@@ -236,9 +236,9 @@ async function upload() {
     if (info.isDependencyNotReady) {
       unavailable.value = true
     } else if (info.status === 409 || info.code === 'INVALID_STATE') {
-      uploadError.value = info.message || '上传被拒绝（类型或大小校验未通过）。'
+      uploadError.value = formatApiError(err, '上传被拒绝（类型或大小校验未通过）。')
     } else {
-      uploadError.value = info.message || '上传失败，请稍后重试。'
+      uploadError.value = formatApiError(err, '上传失败，请稍后重试。')
     }
   } finally {
     uploading.value = false
@@ -257,9 +257,9 @@ async function confirm(id) {
     if (info.isDependencyNotReady) {
       unavailable.value = true
     } else if (info.status === 409 || info.code === 'INVALID_STATE') {
-      error.value = info.message || '该简历当前无法确认（解析未成功）。'
+      error.value = formatApiError(err, '该简历当前无法确认（解析未成功）。')
     } else {
-      error.value = info.message || '确认失败。'
+      error.value = formatApiError(err, '确认失败。')
     }
   } finally {
     confirmingId.value = ''
@@ -278,7 +278,7 @@ async function loadResumes() {
     if (info.isDependencyNotReady) {
       unavailable.value = true
     } else {
-      error.value = info.message || '加载简历列表失败。'
+      error.value = formatApiError(err, '加载简历列表失败。')
     }
   } finally {
     loading.value = false

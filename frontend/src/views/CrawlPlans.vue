@@ -303,7 +303,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { message } from 'ant-design-vue'
-import { api, parseApiError } from '../api/client.js'
+import { api, formatApiError, parseApiError } from '../api/client.js'
 
 const head = ref({ active: null, next_run_at: null, state: 'draft' })
 const sources = ref([])
@@ -397,7 +397,7 @@ async function loadSources() {
     if (info.isDependencyNotReady) {
       unavailable.value = true
     } else {
-      error.value = info.message || '加载来源列表失败。'
+      error.value = formatApiError(err, '加载来源列表失败。')
     }
   }
 }
@@ -411,7 +411,7 @@ async function loadHead() {
     if (info.isDependencyNotReady) {
       unavailable.value = true
     } else {
-      error.value = info.message || '加载采集计划失败。'
+      error.value = formatApiError(err, '加载采集计划失败。')
     }
   }
 }
@@ -424,7 +424,7 @@ async function loadHistory() {
   } catch (err) {
     const info = parseApiError(err)
     if (!info.isDependencyNotReady) {
-      error.value = info.message || '加载版本历史失败。'
+      error.value = formatApiError(err, '加载版本历史失败。')
     }
   } finally {
     historyLoading.value = false
@@ -452,7 +452,7 @@ async function pauseSource(id) {
   } catch (err) {
     const info = parseApiError(err)
     if (info.isDependencyNotReady) unavailable.value = true
-    else error.value = info.message || '暂停失败。'
+    else error.value = formatApiError(err, '暂停失败。')
   } finally {
     sourceActionId.value = ''
   }
@@ -469,9 +469,9 @@ async function resumeSource(id) {
     const info = parseApiError(err)
     if (info.isDependencyNotReady) unavailable.value = true
     else if (info.status === 409 || info.code === 'INVALID_STATE') {
-      error.value = info.message || '该来源无法启用（策略封禁或状态不允许）。'
+      error.value = formatApiError(err, '该来源无法启用（策略封禁或状态不允许）。')
     } else {
-      error.value = info.message || '启用失败。'
+      error.value = formatApiError(err, '启用失败。')
     }
   } finally {
     sourceActionId.value = ''
@@ -490,7 +490,7 @@ async function pausePlan() {
   } catch (err) {
     const info = parseApiError(err)
     if (info.isDependencyNotReady) unavailable.value = true
-    else error.value = info.message || '暂停计划失败。'
+    else error.value = formatApiError(err, '暂停计划失败。')
   } finally {
     planActionLoading.value = false
   }
@@ -507,9 +507,9 @@ async function resumePlan() {
     const info = parseApiError(err)
     if (info.isDependencyNotReady) unavailable.value = true
     else if (info.status === 409 || info.code === 'INVALID_STATE') {
-      error.value = info.message || '无法恢复：无可用版本或调度无效。'
+      error.value = formatApiError(err, '无法恢复：无可用版本或调度无效。')
     } else {
-      error.value = info.message || '恢复计划失败。'
+      error.value = formatApiError(err, '恢复计划失败。')
     }
   } finally {
     planActionLoading.value = false
@@ -526,9 +526,9 @@ async function runNow() {
     const info = parseApiError(err)
     if (info.isDependencyNotReady) unavailable.value = true
     else if (info.status === 409 || info.code === 'INVALID_STATE') {
-      error.value = info.message || '无法运行：需要活跃计划和至少一个启用来源。'
+      error.value = formatApiError(err, '无法运行：需要活跃计划和至少一个启用来源。')
     } else {
-      error.value = info.message || '创建运行失败。'
+      error.value = formatApiError(err, '创建运行失败。')
     }
   } finally {
     runNowLoading.value = false
@@ -546,9 +546,9 @@ async function activateVersion(id) {
     const info = parseApiError(err)
     if (info.isDependencyNotReady) unavailable.value = true
     else if (info.status === 409 || info.code === 'INVALID_STATE') {
-      error.value = info.message || '版本激活失败（调度无效或校验未通过）。'
+      error.value = formatApiError(err, '版本激活失败（调度无效或校验未通过）。')
     } else {
-      error.value = info.message || '激活失败。'
+      error.value = formatApiError(err, '激活失败。')
     }
   } finally {
     activatingId.value = ''

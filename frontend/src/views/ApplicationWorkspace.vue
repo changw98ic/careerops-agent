@@ -404,7 +404,7 @@ import {
   DownOutlined,
 } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
-import { api, parseApiError } from '../api/client.js'
+import { api, formatApiError, parseApiError } from '../api/client.js'
 import PackageEditor from '../components/PackageEditor.vue'
 import SubmissionPreview from '../components/SubmissionPreview.vue'
 import SystemSendStatusBadge from '../components/SystemSendStatusBadge.vue'
@@ -523,7 +523,7 @@ async function loadAll() {
     } else if (parsed.status === 404) {
       notFound.value = true
     } else {
-      error.value = parsed.message || '加载申请详情失败，请稍后重试。'
+      error.value = formatApiError(err, '加载申请详情失败，请稍后重试。')
     }
   } finally {
     loading.value = false
@@ -541,7 +541,7 @@ async function loadChannels() {
     if (parsed.isDependencyNotReady) {
       channelError.value = '渠道服务暂不可用，请稍后重试。'
     } else {
-      channelError.value = parsed.message || '加载渠道失败。'
+      channelError.value = formatApiError(err, '加载渠道失败。')
     }
     channels.value = []
   } finally {
@@ -563,7 +563,7 @@ async function loadTimeline() {
     if (parsed.isDependencyNotReady) {
       timelineError.value = '时间线服务暂不可用，请稍后重试。'
     } else {
-      timelineError.value = parsed.message || '加载时间线失败。'
+      timelineError.value = formatApiError(err, '加载时间线失败。')
     }
     timeline.value = []
   } finally {
@@ -586,7 +586,7 @@ async function onPrepare() {
     if (parsed.isDependencyNotReady) {
       actionError.value = '服务暂不可用，请稍后重试。'
     } else {
-      actionError.value = parsed.message || '操作失败，请稍后重试。'
+      actionError.value = formatApiError(err, '操作失败，请稍后重试。')
     }
   } finally {
     actionLoading.value = ''
@@ -606,7 +606,7 @@ async function onSelectChannel(channel) {
     if (parsed.isDependencyNotReady) {
       channelError.value = '服务暂不可用，请稍后重试。'
     } else {
-      channelError.value = parsed.message || '选择渠道失败。'
+      channelError.value = formatApiError(err, '选择渠道失败。')
     }
   } finally {
     actionLoading.value = ''
@@ -628,7 +628,7 @@ async function onStateMenu({ key }) {
     if (parsed.isDependencyNotReady) {
       actionError.value = '服务暂不可用，请稍后重试。'
     } else {
-      actionError.value = parsed.message || '状态更新失败。'
+      actionError.value = formatApiError(err, '状态更新失败。')
     }
   } finally {
     actionLoading.value = ''
@@ -664,7 +664,7 @@ async function onConfirmSubmission() {
     if (parsed.isDependencyNotReady) {
       actionError.value = '服务暂不可用，请稍后重试。'
     } else {
-      actionError.value = parsed.message || '确认失败，请稍后重试。'
+      actionError.value = formatApiError(err, '确认失败，请稍后重试。')
     }
   } finally {
     actionLoading.value = ''
@@ -732,9 +732,9 @@ async function onConfirmSystemSend(payload) {
     if (info.isDependencyNotReady) {
       systemSend.value.error = '发送服务暂不可用（503），请稍后重试。'
     } else if (err?.status === 403) {
-      systemSend.value.error = '发送被策略拒绝：' + (info.message || 'DENIED_POLICY')
+      systemSend.value.error = '发送被策略拒绝：' + formatApiError(err, 'DENIED_POLICY')
     } else {
-      systemSend.value.error = info.message || '发送确认失败'
+      systemSend.value.error = formatApiError(err, '发送确认失败')
     }
   } finally {
     actionLoading.value = ''
@@ -769,7 +769,7 @@ async function pollSystemSend() {
   } catch (err) {
     // Keep the last known status; surface the error but keep polling a while.
     const info = parseApiError(err)
-    systemSend.value.error = info.message || '状态查询失败'
+    systemSend.value.error = formatApiError(err, '状态查询失败')
   }
 }
 
@@ -785,7 +785,7 @@ async function onEscalateReconciliation() {
     stopSystemSendPolling()
   } catch (err) {
     const info = parseApiError(err)
-    systemSend.value.error = info.message || '人工核对标记失败'
+    systemSend.value.error = formatApiError(err, '人工核对标记失败')
   } finally {
     actionLoading.value = ''
   }

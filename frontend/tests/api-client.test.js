@@ -8,7 +8,7 @@ beforeEach(() => {
 })
 
 describe('api client', () => {
-  let api, setCsrfToken
+  let api, setCsrfToken, formatApiError
 
   beforeEach(async () => {
     // Re-import to get fresh module state
@@ -16,6 +16,7 @@ describe('api client', () => {
     const mod = await import('../src/api/client.js')
     api = mod.api
     setCsrfToken = mod.setCsrfToken
+    formatApiError = mod.formatApiError
   })
 
   it('setCsrfToken stores token for subsequent requests', async () => {
@@ -112,5 +113,62 @@ describe('api client', () => {
     expect(url).toContain('/api/v1/companies?')
     expect(url).toContain('state=active')
     expect(url).toContain('limit=10')
+  })
+
+  it('maps candidate profile errors to actionable safe UI copy', async () => {
+    const err = new Error('403: {"error":{"code":"CANDIDATE_PROFILE_REQUIRED"}}')
+    err.status = 403
+    err.code = 'CANDIDATE_PROFILE_REQUIRED'
+    err.messageText = 'Candidate profile is required'
+
+    expect(formatApiError(err)).toContain('个人档案')
+    expect(formatApiError(err)).not.toContain('403:')
+  })
+
+  it('exposes the real matching and agent endpoint methods', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ items: [] }),
+    })
+    globalThis.fetch = fetchSpy
+
+    await api.listMatches({ limit: 10 })
+    await api.listAgentRuns({ capability: 'resume_review', limit: 10 })
+    await api.startResumeReview({ canonical_job_id: 'job', job_version_id: 'version', resume_version_id: 'resume' })
+
+    expect(fetchSpy.mock.calls[0][0]).toContain('/api/v1/matches?')
+    expect(fetchSpy.mock.calls[1][0]).toContain('/api/v1/agents/runs?')
+    expect(fetchSpy.mock.calls[2][0]).toBe('/api/v1/agents/resume-review')
+  })
+
+  it('exposes smart intake preview and apply endpoints with CSRF', async () => {
+    setCsrfToken('smart-token')
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ preview_id: 'p1', state: 'unavailable' }),
+    })
+    globalThis.fetch = fetchSpy
+
+    await api.createSmartIntakePreview({
+      target: 'profile',
+      input: { kind: 'text', text: 'Backend' },
+      idempotency_key: 'k1',
+    })
+    await api.getSmartIntakePreview('p1')
+    await api.applySmartIntakePreview('p1', {
+      apply_idempotency_key: 'a1',
+      context_digest: '1'.repeat(64),
+      decision_set_hash: '0'.repeat(64),
+      decisions: [],
+    })
+    await api.getSmartIntakeCapability()
+
+    expect(fetchSpy.mock.calls[0][0]).toBe('/api/v1/smart-intake/previews')
+    expect(fetchSpy.mock.calls[0][1].headers['X-CSRF-Token']).toBe('smart-token')
+    expect(fetchSpy.mock.calls[1][0]).toBe('/api/v1/smart-intake/previews/p1')
+    expect(fetchSpy.mock.calls[2][0]).toBe('/api/v1/smart-intake/previews/p1/apply')
+    expect(fetchSpy.mock.calls[3][0]).toBe('/api/v1/smart-intake/capability')
   })
 })

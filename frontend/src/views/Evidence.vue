@@ -118,7 +118,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ReloadOutlined } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
-import { api, parseApiError } from '../api/client.js'
+import { api, formatApiError, parseApiError } from '../api/client.js'
 
 const route = useRoute()
 
@@ -175,7 +175,7 @@ async function loadEvidence() {
     if (info.isDependencyNotReady) {
       unavailable.value = true
     } else {
-      error.value = info.message || '加载证据失败。'
+      error.value = formatApiError(err, '加载证据失败。')
     }
   } finally {
     loading.value = false
@@ -215,7 +215,7 @@ async function act(item, kind, fn) {
     if (info.isDependencyNotReady) {
       unavailable.value = true
     } else {
-      error.value = info.message || '操作失败。'
+      error.value = formatApiError(err, '操作失败。')
     }
   } finally {
     actingId.value = ''

@@ -8,28 +8,8 @@ vi.mock('../src/api/client.js', () => ({
     listJobs: (...args) => mockListJobs(...args),
     listApplications: (...args) => mockListApplications(...args),
   },
+  formatApiError: (err, fallback) => err?.message || fallback,
   setCsrfToken: vi.fn(),
-}))
-
-vi.mock('@antv/g2', () => ({
-  Chart: vi.fn().mockImplementation(() => ({
-    interval: vi.fn().mockReturnThis(),
-    area: vi.fn().mockReturnThis(),
-    line: vi.fn().mockReturnThis(),
-    point: vi.fn().mockReturnThis(),
-    data: vi.fn().mockReturnThis(),
-    encode: vi.fn().mockReturnThis(),
-    scale: vi.fn().mockReturnThis(),
-    axis: vi.fn().mockReturnThis(),
-    legend: vi.fn().mockReturnThis(),
-    tooltip: vi.fn().mockReturnThis(),
-    interaction: vi.fn().mockReturnThis(),
-    style: vi.fn().mockReturnThis(),
-    coordinate: vi.fn().mockReturnThis(),
-    on: vi.fn().mockReturnThis(),
-    render: vi.fn().mockResolvedValue(undefined),
-    destroy: vi.fn(),
-  })),
 }))
 
 vi.mock('vue-router', () => ({
@@ -104,6 +84,35 @@ describe('Dashboard.vue', () => {
     await flushPromises()
     expect(mockListJobs).toHaveBeenCalledWith({ limit: 200 })
     expect(mockListApplications).toHaveBeenCalledWith({ limit: 200 })
+  })
+
+  it('follows cursors until all dashboard records are loaded', async () => {
+    mockListJobs
+      .mockResolvedValueOnce({
+        items: [{ id: 'j1', aggregate_state: 'active' }],
+        total: 2,
+        next_cursor: 'jobs-page-2',
+        has_more: true,
+      })
+      .mockResolvedValueOnce({
+        items: [{ id: 'j2', aggregate_state: 'closed' }],
+        total: 2,
+        next_cursor: null,
+        has_more: false,
+      })
+
+    const wrapper = mountDashboard()
+    await flushPromises()
+
+    expect(mockListJobs).toHaveBeenNthCalledWith(1, { limit: 200 })
+    expect(mockListJobs).toHaveBeenNthCalledWith(2, { limit: 200, cursor: 'jobs-page-2' })
+    expect(wrapper.vm.metrics.jobs).toBe(2)
+    expect(wrapper.vm.chartData.statusDist).toEqual(
+      expect.arrayContaining([
+        { state: 'active', count: 1 },
+        { state: 'closed', count: 1 },
+      ])
+    )
   })
 
   it('computes metrics correctly', async () => {

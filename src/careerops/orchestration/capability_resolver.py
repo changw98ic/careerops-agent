@@ -78,6 +78,7 @@ class CapabilityKind(StrEnum):
 
     CRAWL_PLAN_MANAGEMENT = "crawl_plan_management"
     MODEL_TAILORING = "model_tailoring"
+    SMART_INTAKE = "smart_intake"
     GMAIL_READ = "gmail_read"
     SYSTEM_MANAGED_SEND = "system_managed_send"
     AUTO_SEND = "auto_send"
@@ -206,6 +207,17 @@ class SettingsCapabilityResolver:
                 reason=(
                     "model tailoring disabled; model output is review-only and never authoritative"
                 ),
+            )
+
+        if capability is CapabilityKind.SMART_INTAKE:
+            if settings.smart_intake_enabled:
+                return CapabilityDecision(
+                    released=True,
+                    reason="smart intake released for review-only form proposals",
+                )
+            return CapabilityDecision(
+                released=False,
+                reason="smart intake disabled by operator flag",
             )
 
         if capability is CapabilityKind.GMAIL_READ:

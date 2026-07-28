@@ -36,9 +36,11 @@ from fastapi.security import APIKeyCookie
 from careerops.api.errors import (
     CandidateProfileRequiredError,
     CSRFRejectedError,
+    DependencyNotReadyError,
     UnauthorizedError,
 )
 from careerops.auth.contracts import AuthenticatedPrincipal, AuthError
+from careerops.config import RuntimeEnvironment
 
 _COOKIE_NAME = "careerops_session"
 _csrf_header = "x-csrf-token"
@@ -60,10 +62,13 @@ async def require_api_auth(
     """
     auth_service = getattr(request.app.state, "auth_service", None)
     web_settings = getattr(request.app.state, "web_settings", None)
+    settings = getattr(request.app.state, "settings", None)
 
     # Auth not configured — allow through for backward-compatible deployments.
     # When auth IS configured, both pieces must be present.
     if auth_service is None or web_settings is None:
+        if getattr(settings, "environment", None) is RuntimeEnvironment.PRODUCTION:
+            raise DependencyNotReadyError("production authentication is not configured")
         if auth_service is None and web_settings is None:
             return None
         raise UnauthorizedError()
@@ -99,9 +104,12 @@ async def require_web_auth(
     """
     auth_service = getattr(request.app.state, "auth_service", None)
     web_settings = getattr(request.app.state, "web_settings", None)
+    settings = getattr(request.app.state, "settings", None)
 
     # Auth not configured — allow through for backward-compatible deployments.
     if auth_service is None or web_settings is None:
+        if getattr(settings, "environment", None) is RuntimeEnvironment.PRODUCTION:
+            raise DependencyNotReadyError("production authentication is not configured")
         if auth_service is None and web_settings is None:
             return None
         raise UnauthorizedError()

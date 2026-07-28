@@ -3313,3 +3313,153 @@ sa.Index(
     agent_run_reviews.c.candidate_id,
     agent_run_reviews.c.run_id,
 )
+# ---------------------------------------------------------------------------
+# Smart form intake (review-only, short-lived, candidate-owned)
+# ---------------------------------------------------------------------------
+
+smart_intake_previews = sa.Table(
+    "smart_intake_previews",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "candidate_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.candidates.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column("target", sa.String(32), nullable=False),
+    sa.Column("idempotency_key", sa.String(128), nullable=False),
+    sa.Column("request_fingerprint", sa.String(64), nullable=False),
+    sa.Column("input_digest", sa.String(64), nullable=False),
+    sa.Column("context_digest", sa.String(64), nullable=False),
+    sa.Column("input_text", sa.Text(), nullable=False),
+    sa.Column(
+        "context_refs",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "fields",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column("state", sa.String(24), server_default="unavailable", nullable=False),
+    sa.Column("claim_state", sa.String(16), server_default="finalized", nullable=False),
+    sa.Column("claim_token", sa.String(64), server_default="", nullable=False),
+    sa.Column("claim_expires_at", sa.DateTime(timezone=True), nullable=True),
+    sa.Column("schema_version", sa.String(64), server_default="", nullable=False),
+    sa.Column("prompt_version", sa.String(64), server_default="", nullable=False),
+    sa.Column("model_id", sa.String(128), server_default="", nullable=False),
+    sa.Column("capability_state", sa.String(64), server_default="", nullable=False),
+    sa.Column("trace_id", sa.String(128), server_default="", nullable=False),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+    sa.Column("purged_at", sa.DateTime(timezone=True), nullable=True),
+    sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
+    sa.UniqueConstraint(
+        "candidate_id",
+        "target",
+        "idempotency_key",
+        name="uq_smart_intake_previews_candidate_target_key",
+    ),
+    sa.UniqueConstraint(
+        "id",
+        "candidate_id",
+        name="uq_smart_intake_previews_id_candidate",
+    ),
+    sa.CheckConstraint(
+        "target IN ('profile', 'interview_context')",
+        name="target_values",
+    ),
+    sa.CheckConstraint(
+        "state IN ('unavailable', 'ready', 'abstained', 'invalid', 'stale', 'expired', 'revoked')",
+        name="state_values",
+    ),
+    sa.CheckConstraint(
+        "claim_state IN ('pending', 'finalized', 'reclaimed')",
+        name="claim_state_values",
+    ),
+    sa.CheckConstraint("char_length(request_fingerprint) = 64", name="request_hash_length"),
+    sa.CheckConstraint("char_length(input_digest) = 64", name="input_hash_length"),
+    sa.CheckConstraint("char_length(context_digest) = 64", name="context_hash_length"),
+    sa.CheckConstraint("char_length(input_text) <= 12000", name="input_length"),
+    sa.CheckConstraint("jsonb_typeof(context_refs) = 'object'", name="context_object"),
+    sa.CheckConstraint("jsonb_typeof(fields) = 'array'", name="fields_array"),
+)
+
+sa.Index(
+    "ix_smart_intake_previews_candidate_created",
+    smart_intake_previews.c.candidate_id,
+    smart_intake_previews.c.created_at,
+)
+sa.Index(
+    "ix_smart_intake_previews_expiry",
+    smart_intake_previews.c.expires_at,
+    smart_intake_previews.c.purged_at,
+)
+
+smart_intake_decisions = sa.Table(
+    "smart_intake_decisions",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "preview_id",
+        sa.Uuid(),
+        nullable=False,
+    ),
+    sa.Column(
+        "candidate_id",
+        sa.Uuid(),
+        nullable=False,
+    ),
+    sa.ForeignKeyConstraint(
+        ["preview_id", "candidate_id"],
+        [
+            f"{DATABASE_SCHEMA}.smart_intake_previews.id",
+            f"{DATABASE_SCHEMA}.smart_intake_previews.candidate_id",
+        ],
+        ondelete="RESTRICT",
+    ),
+    sa.ForeignKeyConstraint(
+        ["candidate_id"],
+        [f"{DATABASE_SCHEMA}.candidates.id"],
+        ondelete="CASCADE",
+    ),
+    sa.Column("apply_idempotency_key", sa.String(128), nullable=False),
+    sa.Column("decision_set_hash", sa.String(64), nullable=False),
+    sa.Column(
+        "decisions",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'[]'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column(
+        "draft_patch",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column("actor_id", sa.String(128), nullable=False),
+    sa.Column("trace_id", sa.String(128), nullable=False),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.UniqueConstraint(
+        "preview_id",
+        "apply_idempotency_key",
+        name="uq_smart_intake_decisions_preview_apply_key",
+    ),
+    sa.CheckConstraint("char_length(decision_set_hash) = 64", name="decision_hash_length"),
+    sa.CheckConstraint("jsonb_typeof(decisions) = 'array'", name="decisions_array"),
+    sa.CheckConstraint("jsonb_typeof(draft_patch) = 'object'", name="patch_object"),
+)
+
+sa.Index(
+    "ix_smart_intake_decisions_candidate_created",
+    smart_intake_decisions.c.candidate_id,
+    smart_intake_decisions.c.created_at,
+)

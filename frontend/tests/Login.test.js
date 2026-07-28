@@ -58,8 +58,8 @@ describe('Login.vue', () => {
 
   it('renders the login form', () => {
     const wrapper = mountLogin()
-    expect(wrapper.text()).toContain('Welcome back')
-    expect(wrapper.text()).toContain('Sign in')
+    expect(wrapper.text()).toContain('欢迎回来')
+    expect(wrapper.text()).toContain('登录')
   })
 
   it('renders username and password inputs', () => {

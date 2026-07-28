@@ -2589,6 +2589,7 @@ APPEND_ONLY_TABLES = (
     "job_posting_versions",
     "policy_decisions",
     "provider_receipts",
+    "agent_stage_events",
 )
 
 # ---------------------------------------------------------------------------
@@ -3268,6 +3269,11 @@ agent_runs = sa.Table(
     sa.CheckConstraint("jsonb_typeof(input_identities) = 'object'", name="input_object"),
     sa.CheckConstraint("jsonb_typeof(evidence_ids) = 'array'", name="evidence_array"),
     sa.CheckConstraint("jsonb_typeof(result) = 'object'", name="result_object"),
+    sa.UniqueConstraint(
+        "id",
+        "candidate_id",
+        name="uq_agent_runs_id_candidate",
+    ),
 )
 
 sa.Index("ix_agent_runs_candidate_state", agent_runs.c.candidate_id, agent_runs.c.state)
@@ -3313,6 +3319,291 @@ sa.Index(
     agent_run_reviews.c.candidate_id,
     agent_run_reviews.c.run_id,
 )
+
+# ---------------------------------------------------------------------------
+# Agent console orchestration (migration 0030)
+# ---------------------------------------------------------------------------
+
+agent_contexts = sa.Table(
+    "agent_contexts",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "candidate_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.candidates.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column("operation", sa.String(32), nullable=False),
+    sa.Column("schema_version", sa.String(64), nullable=False),
+    sa.Column("digest_algorithm", sa.String(16), nullable=False),
+    sa.Column(
+        "source_version_snapshot",
+        postgresql.JSONB(astext_type=sa.Text()),
+        nullable=False,
+    ),
+    sa.Column(
+        "source_digests",
+        postgresql.JSONB(astext_type=sa.Text()),
+        nullable=False,
+    ),
+    sa.Column("allowed_operation", sa.String(32), nullable=False),
+    sa.Column("state", sa.String(16), server_default="active", nullable=False),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+    sa.Column("invalidation_reason", sa.String(64), nullable=True),
+    sa.UniqueConstraint("id", "candidate_id", name="uq_agent_contexts_id_candidate"),
+    sa.CheckConstraint(
+        "digest_algorithm = 'sha256'",
+        name="ck_agent_contexts_digest_algorithm",
+    ),
+    sa.CheckConstraint(
+        "jsonb_typeof(source_version_snapshot) = 'object'",
+        name="ck_agent_contexts_source_version_snapshot_object",
+    ),
+    sa.CheckConstraint(
+        "jsonb_typeof(source_digests) = 'object'",
+        name="ck_agent_contexts_source_digests_object",
+    ),
+    sa.CheckConstraint(
+        "state IN ('active', 'stale', 'expired', 'revoked')",
+        name="ck_agent_contexts_state",
+    ),
+    sa.CheckConstraint(
+        "operation = allowed_operation",
+        name="ck_agent_contexts_operation_match",
+    ),
+    sa.CheckConstraint(
+        "expires_at > created_at",
+        name="ck_agent_contexts_expires_after_created",
+    ),
+)
+
+sa.Index(
+    "ix_agent_contexts_candidate_state",
+    agent_contexts.c.candidate_id,
+    agent_contexts.c.state,
+)
+
+agent_actions = sa.Table(
+    "agent_actions",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "candidate_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.candidates.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column("action_key", sa.String(160), nullable=False),
+    sa.Column("source_event_key", sa.Uuid(), nullable=False),
+    sa.Column("queue_version", sa.BigInteger(), nullable=False),
+    sa.Column("state", sa.String(16), nullable=False),
+    sa.Column("kind", sa.String(40), nullable=False),
+    sa.Column("reason_code", sa.String(64), nullable=False),
+    sa.Column("deterministic_rank", sa.Integer(), nullable=False),
+    sa.Column(
+        "source_refs",
+        postgresql.JSONB(astext_type=sa.Text()),
+        nullable=False,
+    ),
+    sa.Column("context_id", sa.Uuid(), nullable=True),
+    sa.Column("snooze_until", sa.DateTime(timezone=True), nullable=True),
+    sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.Column(
+        "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.UniqueConstraint(
+        "candidate_id",
+        "action_key",
+        "source_event_key",
+        name="uq_agent_actions_candidate_key_event",
+    ),
+    sa.ForeignKeyConstraint(
+        ["context_id", "candidate_id"],
+        [f"{DATABASE_SCHEMA}.agent_contexts.id", f"{DATABASE_SCHEMA}.agent_contexts.candidate_id"],
+        name="fk_agent_actions_context_candidate",
+        ondelete="RESTRICT",
+    ),
+    sa.CheckConstraint(
+        "queue_version > 0",
+        name="ck_agent_actions_queue_version_positive",
+    ),
+    sa.CheckConstraint(
+        (
+            "state IN ('proposed', 'accepted', 'snoozed', 'dismissed', 'completed', "
+            "'expired', 'blocked')"
+        ),
+        name="ck_agent_actions_state",
+    ),
+    sa.CheckConstraint(
+        "deterministic_rank >= 0",
+        name="ck_agent_actions_rank_nonnegative",
+    ),
+    sa.CheckConstraint(
+        "jsonb_typeof(source_refs) = 'array'",
+        name="ck_agent_actions_source_refs_array",
+    ),
+)
+
+sa.Index(
+    "ix_agent_actions_candidate_state",
+    agent_actions.c.candidate_id,
+    agent_actions.c.state,
+)
+
+agent_attempts = sa.Table(
+    "agent_attempts",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column("run_id", sa.Uuid(), nullable=False),
+    sa.Column(
+        "candidate_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.candidates.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column("attempt_no", sa.Integer(), nullable=False),
+    sa.Column("workflow_id", sa.String(220), nullable=False),
+    sa.Column("worker_id", sa.Uuid(), nullable=True),
+    sa.Column("lease_epoch", sa.BigInteger(), server_default="0", nullable=False),
+    sa.Column("cancel_epoch", sa.BigInteger(), server_default="0", nullable=False),
+    sa.Column("state", sa.String(24), nullable=False),
+    sa.Column("retry_budget", sa.Integer(), nullable=False),
+    sa.Column("dead_lettered_at", sa.DateTime(timezone=True), nullable=True),
+    sa.Column("dead_letter_reason", sa.String(64), nullable=True),
+    sa.Column("lease_expires_at", sa.DateTime(timezone=True), nullable=True),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
+    sa.UniqueConstraint(
+        "run_id",
+        "attempt_no",
+        name="uq_agent_attempts_run_attempt_no",
+    ),
+    sa.UniqueConstraint(
+        "id",
+        "run_id",
+        "candidate_id",
+        name="uq_agent_attempts_id_run_candidate",
+    ),
+    sa.ForeignKeyConstraint(
+        ["run_id", "candidate_id"],
+        [f"{DATABASE_SCHEMA}.agent_runs.id", f"{DATABASE_SCHEMA}.agent_runs.candidate_id"],
+        name="fk_agent_attempts_run_candidate",
+        ondelete="RESTRICT",
+    ),
+    sa.CheckConstraint(
+        "attempt_no > 0",
+        name="ck_agent_attempts_attempt_no_positive",
+    ),
+    sa.CheckConstraint(
+        "lease_epoch >= 0",
+        name="ck_agent_attempts_lease_epoch_nonnegative",
+    ),
+    sa.CheckConstraint(
+        "cancel_epoch >= 0",
+        name="ck_agent_attempts_cancel_epoch_nonnegative",
+    ),
+    sa.CheckConstraint(
+        "state IN ('queued', 'running', 'waiting_review', 'succeeded', 'failed', "
+        "'cancel_requested', 'cancelled', 'stale', 'blocked')",
+        name="ck_agent_attempts_state",
+    ),
+    sa.CheckConstraint(
+        "retry_budget >= 0",
+        name="ck_agent_attempts_retry_budget_nonnegative",
+    ),
+)
+
+sa.Index(
+    "ix_agent_attempts_run_candidate",
+    agent_attempts.c.run_id,
+    agent_attempts.c.candidate_id,
+)
+
+agent_stage_events = sa.Table(
+    "agent_stage_events",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column("attempt_id", sa.Uuid(), nullable=False),
+    sa.Column("run_id", sa.Uuid(), nullable=False),
+    sa.Column(
+        "candidate_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.candidates.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column("event_key", sa.Uuid(), nullable=False),
+    sa.Column("sequence", sa.Integer(), nullable=False),
+    sa.Column("schema_version", sa.String(64), nullable=False),
+    sa.Column("stage", sa.String(64), nullable=False),
+    sa.Column("status", sa.String(20), nullable=False),
+    sa.Column("cause", sa.String(64), nullable=True),
+    sa.Column("terminal", sa.Boolean(), server_default="false", nullable=False),
+    sa.Column("provider_state", sa.String(32), nullable=True),
+    sa.Column("retryable", sa.Boolean(), server_default="false", nullable=False),
+    sa.Column(
+        "occurred_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.Column("duration_ms", sa.Integer(), nullable=True),
+    sa.Column(
+        "redacted_payload",
+        postgresql.JSONB(astext_type=sa.Text()),
+        nullable=False,
+    ),
+    sa.Column("retention_until", sa.DateTime(timezone=True), nullable=False),
+    sa.UniqueConstraint("event_key", name="uq_agent_stage_events_event_key"),
+    sa.UniqueConstraint(
+        "attempt_id",
+        "sequence",
+        name="uq_agent_stage_events_attempt_sequence",
+    ),
+    sa.ForeignKeyConstraint(
+        ["attempt_id", "run_id", "candidate_id"],
+        [
+            f"{DATABASE_SCHEMA}.agent_attempts.id",
+            f"{DATABASE_SCHEMA}.agent_attempts.run_id",
+            f"{DATABASE_SCHEMA}.agent_attempts.candidate_id",
+        ],
+        name="fk_agent_stage_events_attempt_run_candidate",
+        ondelete="RESTRICT",
+    ),
+    sa.CheckConstraint(
+        "sequence > 0",
+        name="ck_agent_stage_events_sequence_positive",
+    ),
+    sa.CheckConstraint(
+        "status IN ('started', 'completed', 'blocked', 'failed', 'cancelled')",
+        name="ck_agent_stage_events_status",
+    ),
+    sa.CheckConstraint(
+        "duration_ms IS NULL OR duration_ms >= 0",
+        name="ck_agent_stage_events_duration_nonnegative",
+    ),
+    sa.CheckConstraint(
+        "jsonb_typeof(redacted_payload) = 'object'",
+        name="ck_agent_stage_events_payload_object",
+    ),
+)
+
+sa.Index(
+    "ix_agent_stage_events_attempt_sequence",
+    agent_stage_events.c.attempt_id,
+    agent_stage_events.c.sequence,
+)
+sa.Index(
+    "ix_agent_stage_events_run_candidate",
+    agent_stage_events.c.run_id,
+    agent_stage_events.c.candidate_id,
+)
+
 # ---------------------------------------------------------------------------
 # Smart form intake (review-only, short-lived, candidate-owned)
 # ---------------------------------------------------------------------------

@@ -1,0 +1,1247 @@
+{
+  "schema_version": "scenario-register-v1",
+  "scenario_count": 106,
+  "scenarios": [
+    {
+      "id": "AO-M1-S1",
+      "source": "specs/agent-action-orchestration/spec.md",
+      "requirement": "M1",
+      "gate": "UX-01",
+      "command": "make verify-frontend",
+      "owner": "frontend",
+      "route": "/ai-workbench",
+      "viewports": [
+        "1440x900",
+        "375x812"
+      ],
+      "evidence": "artifacts/ego/AO-M1-S1.json"
+    },
+    {
+      "id": "AO-R1-S1",
+      "source": "specs/agent-action-orchestration/spec.md",
+      "requirement": "R1",
+      "gate": "API-01",
+      "command": "uv run pytest tests/contract/test_agent_console_api.py -q",
+      "owner": "api",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AO-R1-S1.json"
+    },
+    {
+      "id": "AO-R1-S2",
+      "source": "specs/agent-action-orchestration/spec.md",
+      "requirement": "R1",
+      "gate": "API-01",
+      "command": "uv run pytest tests/contract/test_agent_console_api.py -q",
+      "owner": "api",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AO-R1-S2.json"
+    },
+    {
+      "id": "AO-R1-S3",
+      "source": "specs/agent-action-orchestration/spec.md",
+      "requirement": "R1",
+      "gate": "API-01",
+      "command": "uv run pytest tests/contract/test_agent_console_api.py -q",
+      "owner": "api",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AO-R1-S3.json"
+    },
+    {
+      "id": "AO-R1-S4",
+      "source": "specs/agent-action-orchestration/spec.md",
+      "requirement": "R1",
+      "gate": "API-01",
+      "command": "uv run pytest tests/contract/test_agent_console_api.py -q",
+      "owner": "api",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AO-R1-S4.json"
+    },
+    {
+      "id": "AO-R1-S5",
+      "source": "specs/agent-action-orchestration/spec.md",
+      "requirement": "R1",
+      "gate": "API-01",
+      "command": "uv run pytest tests/contract/test_agent_console_api.py -q",
+      "owner": "api",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AO-R1-S5.json"
+    },
+    {
+      "id": "AO-R2-S1",
+      "source": "specs/agent-action-orchestration/spec.md",
+      "requirement": "R2",
+      "gate": "API-01",
+      "command": "uv run pytest tests/contract/test_agent_console_api.py -q",
+      "owner": "api",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AO-R2-S1.json"
+    },
+    {
+      "id": "AO-R2-S2",
+      "source": "specs/agent-action-orchestration/spec.md",
+      "requirement": "R2",
+      "gate": "API-01",
+      "command": "uv run pytest tests/contract/test_agent_console_api.py -q",
+      "owner": "api",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AO-R2-S2.json"
+    },
+    {
+      "id": "AO-R2-S3",
+      "source": "specs/agent-action-orchestration/spec.md",
+      "requirement": "R2",
+      "gate": "API-01",
+      "command": "uv run pytest tests/contract/test_agent_console_api.py -q",
+      "owner": "api",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AO-R2-S3.json"
+    },
+    {
+      "id": "AO-R3-S1",
+      "source": "specs/agent-action-orchestration/spec.md",
+      "requirement": "R3",
+      "gate": "DB-01",
+      "command": "CAREEROPS_TEST_DATABASE_URL=<disposable-url> make verify-db",
+      "owner": "database",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AO-R3-S1.json"
+    },
+    {
+      "id": "AO-R3-S2",
+      "source": "specs/agent-action-orchestration/spec.md",
+      "requirement": "R3",
+      "gate": "DB-01",
+      "command": "CAREEROPS_TEST_DATABASE_URL=<disposable-url> make verify-db",
+      "owner": "database",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AO-R3-S2.json"
+    },
+    {
+      "id": "AO-R3-S3",
+      "source": "specs/agent-action-orchestration/spec.md",
+      "requirement": "R3",
+      "gate": "DB-01",
+      "command": "CAREEROPS_TEST_DATABASE_URL=<disposable-url> make verify-db",
+      "owner": "database",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AO-R3-S3.json"
+    },
+    {
+      "id": "AO-R4-S1",
+      "source": "specs/agent-action-orchestration/spec.md",
+      "requirement": "R4",
+      "gate": "UX-01",
+      "command": "make verify-frontend",
+      "owner": "frontend",
+      "route": "/dashboard",
+      "viewports": [
+        "1440x900",
+        "375x812"
+      ],
+      "evidence": "artifacts/ego/AO-R4-S1.json"
+    },
+    {
+      "id": "AO-R4-S2",
+      "source": "specs/agent-action-orchestration/spec.md",
+      "requirement": "R4",
+      "gate": "UX-01",
+      "command": "make verify-frontend",
+      "owner": "frontend",
+      "route": "/dashboard",
+      "viewports": [
+        "1440x900",
+        "375x812"
+      ],
+      "evidence": "artifacts/ego/AO-R4-S2.json"
+    },
+    {
+      "id": "AO-R5-S1",
+      "source": "specs/agent-action-orchestration/spec.md",
+      "requirement": "R5",
+      "gate": "API-01",
+      "command": "uv run pytest tests/contract/test_agent_console_api.py -q",
+      "owner": "api",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AO-R5-S1.json"
+    },
+    {
+      "id": "AO-R5-S2",
+      "source": "specs/agent-action-orchestration/spec.md",
+      "requirement": "R5",
+      "gate": "API-01",
+      "command": "uv run pytest tests/contract/test_agent_console_api.py -q",
+      "owner": "api",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AO-R5-S2.json"
+    },
+    {
+      "id": "AO-R5-S3",
+      "source": "specs/agent-action-orchestration/spec.md",
+      "requirement": "R5",
+      "gate": "API-01",
+      "command": "uv run pytest tests/contract/test_agent_console_api.py -q",
+      "owner": "api",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AO-R5-S3.json"
+    },
+    {
+      "id": "AO-R6-S1",
+      "source": "specs/agent-action-orchestration/spec.md",
+      "requirement": "R6",
+      "gate": "API-01",
+      "command": "uv run pytest tests/contract/test_agent_console_api.py -q",
+      "owner": "api",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AO-R6-S1.json"
+    },
+    {
+      "id": "AO-R6-S2",
+      "source": "specs/agent-action-orchestration/spec.md",
+      "requirement": "R6",
+      "gate": "API-01",
+      "command": "uv run pytest tests/contract/test_agent_console_api.py -q",
+      "owner": "api",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AO-R6-S2.json"
+    },
+    {
+      "id": "AO-R6-S3",
+      "source": "specs/agent-action-orchestration/spec.md",
+      "requirement": "R6",
+      "gate": "API-01",
+      "command": "uv run pytest tests/contract/test_agent_console_api.py -q",
+      "owner": "api",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AO-R6-S3.json"
+    },
+    {
+      "id": "AO-R7-S1",
+      "source": "specs/agent-action-orchestration/spec.md",
+      "requirement": "R7",
+      "gate": "A11Y-01",
+      "command": "uv run pytest frontend/tests/accessibility -q",
+      "owner": "frontend-accessibility",
+      "route": "/dashboard",
+      "viewports": [
+        "1440x900",
+        "375x812"
+      ],
+      "evidence": "artifacts/ego/AO-R7-S1.json"
+    },
+    {
+      "id": "AO-R7-S2",
+      "source": "specs/agent-action-orchestration/spec.md",
+      "requirement": "R7",
+      "gate": "A11Y-01",
+      "command": "uv run pytest frontend/tests/accessibility -q",
+      "owner": "frontend-accessibility",
+      "route": "/dashboard",
+      "viewports": [
+        "1440x900",
+        "375x812"
+      ],
+      "evidence": "artifacts/ego/AO-R7-S2.json"
+    },
+    {
+      "id": "AR-M1-S1",
+      "source": "specs/agent-run-observability/spec.md",
+      "requirement": "M1",
+      "gate": "DB-01",
+      "command": "CAREEROPS_TEST_DATABASE_URL=<disposable-url> make verify-db",
+      "owner": "database",
+      "route": "/ai-workbench",
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AR-M1-S1.json"
+    },
+    {
+      "id": "AR-R1-S1",
+      "source": "specs/agent-run-observability/spec.md",
+      "requirement": "R1",
+      "gate": "TEMP-01",
+      "command": "make verify-temporal",
+      "owner": "temporal",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AR-R1-S1.json"
+    },
+    {
+      "id": "AR-R1-S2",
+      "source": "specs/agent-run-observability/spec.md",
+      "requirement": "R1",
+      "gate": "TEMP-01",
+      "command": "make verify-temporal",
+      "owner": "temporal",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AR-R1-S2.json"
+    },
+    {
+      "id": "AR-R1-S3",
+      "source": "specs/agent-run-observability/spec.md",
+      "requirement": "R1",
+      "gate": "TEMP-01",
+      "command": "make verify-temporal",
+      "owner": "temporal",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AR-R1-S3.json"
+    },
+    {
+      "id": "AR-R1-S4",
+      "source": "specs/agent-run-observability/spec.md",
+      "requirement": "R1",
+      "gate": "TEMP-01",
+      "command": "make verify-temporal",
+      "owner": "temporal",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AR-R1-S4.json"
+    },
+    {
+      "id": "AR-R2-S1",
+      "source": "specs/agent-run-observability/spec.md",
+      "requirement": "R2",
+      "gate": "TEMP-01",
+      "command": "make verify-temporal",
+      "owner": "temporal",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AR-R2-S1.json"
+    },
+    {
+      "id": "AR-R2-S2",
+      "source": "specs/agent-run-observability/spec.md",
+      "requirement": "R2",
+      "gate": "TEMP-01",
+      "command": "make verify-temporal",
+      "owner": "temporal",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AR-R2-S2.json"
+    },
+    {
+      "id": "AR-R2-S3",
+      "source": "specs/agent-run-observability/spec.md",
+      "requirement": "R2",
+      "gate": "TEMP-01",
+      "command": "make verify-temporal",
+      "owner": "temporal",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AR-R2-S3.json"
+    },
+    {
+      "id": "AR-R3-S1",
+      "source": "specs/agent-run-observability/spec.md",
+      "requirement": "R3",
+      "gate": "TEMP-01",
+      "command": "make verify-temporal",
+      "owner": "temporal",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AR-R3-S1.json"
+    },
+    {
+      "id": "AR-R3-S2",
+      "source": "specs/agent-run-observability/spec.md",
+      "requirement": "R3",
+      "gate": "TEMP-01",
+      "command": "make verify-temporal",
+      "owner": "temporal",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AR-R3-S2.json"
+    },
+    {
+      "id": "AR-R3-S3",
+      "source": "specs/agent-run-observability/spec.md",
+      "requirement": "R3",
+      "gate": "TEMP-01",
+      "command": "make verify-temporal",
+      "owner": "temporal",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AR-R3-S3.json"
+    },
+    {
+      "id": "AR-R3-S4",
+      "source": "specs/agent-run-observability/spec.md",
+      "requirement": "R3",
+      "gate": "TEMP-01",
+      "command": "make verify-temporal",
+      "owner": "temporal",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AR-R3-S4.json"
+    },
+    {
+      "id": "AR-R3-S5",
+      "source": "specs/agent-run-observability/spec.md",
+      "requirement": "R3",
+      "gate": "TEMP-01",
+      "command": "make verify-temporal",
+      "owner": "temporal",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AR-R3-S5.json"
+    },
+    {
+      "id": "AR-R4-S1",
+      "source": "specs/agent-run-observability/spec.md",
+      "requirement": "R4",
+      "gate": "API-01",
+      "command": "uv run pytest tests/contract/test_agent_console_api.py -q",
+      "owner": "api",
+      "route": "/ai-workbench",
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AR-R4-S1.json"
+    },
+    {
+      "id": "AR-R4-S2",
+      "source": "specs/agent-run-observability/spec.md",
+      "requirement": "R4",
+      "gate": "API-01",
+      "command": "uv run pytest tests/contract/test_agent_console_api.py -q",
+      "owner": "api",
+      "route": "/ai-workbench",
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AR-R4-S2.json"
+    },
+    {
+      "id": "AR-R5-S1",
+      "source": "specs/agent-run-observability/spec.md",
+      "requirement": "R5",
+      "gate": "DB-01",
+      "command": "CAREEROPS_TEST_DATABASE_URL=<disposable-url> make verify-db",
+      "owner": "database",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AR-R5-S1.json"
+    },
+    {
+      "id": "AR-R5-S2",
+      "source": "specs/agent-run-observability/spec.md",
+      "requirement": "R5",
+      "gate": "DB-01",
+      "command": "CAREEROPS_TEST_DATABASE_URL=<disposable-url> make verify-db",
+      "owner": "database",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AR-R5-S2.json"
+    },
+    {
+      "id": "AR-R6-S1",
+      "source": "specs/agent-run-observability/spec.md",
+      "requirement": "R6",
+      "gate": "OPS-01",
+      "command": "uv run pytest tests/contract/test_agent_console_operations.py -q",
+      "owner": "release-operations",
+      "route": "/ai-workbench",
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AR-R6-S1.json"
+    },
+    {
+      "id": "AR-R6-S2",
+      "source": "specs/agent-run-observability/spec.md",
+      "requirement": "R6",
+      "gate": "OPS-01",
+      "command": "uv run pytest tests/contract/test_agent_console_operations.py -q",
+      "owner": "release-operations",
+      "route": "/ai-workbench",
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AR-R6-S2.json"
+    },
+    {
+      "id": "AR-R6-S3",
+      "source": "specs/agent-run-observability/spec.md",
+      "requirement": "R6",
+      "gate": "OPS-01",
+      "command": "uv run pytest tests/contract/test_agent_console_operations.py -q",
+      "owner": "release-operations",
+      "route": "/ai-workbench",
+      "viewports": null,
+      "evidence": "artifacts/agent-console/AR-R6-S3.json"
+    },
+    {
+      "id": "LL-M1-S1",
+      "source": "specs/truthful-llm-interaction/spec.md",
+      "requirement": "M1",
+      "gate": "MODEL-01",
+      "command": "uv run pytest tests/unit/test_model_egress_policy.py -q",
+      "owner": "model-gateway",
+      "route": "/profile",
+      "viewports": null,
+      "evidence": "artifacts/agent-console/LL-M1-S1.json"
+    },
+    {
+      "id": "LL-R1-S1",
+      "source": "specs/truthful-llm-interaction/spec.md",
+      "requirement": "R1",
+      "gate": "MODEL-01",
+      "command": "uv run pytest tests/unit/test_model_egress_policy.py -q",
+      "owner": "model-gateway",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/LL-R1-S1.json"
+    },
+    {
+      "id": "LL-R1-S2",
+      "source": "specs/truthful-llm-interaction/spec.md",
+      "requirement": "R1",
+      "gate": "MODEL-01",
+      "command": "uv run pytest tests/unit/test_model_egress_policy.py -q",
+      "owner": "model-gateway",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/LL-R1-S2.json"
+    },
+    {
+      "id": "LL-R1-S3",
+      "source": "specs/truthful-llm-interaction/spec.md",
+      "requirement": "R1",
+      "gate": "MODEL-01",
+      "command": "uv run pytest tests/unit/test_model_egress_policy.py -q",
+      "owner": "model-gateway",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/LL-R1-S3.json"
+    },
+    {
+      "id": "LL-R1-S4",
+      "source": "specs/truthful-llm-interaction/spec.md",
+      "requirement": "R1",
+      "gate": "MODEL-01",
+      "command": "uv run pytest tests/unit/test_model_egress_policy.py -q",
+      "owner": "model-gateway",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/LL-R1-S4.json"
+    },
+    {
+      "id": "LL-R2-S1",
+      "source": "specs/truthful-llm-interaction/spec.md",
+      "requirement": "R2",
+      "gate": "MODEL-01",
+      "command": "uv run pytest tests/unit/test_model_egress_policy.py -q",
+      "owner": "model-gateway",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/LL-R2-S1.json"
+    },
+    {
+      "id": "LL-R2-S2",
+      "source": "specs/truthful-llm-interaction/spec.md",
+      "requirement": "R2",
+      "gate": "MODEL-01",
+      "command": "uv run pytest tests/unit/test_model_egress_policy.py -q",
+      "owner": "model-gateway",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/LL-R2-S2.json"
+    },
+    {
+      "id": "LL-R2-S3",
+      "source": "specs/truthful-llm-interaction/spec.md",
+      "requirement": "R2",
+      "gate": "MODEL-01",
+      "command": "uv run pytest tests/unit/test_model_egress_policy.py -q",
+      "owner": "model-gateway",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/LL-R2-S3.json"
+    },
+    {
+      "id": "LL-R2-S4",
+      "source": "specs/truthful-llm-interaction/spec.md",
+      "requirement": "R2",
+      "gate": "MODEL-01",
+      "command": "uv run pytest tests/unit/test_model_egress_policy.py -q",
+      "owner": "model-gateway",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/LL-R2-S4.json"
+    },
+    {
+      "id": "LL-R3-S1",
+      "source": "specs/truthful-llm-interaction/spec.md",
+      "requirement": "R3",
+      "gate": "MODEL-01",
+      "command": "uv run pytest tests/unit/test_model_egress_policy.py -q",
+      "owner": "model-gateway",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/LL-R3-S1.json"
+    },
+    {
+      "id": "LL-R3-S2",
+      "source": "specs/truthful-llm-interaction/spec.md",
+      "requirement": "R3",
+      "gate": "MODEL-01",
+      "command": "uv run pytest tests/unit/test_model_egress_policy.py -q",
+      "owner": "model-gateway",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/LL-R3-S2.json"
+    },
+    {
+      "id": "LL-R3-S3",
+      "source": "specs/truthful-llm-interaction/spec.md",
+      "requirement": "R3",
+      "gate": "MODEL-01",
+      "command": "uv run pytest tests/unit/test_model_egress_policy.py -q",
+      "owner": "model-gateway",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/LL-R3-S3.json"
+    },
+    {
+      "id": "LL-R4-S1",
+      "source": "specs/truthful-llm-interaction/spec.md",
+      "requirement": "R4",
+      "gate": "MODEL-01",
+      "command": "uv run pytest tests/unit/test_model_egress_policy.py -q",
+      "owner": "model-gateway",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/LL-R4-S1.json"
+    },
+    {
+      "id": "LL-R4-S2",
+      "source": "specs/truthful-llm-interaction/spec.md",
+      "requirement": "R4",
+      "gate": "MODEL-01",
+      "command": "uv run pytest tests/unit/test_model_egress_policy.py -q",
+      "owner": "model-gateway",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/LL-R4-S2.json"
+    },
+    {
+      "id": "LL-R4-S3",
+      "source": "specs/truthful-llm-interaction/spec.md",
+      "requirement": "R4",
+      "gate": "MODEL-01",
+      "command": "uv run pytest tests/unit/test_model_egress_policy.py -q",
+      "owner": "model-gateway",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/LL-R4-S3.json"
+    },
+    {
+      "id": "LL-R4-S4",
+      "source": "specs/truthful-llm-interaction/spec.md",
+      "requirement": "R4",
+      "gate": "MODEL-01",
+      "command": "uv run pytest tests/unit/test_model_egress_policy.py -q",
+      "owner": "model-gateway",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/LL-R4-S4.json"
+    },
+    {
+      "id": "LL-R5-S1",
+      "source": "specs/truthful-llm-interaction/spec.md",
+      "requirement": "R5",
+      "gate": "UX-01",
+      "command": "make verify-frontend",
+      "owner": "frontend",
+      "route": "/ai-workbench",
+      "viewports": [
+        "1440x900",
+        "375x812"
+      ],
+      "evidence": "artifacts/ego/LL-R5-S1.json"
+    },
+    {
+      "id": "LL-R5-S2",
+      "source": "specs/truthful-llm-interaction/spec.md",
+      "requirement": "R5",
+      "gate": "UX-01",
+      "command": "make verify-frontend",
+      "owner": "frontend",
+      "route": "/ai-workbench",
+      "viewports": [
+        "1440x900",
+        "375x812"
+      ],
+      "evidence": "artifacts/ego/LL-R5-S2.json"
+    },
+    {
+      "id": "LL-R5-S3",
+      "source": "specs/truthful-llm-interaction/spec.md",
+      "requirement": "R5",
+      "gate": "UX-01",
+      "command": "make verify-frontend",
+      "owner": "frontend",
+      "route": "/ai-workbench",
+      "viewports": [
+        "1440x900",
+        "375x812"
+      ],
+      "evidence": "artifacts/ego/LL-R5-S3.json"
+    },
+    {
+      "id": "LL-R5-S4",
+      "source": "specs/truthful-llm-interaction/spec.md",
+      "requirement": "R5",
+      "gate": "UX-01",
+      "command": "make verify-frontend",
+      "owner": "frontend",
+      "route": "/ai-workbench",
+      "viewports": [
+        "1440x900",
+        "375x812"
+      ],
+      "evidence": "artifacts/ego/LL-R5-S4.json"
+    },
+    {
+      "id": "LL-R6-S1",
+      "source": "specs/truthful-llm-interaction/spec.md",
+      "requirement": "R6",
+      "gate": "OPS-01",
+      "command": "uv run pytest tests/contract/test_agent_console_operations.py -q",
+      "owner": "release-operations",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/LL-R6-S1.json"
+    },
+    {
+      "id": "LL-R6-S2",
+      "source": "specs/truthful-llm-interaction/spec.md",
+      "requirement": "R6",
+      "gate": "OPS-01",
+      "command": "uv run pytest tests/contract/test_agent_console_operations.py -q",
+      "owner": "release-operations",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/LL-R6-S2.json"
+    },
+    {
+      "id": "LL-R7-S1",
+      "source": "specs/truthful-llm-interaction/spec.md",
+      "requirement": "R7",
+      "gate": "MODEL-01",
+      "command": "uv run pytest tests/unit/test_model_egress_policy.py -q",
+      "owner": "model-gateway",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/LL-R7-S1.json"
+    },
+    {
+      "id": "LL-R7-S2",
+      "source": "specs/truthful-llm-interaction/spec.md",
+      "requirement": "R7",
+      "gate": "MODEL-01",
+      "command": "uv run pytest tests/unit/test_model_egress_policy.py -q",
+      "owner": "model-gateway",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/LL-R7-S2.json"
+    },
+    {
+      "id": "LL-R8-S1",
+      "source": "specs/truthful-llm-interaction/spec.md",
+      "requirement": "R8",
+      "gate": "UX-01",
+      "command": "make verify-frontend",
+      "owner": "frontend",
+      "route": "/ai-workbench",
+      "viewports": [
+        "1440x900",
+        "375x812"
+      ],
+      "evidence": "artifacts/ego/LL-R8-S1.json"
+    },
+    {
+      "id": "LL-R8-S2",
+      "source": "specs/truthful-llm-interaction/spec.md",
+      "requirement": "R8",
+      "gate": "UX-01",
+      "command": "make verify-frontend",
+      "owner": "frontend",
+      "route": "/ai-workbench",
+      "viewports": [
+        "1440x900",
+        "375x812"
+      ],
+      "evidence": "artifacts/ego/LL-R8-S2.json"
+    },
+    {
+      "id": "LL-R9-S1",
+      "source": "specs/truthful-llm-interaction/spec.md",
+      "requirement": "R9",
+      "gate": "MODEL-01",
+      "command": "uv run pytest tests/unit/test_model_egress_policy.py -q",
+      "owner": "model-gateway",
+      "route": "/ai-workbench",
+      "viewports": null,
+      "evidence": "artifacts/agent-console/LL-R9-S1.json"
+    },
+    {
+      "id": "LL-R9-S2",
+      "source": "specs/truthful-llm-interaction/spec.md",
+      "requirement": "R9",
+      "gate": "MODEL-01",
+      "command": "uv run pytest tests/unit/test_model_egress_policy.py -q",
+      "owner": "model-gateway",
+      "route": "/ai-workbench",
+      "viewports": null,
+      "evidence": "artifacts/agent-console/LL-R9-S2.json"
+    },
+    {
+      "id": "CL-M1-S1",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "M1",
+      "gate": "UX-01",
+      "command": "make verify-frontend",
+      "owner": "frontend",
+      "route": "/dashboard",
+      "viewports": [
+        "1440x900",
+        "375x812"
+      ],
+      "evidence": "artifacts/ego/CL-M1-S1.json"
+    },
+    {
+      "id": "CL-R1-S1",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R1",
+      "gate": "CRAWL-01",
+      "command": "make verify-compose",
+      "owner": "crawl",
+      "route": "/crawl-plans",
+      "viewports": null,
+      "evidence": "artifacts/agent-console/CL-R1-S1.json"
+    },
+    {
+      "id": "CL-R1-S2",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R1",
+      "gate": "CRAWL-01",
+      "command": "make verify-compose",
+      "owner": "crawl",
+      "route": "/crawl-plans",
+      "viewports": null,
+      "evidence": "artifacts/agent-console/CL-R1-S2.json"
+    },
+    {
+      "id": "CL-R1-S3",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R1",
+      "gate": "CRAWL-01",
+      "command": "make verify-compose",
+      "owner": "crawl",
+      "route": "/crawl-plans",
+      "viewports": null,
+      "evidence": "artifacts/agent-console/CL-R1-S3.json"
+    },
+    {
+      "id": "CL-R1-S4",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R1",
+      "gate": "CRAWL-01",
+      "command": "make verify-compose",
+      "owner": "crawl",
+      "route": "/crawl-plans",
+      "viewports": null,
+      "evidence": "artifacts/agent-console/CL-R1-S4.json"
+    },
+    {
+      "id": "CL-R2-S1",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R2",
+      "gate": "CRAWL-02",
+      "command": "uv run pytest tests/integration/test_crawl_browser_boundary.py -q",
+      "owner": "browser-boundary",
+      "route": "/inbox",
+      "viewports": null,
+      "evidence": "artifacts/agent-console/CL-R2-S1.json"
+    },
+    {
+      "id": "CL-R2-S2",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R2",
+      "gate": "CRAWL-02",
+      "command": "uv run pytest tests/integration/test_crawl_browser_boundary.py -q",
+      "owner": "browser-boundary",
+      "route": "/inbox",
+      "viewports": null,
+      "evidence": "artifacts/agent-console/CL-R2-S2.json"
+    },
+    {
+      "id": "CL-R2-S3",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R2",
+      "gate": "CRAWL-02",
+      "command": "uv run pytest tests/integration/test_crawl_browser_boundary.py -q",
+      "owner": "browser-boundary",
+      "route": "/inbox",
+      "viewports": null,
+      "evidence": "artifacts/agent-console/CL-R2-S3.json"
+    },
+    {
+      "id": "CL-R2-S4",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R2",
+      "gate": "CRAWL-02",
+      "command": "uv run pytest tests/integration/test_crawl_browser_boundary.py -q",
+      "owner": "browser-boundary",
+      "route": "/inbox",
+      "viewports": null,
+      "evidence": "artifacts/agent-console/CL-R2-S4.json"
+    },
+    {
+      "id": "CL-R2-S5",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R2",
+      "gate": "CRAWL-02",
+      "command": "uv run pytest tests/integration/test_crawl_browser_boundary.py -q",
+      "owner": "browser-boundary",
+      "route": "/inbox",
+      "viewports": null,
+      "evidence": "artifacts/agent-console/CL-R2-S5.json"
+    },
+    {
+      "id": "CL-R2-S6",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R2",
+      "gate": "CRAWL-02",
+      "command": "uv run pytest tests/integration/test_crawl_browser_boundary.py -q",
+      "owner": "browser-boundary",
+      "route": "/inbox",
+      "viewports": null,
+      "evidence": "artifacts/agent-console/CL-R2-S6.json"
+    },
+    {
+      "id": "CL-R2-S7",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R2",
+      "gate": "CRAWL-02",
+      "command": "uv run pytest tests/integration/test_crawl_browser_boundary.py -q",
+      "owner": "browser-boundary",
+      "route": "/inbox",
+      "viewports": null,
+      "evidence": "artifacts/agent-console/CL-R2-S7.json"
+    },
+    {
+      "id": "CL-R3-S1",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R3",
+      "gate": "MODEL-01",
+      "command": "uv run pytest tests/unit/test_model_egress_policy.py -q",
+      "owner": "model-gateway",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/CL-R3-S1.json"
+    },
+    {
+      "id": "CL-R3-S2",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R3",
+      "gate": "MODEL-01",
+      "command": "uv run pytest tests/unit/test_model_egress_policy.py -q",
+      "owner": "model-gateway",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/CL-R3-S2.json"
+    },
+    {
+      "id": "CL-R3-S3",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R3",
+      "gate": "MODEL-01",
+      "command": "uv run pytest tests/unit/test_model_egress_policy.py -q",
+      "owner": "model-gateway",
+      "route": null,
+      "viewports": null,
+      "evidence": "artifacts/agent-console/CL-R3-S3.json"
+    },
+    {
+      "id": "CL-R4-S1",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R4",
+      "gate": "UX-01",
+      "command": "make verify-frontend",
+      "owner": "frontend",
+      "route": "/ai-workbench",
+      "viewports": [
+        "1440x900",
+        "375x812"
+      ],
+      "evidence": "artifacts/ego/CL-R4-S1.json"
+    },
+    {
+      "id": "CL-R4-S2",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R4",
+      "gate": "UX-01",
+      "command": "make verify-frontend",
+      "owner": "frontend",
+      "route": "/ai-workbench",
+      "viewports": [
+        "1440x900",
+        "375x812"
+      ],
+      "evidence": "artifacts/ego/CL-R4-S2.json"
+    },
+    {
+      "id": "CL-R4-S3",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R4",
+      "gate": "UX-01",
+      "command": "make verify-frontend",
+      "owner": "frontend",
+      "route": "/ai-workbench",
+      "viewports": [
+        "1440x900",
+        "375x812"
+      ],
+      "evidence": "artifacts/ego/CL-R4-S3.json"
+    },
+    {
+      "id": "CL-R4-S4",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R4",
+      "gate": "UX-01",
+      "command": "make verify-frontend",
+      "owner": "frontend",
+      "route": "/ai-workbench",
+      "viewports": [
+        "1440x900",
+        "375x812"
+      ],
+      "evidence": "artifacts/ego/CL-R4-S4.json"
+    },
+    {
+      "id": "CL-R4-S5",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R4",
+      "gate": "UX-01",
+      "command": "make verify-frontend",
+      "owner": "frontend",
+      "route": "/ai-workbench",
+      "viewports": [
+        "1440x900",
+        "375x812"
+      ],
+      "evidence": "artifacts/ego/CL-R4-S5.json"
+    },
+    {
+      "id": "CL-R5-S1",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R5",
+      "gate": "API-01",
+      "command": "uv run pytest tests/contract/test_agent_console_api.py -q",
+      "owner": "api",
+      "route": "/applications",
+      "viewports": null,
+      "evidence": "artifacts/agent-console/CL-R5-S1.json"
+    },
+    {
+      "id": "CL-R5-S2",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R5",
+      "gate": "API-01",
+      "command": "uv run pytest tests/contract/test_agent_console_api.py -q",
+      "owner": "api",
+      "route": "/applications",
+      "viewports": null,
+      "evidence": "artifacts/agent-console/CL-R5-S2.json"
+    },
+    {
+      "id": "CL-R5-S3",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R5",
+      "gate": "API-01",
+      "command": "uv run pytest tests/contract/test_agent_console_api.py -q",
+      "owner": "api",
+      "route": "/applications",
+      "viewports": null,
+      "evidence": "artifacts/agent-console/CL-R5-S3.json"
+    },
+    {
+      "id": "CL-R5-S4",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R5",
+      "gate": "API-01",
+      "command": "uv run pytest tests/contract/test_agent_console_api.py -q",
+      "owner": "api",
+      "route": "/applications",
+      "viewports": null,
+      "evidence": "artifacts/agent-console/CL-R5-S4.json"
+    },
+    {
+      "id": "CL-R6-S1",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R6",
+      "gate": "TEMP-01",
+      "command": "make verify-temporal",
+      "owner": "temporal",
+      "route": "/applications",
+      "viewports": null,
+      "evidence": "artifacts/agent-console/CL-R6-S1.json"
+    },
+    {
+      "id": "CL-R6-S2",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R6",
+      "gate": "TEMP-01",
+      "command": "make verify-temporal",
+      "owner": "temporal",
+      "route": "/applications",
+      "viewports": null,
+      "evidence": "artifacts/agent-console/CL-R6-S2.json"
+    },
+    {
+      "id": "CL-R7-S1",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R7",
+      "gate": "A11Y-01",
+      "command": "uv run pytest frontend/tests/accessibility -q",
+      "owner": "frontend-accessibility",
+      "route": "/login",
+      "viewports": [
+        "1440x900",
+        "375x812"
+      ],
+      "evidence": "artifacts/ego/CL-R7-S1.json"
+    },
+    {
+      "id": "CL-R7-S2",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R7",
+      "gate": "A11Y-01",
+      "command": "uv run pytest frontend/tests/accessibility -q",
+      "owner": "frontend-accessibility",
+      "route": "/login",
+      "viewports": [
+        "1440x900",
+        "375x812"
+      ],
+      "evidence": "artifacts/ego/CL-R7-S2.json"
+    },
+    {
+      "id": "CL-R8-S1",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R8",
+      "gate": "API-01",
+      "command": "uv run pytest tests/contract/test_agent_console_api.py -q",
+      "owner": "api",
+      "route": "/applications",
+      "viewports": null,
+      "evidence": "artifacts/agent-console/CL-R8-S1.json"
+    },
+    {
+      "id": "CL-R8-S2",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R8",
+      "gate": "API-01",
+      "command": "uv run pytest tests/contract/test_agent_console_api.py -q",
+      "owner": "api",
+      "route": "/applications",
+      "viewports": null,
+      "evidence": "artifacts/agent-console/CL-R8-S2.json"
+    },
+    {
+      "id": "CL-R9-S1",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R9",
+      "gate": "UX-01",
+      "command": "make verify-frontend",
+      "owner": "frontend",
+      "route": "/dashboard",
+      "viewports": [
+        "1440x900",
+        "375x812"
+      ],
+      "evidence": "artifacts/ego/CL-R9-S1.json"
+    },
+    {
+      "id": "CL-R9-S2",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R9",
+      "gate": "UX-01",
+      "command": "make verify-frontend",
+      "owner": "frontend",
+      "route": "/dashboard",
+      "viewports": [
+        "1440x900",
+        "375x812"
+      ],
+      "evidence": "artifacts/ego/CL-R9-S2.json"
+    },
+    {
+      "id": "CL-R9-S3",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R9",
+      "gate": "UX-01",
+      "command": "make verify-frontend",
+      "owner": "frontend",
+      "route": "/dashboard",
+      "viewports": [
+        "1440x900",
+        "375x812"
+      ],
+      "evidence": "artifacts/ego/CL-R9-S3.json"
+    },
+    {
+      "id": "CL-R9-S4",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R9",
+      "gate": "UX-01",
+      "command": "make verify-frontend",
+      "owner": "frontend",
+      "route": "/dashboard",
+      "viewports": [
+        "1440x900",
+        "375x812"
+      ],
+      "evidence": "artifacts/ego/CL-R9-S4.json"
+    },
+    {
+      "id": "CL-R9-S5",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R9",
+      "gate": "UX-01",
+      "command": "make verify-frontend",
+      "owner": "frontend",
+      "route": "/dashboard",
+      "viewports": [
+        "1440x900",
+        "375x812"
+      ],
+      "evidence": "artifacts/ego/CL-R9-S5.json"
+    },
+    {
+      "id": "CL-R9-S6",
+      "source": "specs/career-loop-experience/spec.md",
+      "requirement": "R9",
+      "gate": "UX-01",
+      "command": "make verify-frontend",
+      "owner": "frontend",
+      "route": "/dashboard",
+      "viewports": [
+        "1440x900",
+        "375x812"
+      ],
+      "evidence": "artifacts/ego/CL-R9-S6.json"
+    }
+  ]
+}

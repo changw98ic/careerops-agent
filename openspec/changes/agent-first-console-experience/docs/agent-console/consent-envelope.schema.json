@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://careerops.local/schemas/agent-console/consent-envelope.json",
+  "x-validation": [
+    "expires_at equals granted_at plus ttl_seconds",
+    "ttl_seconds is exactly 900",
+    "revoked_at is null or is on/after granted_at"
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["consent_id", "candidate_id", "operation", "source_digests", "field_set_hash", "provider_policy_id", "provider_policy_version", "granted_at", "expires_at", "ttl_seconds", "revoked_at", "nonce"],
+  "properties": {
+    "consent_id": {"type": "string", "format": "uuid"},
+    "candidate_id": {"type": "string", "format": "uuid"},
+    "operation": {"enum": ["job_matching", "resume_review", "interview_preparation", "smart_form_intake"]},
+    "source_digests": {"type": "array", "minItems": 1, "maxItems": 50, "items": {"type": "object", "additionalProperties": false, "required": ["type", "id", "version", "sha256"], "properties": {"type": {"type": "string", "maxLength": 64}, "id": {"type": "string", "format": "uuid"}, "version": {"type": "string", "maxLength": 128}, "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}}},
+    "field_set_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "provider_policy_id": {"type": "string", "format": "uuid"},
+    "provider_policy_version": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$"},
+    "granted_at": {"type": "string", "format": "date-time"},
+    "expires_at": {"type": "string", "format": "date-time"},
+    "ttl_seconds": {"type": "integer", "const": 900},
+    "revoked_at": {"type": ["string", "null"], "format": "date-time"},
+    "nonce": {"type": "string", "pattern": "^[A-Za-z0-9_-]{32,128}$"}
+  }
+}

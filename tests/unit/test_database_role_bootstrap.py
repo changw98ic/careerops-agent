@@ -9,6 +9,8 @@ EXPECTED_CAPABILITY_ROLES = {
     "careerops_readonly",
     "careerops_retention",
     "careerops_side_effect",
+    "careerops_worker",
+    "careerops_legacy_agent",
 }
 
 BOOTSTRAP_PATH = (

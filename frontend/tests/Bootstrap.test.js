@@ -55,8 +55,8 @@ describe('Bootstrap.vue', () => {
 
   it('renders the bootstrap form', () => {
     const wrapper = mountBootstrap()
-    expect(wrapper.text()).toContain('Set up your account')
-    expect(wrapper.text()).toContain('Create account')
+    expect(wrapper.text()).toContain('初始化账号')
+    expect(wrapper.text()).toContain('创建账号')
   })
 
   it('formValid is false when fields are empty', () => {
@@ -104,19 +104,34 @@ describe('Bootstrap.vue', () => {
     expect(vm.formValid).toBe(false)
   })
 
-  it('calls bootstrap and redirects on success', async () => {
+  it('completes setup and clears credentials on success', async () => {
     mockBootstrap.mockResolvedValueOnce()
     const wrapper = mountBootstrap()
     const vm = wrapper.vm
     vm.formData.bootstrap_token = 'tok123'
     vm.formData.username = 'admin'
-    vm.formData.password = 'password123'
-    vm.formData.confirm_password = 'password123'
+    vm.formData.password = 'password1234'
+    vm.formData.confirm_password = 'password1234'
 
     await vm.doBootstrap()
 
-    expect(mockBootstrap).toHaveBeenCalledWith('tok123', 'admin', 'password123')
-    expect(mockPush).toHaveBeenCalledWith({ name: 'dashboard' })
+    expect(mockBootstrap).toHaveBeenCalledWith('tok123', 'admin', 'password1234')
+    expect(vm.setupComplete).toBe(true)
+    expect(vm.formData).toEqual({
+      bootstrap_token: '',
+      username: '',
+      password: '',
+      confirm_password: '',
+    })
+    expect(mockPush).not.toHaveBeenCalled()
+  })
+
+  it('returns to login after setup is complete', async () => {
+    const wrapper = mountBootstrap()
+
+    wrapper.vm.goToLogin()
+
+    expect(mockPush).toHaveBeenCalledWith({ name: 'login' })
   })
 
   it('displays mapped error on INVALID_BOOTSTRAP_CREDENTIAL', async () => {
@@ -132,7 +147,7 @@ describe('Bootstrap.vue', () => {
     vm.formData.confirm_password = 'password123'
 
     await vm.doBootstrap()
-    expect(vm.error).toBe('Bootstrap token is invalid or expired.')
+    expect(vm.error).toBe('引导令牌无效或已过期。')
   })
 
   it('displays mapped error on BOOTSTRAP_CLOSED', async () => {
@@ -147,7 +162,7 @@ describe('Bootstrap.vue', () => {
     wrapper.vm.formData.confirm_password = 'password123'
 
     await wrapper.vm.doBootstrap()
-    expect(wrapper.vm.error).toBe('An account already exists. Bootstrap is closed.')
+    expect(wrapper.vm.error).toBe('账号已存在，引导已关闭。')
   })
 
   it('sets loading state during bootstrap', async () => {

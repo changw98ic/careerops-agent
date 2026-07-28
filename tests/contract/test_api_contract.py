@@ -296,6 +296,20 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
         "/api/v1/smart-intake/previews",
         "/api/v1/smart-intake/previews/{preview_id}",
         "/api/v1/smart-intake/previews/{preview_id}/apply",
+        # Agent-console orchestration and preflight routes.
+        "/api/v1/agent-console/actions",
+        "/api/v1/agent-console/actions/{action_key}/accept",
+        "/api/v1/agent-console/actions/{action_key}/snooze",
+        "/api/v1/agent-console/actions/{action_key}/dismiss",
+        "/api/v1/agent-console/actions/{action_key}/complete",
+        "/api/v1/agent-console/contexts",
+        "/api/v1/agent-console/contexts/{context_id}",
+        "/api/v1/agent-console/preflight",
+        "/api/v1/capabilities/agent",
+        # Crawl-plan readiness and scope preview routes.
+        "/api/v1/crawl-plans/readiness",
+        "/api/v1/crawl-plans/empty-state-cta",
+        "/api/v1/crawl-plans/scope-preview",
     }
 
 

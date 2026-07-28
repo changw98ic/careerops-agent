@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://careerops.local/schemas/agent-console/provider-policy.json",
+  "x-validation": [
+    "expires_at is strictly after effective_at",
+    "effective_at <= now < expires_at is required before connection",
+    "deletion_policy.sla_days <= retention_days when retention_days > 0"
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["policy_id", "version", "provider_id", "model_id", "host", "verified_tls", "region", "retention_days", "training_allowed", "deletion_policy", "approved_operations", "approved_fields", "effective_at", "expires_at", "approval_source"],
+  "properties": {
+    "policy_id": {"type": "string", "format": "uuid"},
+    "version": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$"},
+    "provider_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"},
+    "model_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "host": {"type": "string", "pattern": "^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$"},
+    "verified_tls": {"type": "boolean", "const": true},
+    "region": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$"},
+    "retention_days": {"type": "integer", "minimum": 0, "maximum": 30},
+    "training_allowed": {"type": "boolean", "const": false},
+    "deletion_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["known", "supported", "sla_days"],
+      "properties": {
+        "known": {"type": "boolean", "const": true},
+        "supported": {"type": "boolean", "const": true},
+        "sla_days": {"type": "integer", "minimum": 0, "maximum": 30}
+      }
+    },
+    "approved_operations": {"type": "array", "uniqueItems": true, "minItems": 1, "items": {"enum": ["job_matching", "resume_review", "interview_preparation", "smart_form_intake"]}},
+    "approved_fields": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "job_matching": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["job.title", "job.location", "job.requirements", "candidate.target_titles", "candidate.skills", "evidence.claims"]}},
+        "resume_review": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["job.title", "job.location", "job.requirements", "candidate.target_titles", "candidate.skills", "evidence.claims", "resume.presentation_metadata"]}},
+        "interview_preparation": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["job.facts", "evidence.claims", "user.practice_goals"]}},
+        "smart_form_intake": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["intake.text", "intake.target"]}}
+      },
+      "minProperties": 1
+    },
+    "effective_at": {"type": "string", "format": "date-time"},
+    "expires_at": {"type": "string", "format": "date-time"},
+    "approval_source": {"type": "string", "minLength": 1, "maxLength": 256}
+  },
+  "allOf": [
+    {"if": {"properties": {"approved_operations": {"contains": {"const": "job_matching"}}}, "required": ["approved_operations"]}, "then": {"required": ["approved_fields"], "properties": {"approved_fields": {"required": ["job_matching"]}}}},
+    {"if": {"properties": {"approved_operations": {"contains": {"const": "resume_review"}}}, "required": ["approved_operations"]}, "then": {"required": ["approved_fields"], "properties": {"approved_fields": {"required": ["resume_review"]}}}},
+    {"if": {"properties": {"approved_operations": {"contains": {"const": "interview_preparation"}}}, "required": ["approved_operations"]}, "then": {"required": ["approved_fields"], "properties": {"approved_fields": {"required": ["interview_preparation"]}}}},
+    {"if": {"properties": {"approved_operations": {"contains": {"const": "smart_form_intake"}}}, "required": ["approved_operations"]}, "then": {"required": ["approved_fields"], "properties": {"approved_fields": {"required": ["smart_form_intake"]}}}},
+    {"if": {"properties": {"approved_operations": {"not": {"contains": {"const": "job_matching"}}}}, "required": ["approved_operations"]}, "then": {"properties": {"approved_fields": {"not": {"required": ["job_matching"]}}}}},
+    {"if": {"properties": {"approved_operations": {"not": {"contains": {"const": "resume_review"}}}}, "required": ["approved_operations"]}, "then": {"properties": {"approved_fields": {"not": {"required": ["resume_review"]}}}}},
+    {"if": {"properties": {"approved_operations": {"not": {"contains": {"const": "interview_preparation"}}}}, "required": ["approved_operations"]}, "then": {"properties": {"approved_fields": {"not": {"required": ["interview_preparation"]}}}}},
+    {"if": {"properties": {"approved_operations": {"not": {"contains": {"const": "smart_form_intake"}}}}, "required": ["approved_operations"]}, "then": {"properties": {"approved_fields": {"not": {"required": ["smart_form_intake"]}}}}}
+  ]
+}

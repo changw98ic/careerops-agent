@@ -52,6 +52,27 @@
       </div>
     </section>
 
+    <!-- 行动队列 -->
+    <section class="action-queue-section" data-reveal="fade-up">
+      <div class="action-queue-card">
+        <div class="action-queue-card-outer">
+          <div class="action-queue-card-inner">
+            <ActionQueue
+              :actions="actionQueue"
+              :queue-version="actionQueueVersion"
+              :loading="actionQueueLoading"
+              :error="actionQueueError"
+              empty-message="暂无待办行动"
+              empty-hint="所有行动已完成或暂无新任务"
+              @retry="fetchActionQueue"
+              @refresh="handleActionQueueRefresh"
+              @navigate="handleActionNavigate"
+            />
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- 统计卡片 - Apple 风格 Bento 布局 -->
     <section class="stats-section" data-reveal="fade-up">
       <div class="stats-bento">
@@ -342,6 +363,7 @@ import {
   WarningOutlined,
 } from '@ant-design/icons-vue'
 import { api, formatApiError } from '../api/client.js'
+import ActionQueue from '../components/ActionQueue.vue'
 import DashboardChart from '../components/DashboardChart.vue'
 
 const router = useRouter()
@@ -353,6 +375,12 @@ const jobTotal = ref(0)
 const applicationTotal = ref(0)
 const loading = ref(false)
 const error = ref('')
+
+// Action queue state
+const actionQueue = ref([])
+const actionQueueVersion = ref('')
+const actionQueueLoading = ref(false)
+const actionQueueError = ref('')
 
 // Per-chart error flags
 const chartError = reactive({ status: false, trend: false, funnel: false, timeline: false })
@@ -615,6 +643,35 @@ async function fetchDashboard() {
   }
 }
 
+// ---------- Action queue ----------
+
+let actionQueueRequestId = 0
+
+async function fetchActionQueue() {
+  const requestId = ++actionQueueRequestId
+  actionQueueLoading.value = true
+  actionQueueError.value = ''
+  try {
+    const result = await api.getActionQueue({ limit: 3 })
+    if (requestId !== actionQueueRequestId) return
+    actionQueue.value = Array.isArray(result?.items) ? result.items : []
+    actionQueueVersion.value = result?.queue_version ?? ''
+  } catch (err) {
+    if (requestId !== actionQueueRequestId) return
+    actionQueueError.value = formatApiError(err, '无法加载行动队列，请稍后重试。')
+  } finally {
+    if (requestId === actionQueueRequestId) actionQueueLoading.value = false
+  }
+}
+
+function handleActionNavigate(route) {
+  if (route) router.push(route)
+}
+
+function handleActionQueueRefresh() {
+  fetchActionQueue()
+}
+
 // ---------- Scroll-reveal animation ----------
 
 const prefersReducedMotion = ref(false)
@@ -702,7 +759,7 @@ function observeNewReveals() {
 // ---------- Lifecycle ----------
 
 onMounted(async () => {
-  await fetchDashboard()
+  await Promise.all([fetchDashboard(), fetchActionQueue()])
   await nextTick()
   setupRevealObserver()
 })
@@ -1282,6 +1339,28 @@ onUnmounted(() => {
 }
 
 /* ============================================
+   行动队列
+   ============================================ */
+
+.action-queue-section {
+  margin-bottom: 48px;
+}
+
+.action-queue-card-outer {
+  background: var(--surface-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-xl);
+  padding: 10px;
+}
+
+.action-queue-card-inner {
+  background: var(--surface-primary);
+  border-radius: calc(var(--radius-xl) - 10px);
+  padding: 28px;
+  box-shadow: var(--shadow-md);
+}
+
+/* ============================================
    最近投递
    ============================================ */
 
@@ -1577,6 +1656,10 @@ onUnmounted(() => {
   .chart-header {
     flex-direction: column;
     gap: 16px;
+  }
+
+  .action-queue-card-inner {
+    padding: 20px;
   }
 
   .recent-item-content {

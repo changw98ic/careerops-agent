@@ -14,6 +14,7 @@ from careerops.infrastructure.temporal.activities import (
     OutboxDrainActivities,
     SmokeActivities,
 )
+from careerops.infrastructure.temporal.agent_activities import AgentActivities
 from careerops.infrastructure.temporal.ego_browser_executor import EgoBrowserExecutor
 from careerops.infrastructure.temporal.m1_activities import (
     CrawlActivitySink,
@@ -22,6 +23,7 @@ from careerops.infrastructure.temporal.m1_activities import (
     M1PurgeActivities,
 )
 from careerops.infrastructure.temporal.s5_activities import S5CrawlExecutionActivities
+from careerops.workflows.agent_workflows import AgentRunWorkflow
 from careerops.workflows.m1_workflows import (
     CompanyDiscoveryWorkflow,
     CrawlJobSourceWorkflow,
@@ -143,6 +145,58 @@ async def run_worker(
     )
     await build_worker(
         client, settings, activities=activities, m1_activities=m1_activities, crawl_sink=crawl_sink
+    ).run()
+
+
+def build_agent_worker(
+    client: Client,
+    settings: TemporalWorkerSettings,
+    *,
+    agent_activities: AgentActivities | None = None,
+    max_cached_workflows: int = 1000,
+) -> Worker:
+    """Build a Temporal worker for the ``careerops-agent`` task queue.
+
+    Registers :class:`AgentRunWorkflow` and its five activities.
+    The ``agent_activities`` bundle is injectable for testing; when not
+    provided, the default fail-closed stubs are used.
+    """
+    agent = agent_activities or AgentActivities()
+
+    all_workflows = [AgentRunWorkflow]
+    all_activities: list[_TemporalActivity] = [
+        agent.resolve_agent_context,
+        agent.run_deterministic_stage,
+        agent.invoke_model_stage,
+        agent.persist_agent_stage,
+        agent.reconcile_agent_run,
+    ]
+
+    return Worker(
+        client,
+        task_queue="careerops-agent",
+        identity=settings.identity,
+        workflows=all_workflows,
+        activities=all_activities,
+        max_cached_workflows=max_cached_workflows,
+    )
+
+
+async def run_agent_worker(
+    settings: TemporalWorkerSettings,
+    *,
+    agent_activities: AgentActivities | None = None,
+) -> None:
+    """Run the agent-worker on the ``careerops-agent`` task queue."""
+    client = await Client.connect(
+        settings.target,
+        namespace=settings.namespace,
+        identity=settings.identity,
+    )
+    await build_agent_worker(
+        client,
+        settings,
+        agent_activities=agent_activities,
     ).run()
 
 

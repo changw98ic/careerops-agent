@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://careerops.local/schemas/agent-console/release-gate-evidence.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "gate",
+    "commit",
+    "command",
+    "precondition",
+    "steps",
+    "assertions",
+    "artifact_path",
+    "passed",
+    "score",
+    "trace_id"
+  ],
+  "properties": {
+    "gate": {
+      "enum": ["MODEL-02", "CRAWL-02", "AUTH-02", "DB-02", "AUDIT-02", "TEMP-02", "PRIV-02"]
+    },
+    "commit": {"type": "string", "pattern": "^[0-9a-f]{7,64}$"},
+    "command": {"type": "string", "minLength": 1, "maxLength": 256},
+    "precondition": {"type": "string", "minLength": 1, "maxLength": 512},
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 30,
+      "items": {"type": "string", "maxLength": 512}
+    },
+    "assertions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "items": {"type": "string", "maxLength": 512}
+    },
+    "artifact_path": {
+      "type": "string",
+      "pattern": "^artifacts/agent-console/(MODEL-02|CRAWL-02|AUTH-02|DB-02|AUDIT-02|TEMP-02|PRIV-02)-[0-9a-f]{7,64}\\.json$"
+    },
+    "passed": {"const": true},
+    "score": {"type": "integer", "minimum": 0, "maximum": 100},
+    "failure_code": {
+      "type": ["string", "null"],
+      "pattern": "^[A-Z0-9_]{1,64}$"
+    },
+    "trace_id": {"type": "string", "format": "uuid"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"passed": {"const": true}}, "required": ["passed"]},
+      "then": {"properties": {"score": {"minimum": 95}}}
+    }
+  ],
+  "oneOf": [
+    {"properties": {"gate": {"const": "MODEL-02"}, "artifact_path": {"pattern": "^artifacts/agent-console/MODEL-02-[0-9a-f]{7,64}\\.json$"}}},
+    {"properties": {"gate": {"const": "CRAWL-02"}, "artifact_path": {"pattern": "^artifacts/agent-console/CRAWL-02-[0-9a-f]{7,64}\\.json$"}}},
+    {"properties": {"gate": {"const": "AUTH-02"}, "artifact_path": {"pattern": "^artifacts/agent-console/AUTH-02-[0-9a-f]{7,64}\\.json$"}}},
+    {"properties": {"gate": {"const": "DB-02"}, "artifact_path": {"pattern": "^artifacts/agent-console/DB-02-[0-9a-f]{7,64}\\.json$"}}},
+    {"properties": {"gate": {"const": "AUDIT-02"}, "artifact_path": {"pattern": "^artifacts/agent-console/AUDIT-02-[0-9a-f]{7,64}\\.json$"}}},
+    {"properties": {"gate": {"const": "TEMP-02"}, "artifact_path": {"pattern": "^artifacts/agent-console/TEMP-02-[0-9a-f]{7,64}\\.json$"}}},
+    {"properties": {"gate": {"const": "PRIV-02"}, "artifact_path": {"pattern": "^artifacts/agent-console/PRIV-02-[0-9a-f]{7,64}\\.json$"}}}
+  ],
+  "x-validation": {
+    "artifact_path_commit_suffix_equals": "commit",
+    "artifact_path_gate_prefix_equals": "gate"
+  }
+}

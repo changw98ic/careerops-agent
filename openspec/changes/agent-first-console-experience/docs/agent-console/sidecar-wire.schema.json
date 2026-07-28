@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://careerops.local/schemas/agent-console/sidecar-wire.json",
+  "oneOf": [
+    {"$ref": "#/$defs/ready_response"},
+    {"$ref": "#/$defs/run_request"},
+    {"$ref": "#/$defs/run_success"},
+    {"$ref": "#/$defs/run_failure"}
+  ],
+  "$defs": {
+    "uuid": {"type": "string", "format": "uuid"},
+    "sha256": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+    "ready_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ready", "service", "protocol_version", "image_digest", "policy_bundle_digest", "egress_proxy_mode", "supported_schemes", "key_id", "checked_at"],
+      "properties": {
+        "ready": {"type": "boolean"},
+        "service": {"const": "careerops-ego-sidecar"},
+        "protocol_version": {"const": "browser-v1"},
+        "image_digest": {"$ref": "#/$defs/sha256"},
+        "policy_bundle_digest": {"$ref": "#/$defs/sha256"},
+        "egress_proxy_mode": {"const": "forced_interceptor"},
+        "supported_schemes": {"const": ["http", "https"]},
+        "key_id": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$"},
+        "checked_at": {"type": "string", "format": "date-time"},
+        "reason_code": {"enum": ["IMAGE_NOT_PINNED", "POLICY_NOT_PINNED", "INTERCEPTOR_UNAVAILABLE", "KEY_NOT_ACTIVE", "DEPENDENCY_NOT_READY"]}
+      },
+      "allOf": [
+        {"if": {"properties": {"ready": {"const": true}}}, "then": {"not": {"required": ["reason_code"]}}},
+        {"if": {"properties": {"ready": {"const": false}}}, "then": {"required": ["reason_code"]}}
+      ]
+    },
+    "run_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_id", "attempt_id", "candidate_scope_digest", "source_id", "canonical_start_url", "allowlist_version", "task_space_nonce", "budgets", "output_schema_version"],
+      "properties": {
+        "run_id": {"$ref": "#/$defs/uuid"},
+        "attempt_id": {"$ref": "#/$defs/uuid"},
+        "candidate_scope_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "source_id": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,128}$"},
+        "canonical_start_url": {"type": "string", "pattern": "^https?://[^#?\\s]+$"},
+        "allowlist_version": {"type": "string", "minLength": 1, "maxLength": 64},
+        "task_space_nonce": {"$ref": "#/$defs/uuid"},
+        "budgets": {"type": "object", "additionalProperties": false, "required": ["max_requests", "max_concurrent", "max_redirects", "max_response_bytes", "timeout_ms"], "properties": {"max_requests": {"const": 60}, "max_concurrent": {"const": 2}, "max_redirects": {"const": 3}, "max_response_bytes": {"const": 2097152}, "timeout_ms": {"const": 15000}}},
+        "output_schema_version": {"const": "posting-v1"}
+      }
+    },
+    "run_success": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_id", "attempt_id", "result_state", "partial", "partial_reason", "postings", "counts", "provenance_digest", "policy_bundle_digest", "trace_id"],
+      "properties": {
+        "run_id": {"$ref": "#/$defs/uuid"}, "attempt_id": {"$ref": "#/$defs/uuid"}, "result_state": {"const": "succeeded"},
+        "partial": {"type": "boolean"},
+        "partial_reason": {"type": ["string", "null"], "enum": ["SOURCE_TIMEOUT", "SOURCE_RATE_LIMITED", "SOURCE_PARTIAL", "SOURCE_DEPENDENCY_LOST", null]},
+        "postings": {"type": "array", "maxItems": 1000, "items": {"$ref": "#/$defs/posting"}},
+        "counts": {"type": "object", "additionalProperties": false, "required": ["requests", "redirects", "bytes"], "properties": {"requests": {"type": "integer", "minimum": 0, "maximum": 60}, "redirects": {"type": "integer", "minimum": 0, "maximum": 3}, "bytes": {"type": "integer", "minimum": 0, "maximum": 2097152}}},
+        "provenance_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"}, "policy_bundle_digest": {"$ref": "#/$defs/sha256"}, "trace_id": {"$ref": "#/$defs/uuid"}
+      },
+      "allOf": [
+        {"if": {"properties": {"partial": {"const": true}}}, "then": {"properties": {"partial_reason": {"type": "string"}}}},
+        {"if": {"properties": {"partial": {"const": false}}}, "then": {"properties": {"partial_reason": {"type": "null"}}}}
+      ]
+    },
+    "run_failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_id", "attempt_id", "result_state", "reason_code", "retryable", "safe_message", "trace_id"],
+      "properties": {"run_id": {"anyOf": [{"$ref": "#/$defs/uuid"}, {"type": "null"}]}, "attempt_id": {"anyOf": [{"$ref": "#/$defs/uuid"}, {"type": "null"}]}, "result_state": {"enum": ["blocked", "failed", "cancelled"]}, "reason_code": {"type": "string", "pattern": "^[A-Z0-9_]{1,64}$"}, "retryable": {"type": "boolean"}, "safe_message": {"type": "string", "maxLength": 240}, "trace_id": {"$ref": "#/$defs/uuid"}}
+    },
+    "posting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_id", "source_url", "external_id", "title", "organization", "location", "description_digest", "published_at", "observed_at"],
+      "properties": {
+        "source_id": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,128}$"},
+        "source_url": {"type": "string", "pattern": "^https?://[^#?\\s]+$", "maxLength": 2048},
+        "external_id": {"type": "string", "minLength": 1, "maxLength": 256},
+        "title": {"type": "string", "minLength": 1, "maxLength": 512},
+        "organization": {"type": "string", "minLength": 1, "maxLength": 512},
+        "location": {"type": "string", "maxLength": 512},
+        "description_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "published_at": {"type": ["string", "null"], "format": "date-time"},
+        "observed_at": {"type": "string", "format": "date-time"}
+      }
+    }
+  },
+  "x-status-map": {"ready_response": {"ready": 200, "not_ready": 503}, "run_success": 200, "run_failure": {"policy": 403, "conflict": 409, "rate": 429, "dependency": 503, "timeout": 504}}
+}

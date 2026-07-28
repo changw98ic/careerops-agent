@@ -1,5 +1,5 @@
 <template>
-  <div class="page-shell agent-workbench">
+  <div class="page-shell agent-workbench" lang="zh-CN">
     <div class="page-header">
       <div>
         <h1>智能工作台</h1>
@@ -24,8 +24,16 @@
       closable
       @close="error = ''"
     />
+    <ModelDisabledNotice v-if="providerDisabled" context="workbench" />
 
-    <a-tabs v-model:activeKey="activeTab" class="workbench-tabs">
+    <FirstRunGuide
+      :profile-done="Boolean(user.candidate_id)"
+      :resume-done="resumes.length > 0"
+      :evidence-done="evidence.length > 0"
+      :crawl-plan-done="false"
+    />
+
+    <a-tabs v-model:activeKey="activeTab" class="workbench-tabs" aria-label="智能工作台功能选项卡">
       <a-tab-pane key="matching" tab="职位匹配">
         <a-card title="运行确定性匹配" class="workbench-card">
           <p class="card-hint">匹配由规则和确认后的候选人证据驱动，不调用大模型。</p>
@@ -185,19 +193,80 @@
         </a-card>
         <AgentResultCard :run="selectedRun" @review="reviewRun" />
       </a-tab-pane>
+
+      <a-tab-pane key="run-center" tab="运行中心">
+        <a-card title="Agent 运行中心" class="workbench-card">
+          <p class="card-hint">查看单次运行的完整生命周期：阶段时间线、输入摘要、模型状态和审核决策。</p>
+          <div v-if="providerDisabled" class="run-center-disabled">
+            <ModelDisabledNotice context="workbench" />
+          </div>
+          <div class="run-center-toolbar">
+            <a-select
+              v-model:value="selectedRunId"
+              placeholder="选择一条运行记录"
+              show-search
+              allow-clear
+              option-filter-prop="label"
+              style="min-width: 280px"
+              @change="onRunCenterSelect"
+            >
+              <a-select-option
+                v-for="run in runs"
+                :key="run.id"
+                :value="run.id"
+                :label="`${capabilityLabel(run.capability)} · ${stateLabel(run.state)} · ${formatDate(run.created_at)}`"
+              >
+                {{ capabilityLabel(run.capability) }} · {{ stateLabel(run.state) }} · {{ formatDate(run.created_at) }}
+              </a-select-option>
+            </a-select>
+            <a-button :loading="loading.runs" @click="loadRuns">刷新列表</a-button>
+          </div>
+          <a-divider />
+          <RunCenter
+            :run="selectedRun"
+            :stages="stages"
+            :loading="runCenterLoading"
+            :action-loading="actionLoading"
+            @retry="retryRun"
+            @stop="stopRun"
+            @review="reviewRun"
+          />
+        </a-card>
+      </a-tab-pane>
     </a-tabs>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { message } from 'ant-design-vue'
 import { api, formatApiError, parseApiError, smartIntakeUiEnabled } from '../api/client.js'
 import { user } from '../stores/session.js'
 import CandidateSetupNotice from '../components/CandidateSetupNotice.vue'
+import ModelDisabledNotice from '../components/ModelDisabledNotice.vue'
+import FirstRunGuide from '../components/FirstRunGuide.vue'
+import RunCenter from '../components/RunCenter.vue'
 import SmartIntakePanel from '../components/SmartIntakePanel.vue'
 
-const activeTab = ref('matching')
+const route = useRoute()
+const ALLOWED_TABS = ['matching', 'resume', 'interview']
+
+// Initialize active tab from route query, falling back to 'matching'.
+const initialTab = ALLOWED_TABS.includes(route.query.tab) ? route.query.tab : 'matching'
+const activeTab = ref(initialTab)
+const contextId = ref(route.query.context_id || '')
+
+// Keep activeTab in sync when the route query changes (e.g. via browser
+// back/forward or programmatic navigation).
+watch(
+  () => route.query.tab,
+  (next) => {
+    if (next && ALLOWED_TABS.includes(next) && next !== activeTab.value) {
+      activeTab.value = next
+    }
+  },
+)
 const jobs = ref([])
 const jobVersions = ref([])
 const resumes = ref([])
@@ -207,6 +276,7 @@ const matches = ref([])
 const runs = ref([])
 const selectedMatch = ref(null)
 const selectedRun = ref(null)
+const selectedRunId = ref('')
 const selectedJobId = ref('')
 const selectedJobVersionId = ref('')
 const selectedResumeId = ref('')
@@ -223,7 +293,12 @@ const loading = reactive({
   runs: false,
   resume: false,
   interview: false,
+  stages: false,
 })
+const stages = ref([])
+const capabilityState = ref(null)
+const actionLoading = reactive({ retry: false, stop: false, review: false })
+const runCenterLoading = ref(false)
 
 const canRunMatch = computed(() => Boolean(user.candidate_id && selectedJobId.value))
 const canStartAgent = computed(
@@ -235,6 +310,10 @@ const canStartAgent = computed(
         selectedResumeId.value,
     ),
 )
+const providerDisabled = computed(() => {
+  if (!capabilityState.value) return false
+  return capabilityState.value.state === 'disabled' || capabilityState.value.state === 'blocked'
+})
 
 function listItems(data) {
   return Array.isArray(data?.items) ? data.items : []
@@ -398,6 +477,66 @@ function selectMatch(match) {
 
 function selectRun(run) {
   selectedRun.value = run
+  selectedRunId.value = run?.id || ''
+  if (run?.id) loadStages(run.id)
+}
+
+function onRunCenterSelect(runId) {
+  if (!runId) {
+    selectedRun.value = null
+    selectedRunId.value = ''
+    stages.value = []
+    return
+  }
+  const found = runs.value.find((r) => r.id === runId) || null
+  selectedRun.value = found
+  selectedRunId.value = runId
+  if (found) loadStages(runId)
+}
+
+async function loadStages(runId) {
+  if (!runId) return
+  loading.stages = true
+  const data = await callApi(() => api.getAgentStages(runId), '加载阶段信息失败，请稍后重试。')
+  if (data) stages.value = Array.isArray(data.items) ? data.items : []
+  loading.stages = false
+}
+
+async function loadCapability() {
+  const data = await callApi(() => api.getCapability(), '加载能力状态失败。')
+  if (data) capabilityState.value = data
+}
+
+async function retryRun(run) {
+  if (!run?.id) return
+  actionLoading.retry = true
+  const result = await callApi(
+    () => api.retryAgentRun(run.id, { expected_state: run.state }),
+    '重试运行失败，请稍后重试。',
+  )
+  if (result) {
+    selectedRun.value = result
+    runs.value = [result, ...runs.value.filter((item) => item.id !== result.id)]
+    if (result.id) loadStages(result.id)
+    message.success('运行已提交重试。')
+  }
+  actionLoading.retry = false
+}
+
+async function stopRun(run) {
+  if (!run?.id) return
+  actionLoading.stop = true
+  const result = await callApi(
+    () => api.stopAgentRun(run.id, { expected_state: run.state, reason_code: 'user_requested' }),
+    '停止运行失败，请稍后重试。',
+  )
+  if (result) {
+    selectedRun.value = result
+    runs.value = runs.value.map((item) => (item.id === result.id ? result : item))
+    if (result.id) loadStages(result.id)
+    message.success('已发送停止信号。')
+  }
+  actionLoading.stop = false
 }
 
 function latestRunFor(capability) {
@@ -438,7 +577,7 @@ function stateColor(value) {
 
 onMounted(async () => {
   await loadJobs()
-  await Promise.all([loadCandidateInputs(), loadMatches(), loadRuns()])
+  await Promise.all([loadCandidateInputs(), loadMatches(), loadRuns(), loadCapability()])
 })
 </script>
 
@@ -595,11 +734,20 @@ export default { components: { AgentInputForm, AgentResultCard } }
 }
 
 .history-toolbar,
-.result-card-header {
+.result-card-header,
+.run-center-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+}
+
+.run-center-disabled {
+  margin-bottom: 12px;
+}
+
+.provider-disabled-banner {
+  margin-top: 8px;
 }
 
 .agent-result-card {
@@ -703,7 +851,8 @@ export default { components: { AgentInputForm, AgentResultCard } }
   }
 
   .result-card-header,
-  .history-toolbar {
+  .history-toolbar,
+  .run-center-toolbar {
     align-items: stretch;
     flex-direction: column;
   }
@@ -715,5 +864,38 @@ export default { components: { AgentInputForm, AgentResultCard } }
   .review-button {
     flex: 1;
   }
+}
+
+/* Visible focus indicators for keyboard navigation */
+:global(.native-field select:focus-visible),
+:global(.native-field textarea:focus-visible) {
+  border-color: #1677ff;
+  outline: 2px solid #1677ff;
+  outline-offset: 2px;
+}
+
+.result-row:focus-visible {
+  border-color: #1677ff;
+  outline: 2px solid #1677ff;
+  outline-offset: 2px;
+}
+
+.review-button:focus-visible {
+  outline: 2px solid #1677ff;
+  outline-offset: 2px;
+}
+
+/* Reduced motion: disable transitions and animations */
+@media (prefers-reduced-motion: reduce) {
+  .result-row,
+  .review-button {
+    transition: none;
+  }
+}
+
+/* Non-color state indicators: use text/border patterns alongside color */
+.result-row[aria-selected="true"] {
+  border-width: 2px;
+  border-color: #1677ff;
 }
 </style>

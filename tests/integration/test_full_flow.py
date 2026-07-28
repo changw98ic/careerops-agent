@@ -42,6 +42,8 @@ _CAPABILITY_ROLES = (
     "careerops_outbox",
     "careerops_side_effect",
     "careerops_readonly",
+    "careerops_worker",
+    "careerops_legacy_agent",
 )
 
 
@@ -131,10 +133,6 @@ def _migrated_engine(
     database_url, _ = _containers
     url = database_url.replace("+psycopg2", "+psycopg")
 
-    config = Config("alembic.ini")
-    config.attributes["database_url"] = url
-    command.upgrade(config, "head")
-
     engine = sa.create_engine(url)
     with engine.begin() as conn:
         for role in _CAPABILITY_ROLES:
@@ -145,6 +143,10 @@ def _migrated_engine(
                     "NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS"
                 )
             )
+
+    config = Config("alembic.ini")
+    config.attributes["database_url"] = url
+    command.upgrade(config, "head")
 
     yield engine
     engine.dispose()

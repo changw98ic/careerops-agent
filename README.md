@@ -200,9 +200,11 @@ psql "$CAREEROPS_DB_OWNER_URL" \
 # CREATE ROLE
 # CREATE ROLE
 # CREATE ROLE
+# CREATE ROLE
+# CREATE ROLE
 ```
 
-This creates five `NOLOGIN` capability roles. It does not create service logins or grant
+This creates seven `NOLOGIN` capability roles. It does not create service logins or grant
 memberships.
 
 ### Step 2: Run migrations

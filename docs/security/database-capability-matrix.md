@@ -32,14 +32,18 @@ receives table `DELETE`.
 | `careerops_outbox` | Lease and publish internal workflow signals/notifications | Reads only Outbox rows and updates only lease/delivery columns |
 | `careerops_side_effect` | Reserved for M5A external writes | Dormant: no schema usage, data grants or runtime configuration value |
 | `careerops_readonly` | Operational inspection | Read-only; OAuth `secret_handle` is excluded from its column grant |
+| `careerops_worker` | Agent-attempt lease and stage-event functions | Bootstrap-only worker capability; no direct table grants or runtime role configuration |
+| `careerops_legacy_agent` | Controlled legacy-state read/write functions | Bootstrap-only migration compatibility capability; no direct table grants or runtime role configuration |
 
-The bootstrap creates all five as `NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT
+The bootstrap creates all seven as `NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT
 NOREPLICATION NOBYPASSRLS`. Those attributes are reapplied even when a role already exists.
 It also removes memberships held *by* a capability role so one capability cannot inherit
 another. It intentionally does not create service logins or remove memberships granted *to*
 service logins.
 
-The runtime engine accepts only `api`, `retention`, `outbox` and `readonly`. On every pool
+The runtime engine accepts only `api`, `retention`, `outbox` and `readonly`. `worker` and
+`legacy_agent` are function-only capabilities used by migration 0030 and are not accepted
+as runtime configuration values. On every pool
 checkout it executes `RESET ROLE`, assumes the corresponding fixed `careerops_*` role, fixes
 `search_path` to `pg_catalog, careerops`, and rejects the session unless its login is
 `NOINHERIT`, non-owner, non-elevated and an immediate member of exactly that one role.
@@ -174,7 +178,7 @@ view, function, inherited membership or restore-time ACL re-exposes that column.
 
 The following earlier static gaps are closed in the current tree:
 
-- all five roles, including retention, are created and unconditionally hardened;
+- all seven roles, including retention, worker and legacy-agent, are created and unconditionally hardened;
 - API updates are column-scoped and evidence/content identities are immutable;
 - retention expiry, deletion and orphan-tombstone columns are narrowly granted;
 - the Side-effect role has no privileges or runtime selection path;

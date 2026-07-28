@@ -12,6 +12,7 @@ from careerops.api.auth_dependency import require_api_auth, require_web_auth
 from careerops.api.errors import install_error_handlers
 from careerops.api.metrics_middleware import MetricsMiddleware
 from careerops.api.middleware import RequestIdMiddleware
+from careerops.api.routes.agent_console import router as agent_console_router
 from careerops.api.routes.agent_runs import router as agent_runs_router
 from careerops.api.routes.application_workspace import router as application_workspace_router
 from careerops.api.routes.applications import router as applications_router
@@ -553,6 +554,7 @@ def create_app(
     # ownership resolved server-side. Additive — no existing routes broken.
     app.include_router(inbox_router, dependencies=[Depends(require_api_auth)])
     app.include_router(agent_runs_router, dependencies=[Depends(require_api_auth)])
+    app.include_router(agent_console_router, dependencies=[Depends(require_api_auth)])
     # Section-7 application-workspace router (tasks 7.8). Additive paths only
     # (detail / prepare / channels / channel / package / timeline /
     # confirm-external-submission / state); the M3 application routes are

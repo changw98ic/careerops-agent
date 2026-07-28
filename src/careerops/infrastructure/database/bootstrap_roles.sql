@@ -18,6 +18,12 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'careerops_readonly') THEN
         CREATE ROLE careerops_readonly NOLOGIN;
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'careerops_worker') THEN
+        CREATE ROLE careerops_worker NOLOGIN;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'careerops_legacy_agent') THEN
+        CREATE ROLE careerops_legacy_agent NOLOGIN;
+    END IF;
 
     -- Creation is intentionally followed by unconditional hardening statements.
     -- This repairs capability roles that already existed with unsafe attributes.
@@ -30,6 +36,10 @@ BEGIN
     ALTER ROLE careerops_side_effect
         WITH NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;
     ALTER ROLE careerops_readonly
+        WITH NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;
+    ALTER ROLE careerops_worker
+        WITH NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;
+    ALTER ROLE careerops_legacy_agent
         WITH NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;
 
     -- Remove only memberships where a capability role is the member. Memberships
@@ -45,7 +55,9 @@ BEGIN
             'careerops_retention',
             'careerops_outbox',
             'careerops_side_effect',
-            'careerops_readonly'
+            'careerops_readonly',
+            'careerops_worker',
+            'careerops_legacy_agent'
         )
     LOOP
         EXECUTE format(

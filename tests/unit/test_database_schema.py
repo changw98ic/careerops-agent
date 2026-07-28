@@ -71,6 +71,10 @@ EXPECTED_TABLES = {
     "resume_versions",
     "agent_runs",
     "agent_run_reviews",
+    "agent_contexts",
+    "agent_actions",
+    "agent_attempts",
+    "agent_stage_events",
     "smart_intake_previews",
     "smart_intake_decisions",
     "schedule_proposals",
@@ -90,6 +94,7 @@ EXPECTED_APPEND_ONLY = {
     "job_posting_versions",
     "policy_decisions",
     "provider_receipts",
+    "agent_stage_events",
 }
 
 MIGRATION_PATH = (

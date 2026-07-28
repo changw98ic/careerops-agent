@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://careerops.local/schemas/agent-console/egress-decision.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["decision_id", "allowed", "operation", "reason_code", "policy_id", "consent_id", "field_set_hash", "redaction_version", "request_id", "decided_at"],
+  "properties": {
+    "decision_id": {"type": "string", "format": "uuid"},
+    "allowed": {"type": "boolean"},
+    "operation": {"enum": ["job_matching", "resume_review", "interview_preparation", "smart_form_intake"]},
+    "reason_code": {"type": "string", "pattern": "^[A-Z0-9_]{1,64}$"},
+    "policy_id": {"type": "string", "format": "uuid"},
+    "consent_id": {"type": ["string", "null"], "format": "uuid"},
+    "field_set_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "redaction_version": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$"},
+    "request_id": {"type": "string", "format": "uuid"},
+    "decided_at": {"type": "string", "format": "date-time"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"allowed": {"const": true}}, "required": ["allowed"]},
+      "then": {"required": ["consent_id"], "properties": {"consent_id": {"type": "string", "format": "uuid"}}}
+    },
+    {
+      "if": {"properties": {"allowed": {"const": false}}, "required": ["allowed"]},
+      "then": {"properties": {"consent_id": {"type": ["string", "null"], "format": "uuid"}}}
+    }
+  ]
+}

@@ -40,7 +40,7 @@ const routes = [
   { path: '/inbox/:id', name: 'inbox-detail', component: InboxDetail, meta: { auth: true } },
   { path: '/mail-follow-up', name: 'mail-follow-up', component: MailFollowUp, meta: { auth: true, title: '邮件跟进' } },
   { path: '/reply-queue', name: 'reply-queue', component: ReplyReviewQueue, meta: { auth: true, title: '回复评审' } },
-  { path: '/ai-workbench', name: 'ai-workbench', component: AgentWorkbench, meta: { auth: true, title: '智能工作台' } },
+  { path: '/ai-workbench', name: 'ai-workbench', component: AgentWorkbench, meta: { auth: true, title: '智能工作台', allowedTabs: ['matching', 'resume', 'interview'] } },
   { path: '/bootstrap', name: 'bootstrap', component: () => import('./views/Bootstrap.vue') },
   { path: '/404', name: 'not-found', component: NotFound },
   { path: '/:pathMatch(.*)*', name: 'catch-all', redirect: '/404' },
@@ -58,6 +58,11 @@ export { routes }
 
 let sessionReady = false
 
+// Allowed tabs for the AI workbench route.  Kept in sync with the route meta
+// so the guard can validate incoming `?tab=` query values and fall back to
+// "matching" when the value is missing or not in the allowlist.
+const AI_WORKBENCH_ALLOWED_TABS = ['matching', 'resume', 'interview']
+
 router.beforeEach(async (to) => {
   // Wait for session check on first navigation
   if (!sessionReady && status.value === 'unknown') {
@@ -73,6 +78,19 @@ router.beforeEach(async (to) => {
   // Protected route with no session -> redirect to login
   if (to.meta.auth && status.value !== 'authenticated') {
     return { name: 'login' }
+  }
+
+  // Validate `tab` query parameter for the AI workbench route.
+  // context_id is passed through as-is (opaque identifier).
+  if (to.name === 'ai-workbench') {
+    const tab = to.query.tab
+    if (tab && !AI_WORKBENCH_ALLOWED_TABS.includes(tab)) {
+      return {
+        name: 'ai-workbench',
+        query: { ...to.query, tab: 'matching' },
+        hash: to.hash,
+      }
+    }
   }
 })
 

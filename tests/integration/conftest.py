@@ -20,6 +20,8 @@ _CAPABILITY_ROLES = (
     "careerops_outbox",
     "careerops_side_effect",
     "careerops_readonly",
+    "careerops_worker",
+    "careerops_legacy_agent",
 )
 
 _BOOTSTRAP_SQL = (

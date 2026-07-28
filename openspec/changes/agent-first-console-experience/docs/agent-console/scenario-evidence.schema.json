@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://careerops.local/schemas/agent-console/scenario-evidence.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["scenario_id", "commit", "gate", "command", "precondition", "steps", "assertions", "artifact_path", "passed", "trace_id"],
+  "properties": {
+    "scenario_id": {"type": "string", "pattern": "^(AO|AR|LL|CL)-(M1|R[1-9])-S[1-9][0-9]*$"},
+    "commit": {"type": "string", "pattern": "^[0-9a-f]{7,64}$"},
+    "gate": {"enum": ["API-01", "DB-01", "TEMP-01", "MODEL-01", "CRAWL-01", "CRAWL-02", "UX-01", "A11Y-01", "OPS-01"]},
+    "command": {"type": "string", "minLength": 1, "maxLength": 256},
+    "route": {"type": ["string", "null"], "maxLength": 160},
+    "viewport": {"type": ["string", "null"], "pattern": "^(1440x900|375x812)$"},
+    "precondition": {"type": "string", "minLength": 1, "maxLength": 512},
+    "steps": {"type": "array", "minItems": 1, "maxItems": 30, "items": {"type": "string", "maxLength": 512}},
+    "assertions": {"type": "array", "minItems": 1, "maxItems": 50, "items": {"type": "string", "maxLength": 512}},
+    "api_state": {"type": ["object", "null"]},
+    "db_state": {"type": ["object", "null"]},
+    "temporal_state": {"type": ["object", "null"]},
+    "artifact_path": {"type": "string", "pattern": "^artifacts/(ego|agent-console)/[A-Z]{2}-(M1|R[1-9])-S[1-9][0-9]*\\.json$"},
+    "screenshot_paths": {"type": "array", "items": {"type": "string", "pattern": "^artifacts/ego/.*\\.png$"}},
+    "passed": {"type": "boolean"},
+    "failure_code": {"type": ["string", "null"], "pattern": "^[A-Z0-9_]{1,64}$"},
+    "trace_id": {"type": "string", "format": "uuid"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"gate": {"enum": ["UX-01", "A11Y-01"]}}, "required": ["gate"]},
+      "then": {"required": ["route", "viewport", "screenshot_paths"], "properties": {"screenshot_paths": {"minItems": 1}}}
+    },
+    {
+      "if": {"properties": {"passed": {"const": false}}, "required": ["passed"]},
+      "then": {"required": ["failure_code"], "properties": {"failure_code": {"type": "string", "minLength": 1}}}
+    }
+  ],
+  "x-validation": {
+    "artifact_path_basename_without_extension_equals": "scenario_id",
+    "artifact_path_root_must_equal_register_evidence_root": true,
+    "screenshot_paths_required_for": ["UX-01", "A11Y-01"],
+    "screenshot_paths_must_be_under": "artifacts/ego/"
+  }
+}

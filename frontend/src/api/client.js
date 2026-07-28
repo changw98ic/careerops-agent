@@ -118,6 +118,10 @@ export function formatApiError(err, fallback = '操作失败，请稍后重试�
   if (info.code === 'STALE_SMART_INTAKE_PREVIEW') return '表单或上下文已变化，请重新生成预览。'
   if (info.code === 'IDEMPOTENCY_KEY_REUSED') return '请求内容或审查选择已变化，请重新生成当前预览。'
   if (info.code === 'RATE_LIMITED') return '智能预填请求过于频繁，请稍后再试。'
+  if (info.code === 'AGENT_RUN_NOT_FOUND') return '指定的运行记录不存在或已被清理。'
+  if (info.code === 'AGENT_INVALID_STATE') return '运行状态不允许此操作，请刷新后重试。'
+  if (info.code === 'AGENT_CAPABILITY_BLOCKED') return '当前能力未启用，无法执行此操作。'
+  if (info.code === 'AGENT_RETRY_LIMIT') return '已达到最大重试次数，请稍后再试。'
   if (info.isDependencyNotReady) return fallback
   if (!info.message || /^\d+\s*:\s*\{/.test(info.message)) return fallback
   return info.message
@@ -327,6 +331,12 @@ export const api = {
   listAgentRuns: (params) =>
     request('/api/v1/agents/runs?' + new URLSearchParams(params || {})),
   getAgentRun: (runId) => request(`/api/v1/agents/runs/${runId}`),
+  getAgentStages: (runId, params) =>
+    request(`/api/v1/agents/runs/${runId}/stages?` + new URLSearchParams(params || {})),
+  retryAgentRun: (runId, data) =>
+    request(`/api/v1/agents/runs/${runId}/retry`, { method: 'POST', body: data || {} }),
+  stopAgentRun: (runId, data) =>
+    request(`/api/v1/agents/runs/${runId}/stop`, { method: 'POST', body: data || {} }),
   reviewAgentRun: (runId, data) =>
     request(`/api/v1/agents/runs/${runId}/review`, { method: 'POST', body: data }),
   listAgentReviews: (runId) => request(`/api/v1/agents/runs/${runId}/reviews`),
@@ -342,4 +352,39 @@ export const api = {
       method: 'POST',
       body: data,
     }),
+
+  // -- Agent console: action queue (Section 14) --
+  getActionQueue: (params) =>
+    request('/api/v1/agent-console/actions?' + new URLSearchParams(params || {})),
+  acceptAction: (actionKey, data) =>
+    request(`/api/v1/agent-console/actions/${actionKey}/accept`, {
+      method: 'POST',
+      body: data || {},
+    }),
+  snoozeAction: (actionKey, data) =>
+    request(`/api/v1/agent-console/actions/${actionKey}/snooze`, {
+      method: 'POST',
+      body: data || {},
+    }),
+  dismissAction: (actionKey, data) =>
+    request(`/api/v1/agent-console/actions/${actionKey}/dismiss`, {
+      method: 'POST',
+      body: data || {},
+    }),
+  completeAction: (actionKey, data) =>
+    request(`/api/v1/agent-console/actions/${actionKey}/complete`, {
+      method: 'POST',
+      body: data || {},
+    }),
+
+  // -- Agent console: shared context --
+  createContext: (data) =>
+    request('/api/v1/agent-console/context', { method: 'POST', body: data }),
+  getContext: (contextId) =>
+    request(`/api/v1/agent-console/context/${contextId}`),
+
+  // -- Agent console: capability and preflight --
+  getCapability: () => request('/api/v1/agent-console/capability'),
+  createPreflight: (data) =>
+    request('/api/v1/agent-console/preflight', { method: 'POST', body: data }),
 }

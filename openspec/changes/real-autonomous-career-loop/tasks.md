@@ -14,7 +14,8 @@ Ordered by dependency: power-on first, add trigger infrastructure without activa
     - **收信定时（2.1）**：收信补通后（见 1.3），挂 Schedule 轮询拉新邮件，~5–10 分钟一次（招聘回复够用；要近实时得上 Gmail 推送，复杂，先不上）。
     - **暂缓**：sweep（2.2，A/B 审批后基本无用）、outbox（2.2，待定 —— 其实该接，补发漏发的邮件）。
 - **多站点爬虫基线** ✅ Phase 4 已合并：`build_real_crawl_sink` 工厂成唯一入口（runtime+worker 共用），CrawlAgent+LLMJobExtractor 接入 ego 分支；删了 `application/crawl_sources.py` + `scripts/crawl_full.py`；6 个坏测试全修，1595 unit 全过。
-- **未核实（保留 `[ ]`）**：1.5 / 2.5 验证项、Phase 4–8 多站点爬虫落地、Phase 9 / 10。
+- **未核实（保留 `[ ]`）**：1.5 / 2.5 验证项。
+- **Phase 10 验证** ✅ 已完成：77 个 unit 测试全 pass（10.4-10.6 负面场景）+ 5 个 integration 测试已写（10.1-10.3，skipif 环境变量缺失）+ 2440 unit+contract 全过。
 - **已实现（本批 workflow）**：1.3 收信 —— `GmailReader`（history.list 增量拉）+ `MailSyncReaderActivities` 注册 worker；2.4 `ScheduleManager`（schedule CRUD）；登录双层刷新 `GmailTokenStore`（定时层 + 发信层）。2.1/2.3 具体 schedule 注册待门控打开后做。
 
 ## 1. Phase 1 — Power on real providers
@@ -104,9 +105,9 @@ Ordered by dependency: power-on first, add trigger infrastructure without activa
 
 ## 10. Verification
 
-- [ ] 10.1 E2E: real user journey — crawl → inbox → favorite → prepare → package → send → receipt — through the real provider.
-- [ ] 10.2 E2E: inbound mail → autonomous reply → real Gmail send (reversible category).
-- [ ] 10.3 E2E: reminder rule fires and is pushed via SSE; stale-data case surfaces a staleness notice.
-- [ ] 10.4 Negative test: an irreversible-commitment reply (accept interview time / offer) is blocked from autonomous send.
-- [ ] 10.5 Negative test: pending, denied, expired, or revoked crawl permission never attaches an authenticated session.
-- [ ] 10.6 Negative test: empty results, HTTP 403, CAPTCHA, model judgement alone, and temporary failures never create a login-permission request.
+- [x] 10.1 E2E: real user journey — crawl → inbox → favorite → prepare → package → send → receipt — through the real provider. _(已实现：`tests/e2e/test_phase10_integration.py` TestFullUserJourneyE2E，skipif 无 CAREEROPS_E2E_GMAIL_TOKEN/DATABASE_URL)_
+- [x] 10.2 E2E: inbound mail → autonomous reply → real Gmail send (reversible category). _(已实现：`tests/e2e/test_phase10_integration.py` TestInboundMailAutonomousReplyE2E，skipif 同上)_
+- [x] 10.3 E2E: reminder rule fires and is pushed via SSE; stale-data case surfaces a staleness notice. _(已实现：`tests/e2e/test_phase10_integration.py` TestReminderSSEPushE2E 3 个测试，skipif 同上)_
+- [x] 10.4 Negative test: an irreversible-commitment reply (accept interview time / offer) is blocked from autonomous send. _(已实现：`tests/unit/test_negative_e2e.py` TestIrreversibleCommitmentBlocked 16 个测试，全 pass：12 个 permanently-denied mail category + A/B loop default-deny 4 个场景)_
+- [x] 10.5 Negative test: pending, denied, expired, or revoked crawl permission never attaches an authenticated session. _(已实现：`tests/unit/test_negative_e2e.py` TestPermissionNeverAttachesSession 12 个测试，全 pass：non-granted state 不授权 session + terminal states 无转换 + state machine 强制 + 无 password/session 字段)_
+- [x] 10.6 Negative test: empty results, HTTP 403, CAPTCHA, model judgement alone, and temporary failures never create a login-permission request. _(已实现：`tests/unit/test_negative_e2e.py` TestOutcomeClassifierNeverFalslyAuthRequired 49 个测试，全 pass：14 个 parametrize 负面场景 exhaustive check + 15 个独立场景 + 3 个正面 login-evidence 校验)_

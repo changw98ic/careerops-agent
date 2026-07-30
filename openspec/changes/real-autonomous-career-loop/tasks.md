@@ -13,7 +13,7 @@ Ordered by dependency: power-on first, add trigger infrastructure without activa
     - **登录令牌刷新（双层）** ✅ 已实现：① 定时层每小时刷一次；② 发信层发信前检查、过期就刷。两层共用 `refresh_access_token` + `GmailTokenStore`，发信层跳过刚刷过的避免撞车。_(`gmail_token_store.py` + `GmailSender` 改用 token_store)_
     - **收信定时（2.1）**：收信补通后（见 1.3），挂 Schedule 轮询拉新邮件，~5–10 分钟一次（招聘回复够用；要近实时得上 Gmail 推送，复杂，先不上）。
     - **暂缓**：sweep（2.2，A/B 审批后基本无用）、outbox（2.2，待定 —— 其实该接，补发漏发的邮件）。
-- **多站点爬虫基线（2026-07-30 审阅）**：已有 `LLMJobExtractor`、`CrawlAgent` 和 demo/test 代码，但生产 runtime/worker 仍走 `CrawlExecutionService -> RealCrawlActivitySink -> EgoBrowserExecutor`；测试引用的 `crawl_agent_service.py` 已不存在。现有两条路径必须先合并，禁止再新增第三条路径。
+- **多站点爬虫基线** ✅ Phase 4 已合并：`build_real_crawl_sink` 工厂成唯一入口（runtime+worker 共用），CrawlAgent+LLMJobExtractor 接入 ego 分支；删了 `application/crawl_sources.py` + `scripts/crawl_full.py`；6 个坏测试全修，1595 unit 全过。
 - **未核实（保留 `[ ]`）**：1.5 / 2.5 验证项、Phase 4–8 多站点爬虫落地、Phase 9 / 10。
 - **已实现（本批 workflow）**：1.3 收信 —— `GmailReader`（history.list 增量拉）+ `MailSyncReaderActivities` 注册 worker；2.4 `ScheduleManager`（schedule CRUD）；登录双层刷新 `GmailTokenStore`（定时层 + 发信层）。2.1/2.3 具体 schedule 注册待门控打开后做。
 
@@ -47,11 +47,11 @@ Ordered by dependency: power-on first, add trigger infrastructure without activa
 
 ## 4. Phase 4 — Reconcile the crawler into one production path
 
-- [ ] 4.1 Make `CrawlExecutionService` the sole production orchestration entry for structured and Tier 2 crawls; remove demo-only orchestration from the runtime path.
-- [ ] 4.2 Adapt the existing `CrawlAgent` and `LLMJobExtractor` behind the executor used by `RealCrawlActivitySink`, and inject the same implementation from both `infrastructure/runtime.py` and the Temporal worker.
-- [ ] 4.3 Migrate the seven `DEFAULT_SOURCES` records into the canonical persisted source registry, move any reusable generic trigger into the canonical Tier 2 executor, and remove the duplicate `application.crawl_sources.CrawlSource` model and static registry.
-- [ ] 4.4 Rewrite tests that import the missing `crawl_agent_service.py` to exercise the canonical execution path; fix the current navigation, provenance, and action-dispatch failures.
-- [ ] 4.5 Run the focused crawler baseline suite and require zero collection errors and zero failures before adding new source, permission, or budget behavior.
+- [x] 4.1 Make `CrawlExecutionService` the sole production orchestration entry for structured and Tier 2 crawls; remove demo-only orchestration from the runtime path. _(已实现：`build_real_crawl_sink` 工厂是唯一入口，runtime + worker 都用)_
+- [x] 4.2 Adapt the existing `CrawlAgent` and `LLMJobExtractor` behind the executor used by `RealCrawlActivitySink`, and inject the same implementation from both `infrastructure/runtime.py` and the Temporal worker. _(已实现：`crawl_stack.build_real_crawl_sink` 在 model 启用时装配 CrawlAgent+LLMJobExtractor，关闭时降级纯结构化)_
+- [x] 4.3 Migrate the seven `DEFAULT_SOURCES` records into the canonical persisted source registry, move any reusable generic trigger into the canonical Tier 2 executor, and remove the duplicate `application.crawl_sources.CrawlSource` model and static registry. _(已实现：`crawl_seed.py` 持久化 registry 形态 + 写入器；删 `application/crawl_sources.py`；实际 DB 种子写入待 Phase 5 discovery 接入)_
+- [x] 4.4 Rewrite tests that import the missing `crawl_agent_service.py` to exercise the canonical execution path; fix the current navigation, provenance, and action-dispatch failures. _(已实现：4 个坏测试重写到合并路径 + provenance/navigate 修复)_
+- [x] 4.5 Run the focused crawler baseline suite and require zero collection errors and zero failures before adding new source, permission, or budget behavior. _(已实现：crawl baseline 31 passed + 全 unit 1595 passed，零 collection error)_
 
 ## 5. Phase 5 — Durable source discovery and attempt outcomes
 

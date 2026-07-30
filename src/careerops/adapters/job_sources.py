@@ -28,6 +28,11 @@ class RawJobRecord:
     url: str = ""
     description: str = ""
     raw_data: dict[str, Any] = field(default_factory=dict)
+    # Provenance tag for Tier 2 records: ``api-capture`` (parsed from a captured
+    # job-list API) or ``llm-extraction`` (model-extracted from rendered HTML).
+    # Structured Tier 1 adapters leave this empty; the crawl sink carries it into
+    # ``parser_version`` so the ingest layer can tell the sources apart.
+    provenance: str = ""
 
 
 @dataclass(frozen=True, slots=True)

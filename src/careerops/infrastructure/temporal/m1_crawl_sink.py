@@ -36,6 +36,7 @@ from careerops.adapters.job_sources import (
     JobSourceAdapter,
     JsonLdAdapter,
     LeverAdapter,
+    RawJobRecord,
     SitemapAdapter,
     StaticHtmlAdapter,
 )
@@ -96,6 +97,103 @@ def _content_hash(structured_data: dict[str, str]) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
+# Default provenance/parser_version when a raw record carries no explicit tag.
+# Real records from the agent/extractor carry ``api-capture`` or
+# ``llm-extraction``; this is only a defensive fallback.
+_DEFAULT_PROVENANCE = "llm-extraction"
+
+
+def _to_crawled_posting(
+    raw: RawJobRecord,
+    source_id: UUID | str,
+    source_url: str,
+    fetched_at: datetime,
+    *,
+    parser_version: str | None = None,
+) -> CrawledPostingRecord:
+    """Map a crawled :class:`RawJobRecord` to the sink's :class:`CrawledPostingRecord`.
+
+    This is the single shared mapper for the Tier 2 path (real-autonomous-
+    career-loop Phase 4): both the injected ``CrawlAgent`` results and any
+    direct LLM extraction flow through it, so provenance is carried consistently
+    into ``parser_version`` — the column ``ingest_posting`` writes to
+    ``job_posting_versions``.
+
+    ``parser_version`` defaults to the record's ``provenance`` (``api-capture``
+    for captured job APIs, ``llm-extraction`` for model-extracted pages), which
+    is what distinguishes Tier 2 postings from structured Tier 1 adapter output.
+    """
+    return CrawledPostingRecord(
+        source_id=str(source_id),
+        external_id=raw.external_id,
+        canonical_url=raw.url or source_url,
+        source_url=source_url,
+        structured_data={
+            "title": raw.title,
+            "location": raw.location,
+            "description": raw.description,
+            "apply_url": raw.url,
+        },
+        parser_version=parser_version or raw.provenance or _DEFAULT_PROVENANCE,
+        fetched_at=fetched_at.isoformat(),
+    )
+
+
+@dataclasses.dataclass(slots=True)
+class CrawlCounters:
+    """Per-source ingest counters for the canonical Tier 2 ingest path.
+
+    Mirrors the Section-5 run counters at single-source granularity:
+    ``discovered`` for new postings, ``updated`` for new versions of existing
+    postings, ``failed`` for ingest errors. Used by :func:`ingest_crawled_records`
+    so the same mapping + ingest + counting logic is shared between the
+    execution service and direct callers (no parallel ingest implementation).
+    """
+
+    discovered: int = 0
+    updated: int = 0
+    failed: int = 0
+
+
+async def ingest_crawled_records(
+    sink: RealCrawlActivitySink,
+    records: list[RawJobRecord],
+    *,
+    source_id: UUID | str,
+    source_url: str,
+    crawl_run_id: UUID | None = None,
+    plan_version_id: UUID | None = None,
+    fetched_at: datetime | None = None,
+) -> CrawlCounters:
+    """Map + ingest crawled records through the canonical ``ingest_posting`` path.
+
+    Folds the former ``CrawlAgentService.crawl_and_ingest`` responsibility into
+    the crawl sink module: every record is mapped via ``_to_crawled_posting``
+    (preserving ``llm-extraction`` / ``api-capture`` provenance) and ingested
+    with the run/plan-version ids, accumulating :class:`CrawlCounters` from the
+    idempotent ``is_new_posting`` / ``is_new_version`` flags. This is the same
+    path :class:`CrawlExecutionService` uses, so there is one ingest contract.
+    """
+    counters = CrawlCounters()
+    now = fetched_at or datetime.now(tz=UTC)
+    for raw in records:
+        posting = _to_crawled_posting(raw, source_id, source_url, now)
+        try:
+            result = await sink.ingest_posting(
+                posting,
+                crawl_run_id=crawl_run_id,
+                plan_version_id=plan_version_id,
+            )
+        except Exception:
+            counters.failed += 1
+            continue
+        if result.get("is_new_posting"):
+            counters.discovered += 1
+        elif result.get("is_new_version"):
+            counters.updated += 1
+    return counters
+
+
 class RealCrawlActivitySink:
     """Activity-side crawl adapter backed by http_fetcher + adapters.
 
@@ -113,12 +211,19 @@ class RealCrawlActivitySink:
         fetcher: FetcherFn | None = None,
         engine: Engine | None = None,
         browser_executor: EgoBrowserExecutor | None = None,
+        agent: object | None = None,
     ) -> None:
         self._adapters = adapters or dict(_ADAPTER_REGISTRY)
         # Allow injecting a fake fetcher for tests.
         self._fetch: FetcherFn = fetcher or fetch
         self._engine = engine
         self._browser = browser_executor
+        # Tier 2 multi-step agent (CrawlAgent). When set, ego sources are
+        # delegated to it (navigate + API capture + LLM extraction) instead of
+        # the single-shot structured capture. ``object`` typed to avoid an
+        # import cycle with ``application.crawl_agent``; it is duck-typed as
+        # ``.crawl(url) -> list[RawJobRecord]``.
+        self._agent = agent
 
     def _fetch_for_request(self, request: CrawlJobSourceInput, url: str) -> FetchedResponse:
         if request.executor_mode == "http":
@@ -188,9 +293,25 @@ class RealCrawlActivitySink:
         If the adapter is not found, returns an empty result with status 0.
         If the fetch raises, the exception propagates to the caller (the
         execution service catches it and increments the failed counter).
+
+        Tier 2 (real-autonomous-career-loop Phase 4): when a multi-step
+        ``CrawlAgent`` is wired, ego sources are delegated to it (navigate +
+        API capture + LLM extraction) and its ``RawJobRecord`` results are
+        mapped through ``_to_crawled_posting`` so provenance flows into
+        ``parser_version``. The structured Tier 1 path below is unchanged and
+        remains the default when no agent is configured.
         """
+        # Tier 2 (Phase 4): a multi-step agent is used as a FALLBACK for ego
+        # sources, not a replacement for structured parsing. Structured Tier 1
+        # adapters (json_ld / static_html / ATS) parse first; only when they
+        # yield nothing (parse drift) — or when no adapter exists for the source
+        # type — does the sink delegate to the injected CrawlAgent.
+        agent_available = request.executor_mode == "ego" and self._agent is not None
+
         adapter = self._adapters.get(request.source_type)
         if adapter is None:
+            if agent_available:
+                return await self._crawl_via_agent(request)
             return CrawlSourceResult(postings=())
 
         resp: FetchedResponse = self._fetch_for_request(request, request.base_url)
@@ -231,6 +352,13 @@ class RealCrawlActivitySink:
                 )
             )
 
+        # Tier 2 fallback: the structured adapter parsed zero postings on an
+        # ego source (parse drift, or a JS-rendered page the adapter cannot
+        # read). Delegate to the multi-step agent before declaring the source
+        # empty, so discovered dynamic sources still get a reasoned attempt.
+        if not postings and agent_available:
+            return await self._crawl_via_agent(request)
+
         # Detect parse drift: expected fields missing across all postings.
         missing_fields: list[str] = []
         if postings:
@@ -248,6 +376,26 @@ class RealCrawlActivitySink:
             status_code=resp.status_code,
             body_prefix=resp.body[:4096],
             expected_fields_missing=tuple(missing_fields),
+        )
+
+    async def _crawl_via_agent(self, request: CrawlJobSourceInput) -> CrawlSourceResult:
+        """Tier 2 ego crawl: delegate to the injected ``CrawlAgent``.
+
+        The agent drives the browser (navigate, capture network, LLM extraction)
+        and returns ``RawJobRecord`` objects. Each is mapped through
+        :func:`_to_crawled_posting`, which carries the record's provenance
+        (``api-capture`` / ``llm-extraction``) into ``parser_version`` so the
+        downstream ``ingest_posting`` writes it to ``job_posting_versions``.
+        """
+        fetched_at = datetime.now(tz=UTC)
+        raw_records = self._agent.crawl(request.base_url)  # type: ignore[union-attr]
+        postings = tuple(
+            _to_crawled_posting(raw, request.source_id, request.base_url, fetched_at)
+            for raw in raw_records
+        )
+        return CrawlSourceResult(
+            postings=postings,
+            status_code=200 if postings else 0,
         )
 
     def _fetch_greenhouse_details(

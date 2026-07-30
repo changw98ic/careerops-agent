@@ -280,13 +280,12 @@ class RuntimeResources:
         # terminal state.
         from careerops.adapters.http_fetcher import fetch
         from careerops.application.crawl_execution import CrawlExecutionService
-        from careerops.infrastructure.temporal.ego_browser_executor import EgoBrowserExecutor
-        from careerops.infrastructure.temporal.m1_crawl_sink import RealCrawlActivitySink
+        from careerops.infrastructure.temporal.crawl_stack import build_real_crawl_sink
 
-        crawl_sink = RealCrawlActivitySink(
+        crawl_sink = build_real_crawl_sink(
+            self.database,
             fetcher=fetch,
-            engine=self.database,
-            browser_executor=EgoBrowserExecutor(),
+            model_client=self.model_client,
         )
         self.crawl_execution_service = CrawlExecutionService(
             run_repository=self.crawl_run_repo,
@@ -548,10 +547,10 @@ class RuntimeResources:
         """
         from pathlib import Path
 
+        from careerops.integrations.gmail_sender import GmailSender
         from careerops.integrations.gmail_side_effect_provider import (
             GmailSideEffectProvider,
         )
-        from careerops.integrations.gmail_sender import GmailSender
         from careerops.integrations.gmail_token_store import GmailTokenStore
 
         token_file = Path("secrets/gmail_send_token.json")

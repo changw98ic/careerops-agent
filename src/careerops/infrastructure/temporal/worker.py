@@ -15,16 +15,15 @@ from careerops.infrastructure.temporal.activities import (
     SmokeActivities,
 )
 from careerops.infrastructure.temporal.agent_activities import AgentActivities
-from careerops.infrastructure.temporal.ego_browser_executor import EgoBrowserExecutor
-from careerops.infrastructure.temporal.mail_sync_activities import (
-    GmailTokenRefreshActivities,
-    MailSyncReaderActivities,
-)
 from careerops.infrastructure.temporal.m1_activities import (
     CrawlActivitySink,
     M1CrawlActivities,
     M1DiscoveryActivities,
     M1PurgeActivities,
+)
+from careerops.infrastructure.temporal.mail_sync_activities import (
+    GmailTokenRefreshActivities,
+    MailSyncReaderActivities,
 )
 from careerops.infrastructure.temporal.s5_activities import S5CrawlExecutionActivities
 from careerops.workflows.agent_workflows import AgentRunWorkflow
@@ -233,10 +232,11 @@ def main() -> None:
         ApprovalSweeperActivities,
         OutboxDrainActivities,
     )
+    from careerops.infrastructure.temporal.crawl_stack import build_real_crawl_sink
     from careerops.infrastructure.temporal.internal_event_sink import LoggingInternalEventSink
-    from careerops.infrastructure.temporal.m1_crawl_sink import RealCrawlActivitySink
     from careerops.infrastructure.temporal.s5_activities import S5CrawlExecutionActivities
     from careerops.integrations.fake_side_effect_provider import FakeSideEffectProvider
+    from careerops.model_gateway.factory import create_model_client
 
     settings = get_settings()
     engine = create_database_engine(settings)
@@ -256,10 +256,16 @@ def main() -> None:
     )
 
     # Section 5: wire crawl execution + scheduled-run creation.
-    crawl_sink = RealCrawlActivitySink(
+    model_client = create_model_client(
+        settings.model_provider,
+        base_url=settings.model_base_url,
+        api_key=settings.model_api_key.get_secret_value(),
+        model=settings.model_name,
+    )
+    crawl_sink = build_real_crawl_sink(
+        engine,
         fetcher=fetch,
-        engine=engine,
-        browser_executor=EgoBrowserExecutor(),
+        model_client=model_client,
     )
     run_repo = PostgresCrawlRunRepository(engine)
     plan_repo = PostgresCrawlPlanRepository(engine)

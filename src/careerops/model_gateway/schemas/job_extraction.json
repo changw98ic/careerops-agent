@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://careerops.local/schemas/job_extraction.json",
+  "title": "job_extraction",
+  "description": "Structured job postings extracted from rendered career-page HTML by the LLM job extraction adapter (application/llm_job_extraction.py). The HTML is untrusted; the model is prompted to treat it as data only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["jobs"],
+  "properties": {
+    "jobs": {
+      "type": "array",
+      "maxItems": 50,
+      "description": "Job postings visible on the page, deduplicated by title.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title"],
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300,
+            "description": "Job title as shown on the page."
+          },
+          "location": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Location string, or empty if absent."
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 1000,
+            "description": "The posting's detail/apply link, or empty if absent."
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 8000,
+            "description": "Short JD summary from the page."
+          }
+        }
+      }
+    }
+  }
+}

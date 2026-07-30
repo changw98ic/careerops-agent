@@ -1,16 +1,26 @@
-"""Unit tests for crawl_full career page parsing and ego_save_raw_html.
+"""Canonical career-page JSON-LD parsing (real-autonomous-career-loop Phase 4).
 
-Covers:
-- parse_career_page with JobPosting JSON-LD (via JsonLdAdapter).
-- parse_career_page regex fallback when no JSON-LD present.
-- ego_save_raw_html subprocess invocation.
+The old ``scripts/crawl_full.parse_career_page`` mixed JSON-LD parsing, a regex
+fallback over ego snapshot text, and a subprocess ``ego_save_raw_html`` wrapper
+into one divergent script. Phase 4 folds the reusable JSON-LD extraction into
+the existing :class:`JsonLdAdapter` (the adapter the production crawl sink
+uses), deletes the parallel script path, and retargets this suite at the
+canonical adapter so there is one career-page parse contract.
+
+What moved where:
+- JSON-LD extraction -> ``JsonLdAdapter.list_jobs`` (tested here).
+- ego HTML capture -> ``EgoBrowserExecutor`` / ``EgoBrowserTool`` (covered by
+  ``test_ego_browser_executor.py``), not a one-off subprocess wrapper.
+- The snapshot-text regex fallback is dropped: a page the JSON-LD adapter
+  cannot read is now handled by the Tier 2 ``CrawlAgent`` + ``LLMJobExtractor``
+  fallback, not a second regex parser.
 """
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from careerops.adapters.job_sources import JsonLdAdapter
 
-from scripts.crawl_full import ego_save_raw_html, parse_career_page
+_ADAPTER = JsonLdAdapter()
 
 
 def _html_with_jsonld(jobs_json: str) -> str:
@@ -22,10 +32,7 @@ def _html_with_jsonld(jobs_json: str) -> str:
     )
 
 
-# --- parse_career_page: JSON-LD path ---
-
-
-class TestParseCareerPageJsonld:
+class TestJsonLdAdapterCareerPage:
     def test_single_jobposting(self) -> None:
         html = _html_with_jsonld(
             '{"@type":"JobPosting",'
@@ -35,21 +42,19 @@ class TestParseCareerPageJsonld:
             '"jobLocation":{"address":{"addressLocality":"Berlin"}}}'
         )
 
-        jobs = parse_career_page(html, "Example", "https://example.com/careers")
+        result = _ADAPTER.list_jobs(html)
 
-        assert len(jobs) == 1
-        job = jobs[0]
-        assert job["company"] == "Example"
-        assert job["title"] == "Staff Engineer"
-        assert job["url"] == "https://example.com/jobs/staff"
-        assert job["location"] == "Berlin"
-        assert job["description"] == "<p>Build platforms.</p>"
-        assert job["source_type"] == "career_page_jsonld"
-        assert job["source_url"] == "https://example.com/careers"
+        assert len(result.jobs) == 1
+        record = result.jobs[0]
+        assert record.title == "Staff Engineer"
+        assert record.url == "https://example.com/jobs/staff"
+        assert record.location == "Berlin"
+        assert record.description == "<p>Build platforms.</p>"
+        assert record.external_id  # sha256(url)[:16], non-empty
+        assert result.parser_version == "json-ld-v1"
 
-    def test_multiple_jobpostings(self) -> None:
-        # JsonLdAdapter only handles dicts, not lists — each item needs its
-        # own <script> tag for the adapter to pick it up.
+    def test_multiple_jobpostings_each_script(self) -> None:
+        # JsonLdAdapter parses one JobPosting object per <script> tag.
         html = (
             "<html><head>"
             '<script type="application/ld+json">'
@@ -61,30 +66,20 @@ class TestParseCareerPageJsonld:
             "</head><body></body></html>"
         )
 
-        jobs = parse_career_page(html, "Ex", "https://ex.com/careers")
+        result = _ADAPTER.list_jobs(html)
 
-        assert len(jobs) == 2
-        assert jobs[0]["title"] == "SWE"
-        assert jobs[1]["title"] == "PM"
-        assert all(j["source_type"] == "career_page_jsonld" for j in jobs)
+        assert len(result.jobs) == 2
+        titles = {r.title for r in result.jobs}
+        assert titles == {"SWE", "PM"}
 
     def test_non_jobposting_type_ignored(self) -> None:
         html = _html_with_jsonld('{"@type":"WebPage","name":"Careers"}')
 
-        jobs = parse_career_page(html, "Ex", "https://ex.com/careers")
+        result = _ADAPTER.list_jobs(html)
 
-        # No JSON-LD jobs found — falls through to regex (which also finds
-        # nothing in this HTML without text "..." patterns).
-        assert jobs == []
+        assert result.jobs == ()
 
-    def test_empty_title_skipped(self) -> None:
-        html = _html_with_jsonld('{"@type":"JobPosting","title":"","url":"https://ex.com/1"}')
-
-        jobs = parse_career_page(html, "Ex", "https://ex.com/careers")
-
-        assert jobs == []
-
-    def test_description_included_in_output(self) -> None:
+    def test_description_included(self) -> None:
         html = _html_with_jsonld(
             '{"@type":"JobPosting",'
             '"title":"Backend Engineer",'
@@ -92,121 +87,38 @@ class TestParseCareerPageJsonld:
             '"description":"<p>Work on APIs.</p>"}'
         )
 
-        jobs = parse_career_page(html, "Ex", "https://ex.com/careers")
+        result = _ADAPTER.list_jobs(html)
 
-        assert len(jobs) == 1
-        assert jobs[0]["description"] == "<p>Work on APIs.</p>"
+        assert len(result.jobs) == 1
+        assert result.jobs[0].description == "<p>Work on APIs.</p>"
 
-    def test_url_falls_back_to_page_url(self) -> None:
-        html = _html_with_jsonld('{"@type":"JobPosting","title":"Eng"}')
-        page_url = "https://ex.com/careers"
-
-        jobs = parse_career_page(html, "Ex", page_url)
-
-        assert len(jobs) == 1
-        assert jobs[0]["url"] == page_url
-
-
-# --- parse_career_page: regex fallback ---
-
-
-class TestParseCareerPageFallbackRegex:
-    def test_snapshot_text_with_role_keyword(self) -> None:
-        snapshot = 'text "Senior Software Engineer" [ref=1]\nbutton "Apply"'
-
-        jobs = parse_career_page(snapshot, "Acme", "https://acme.com/careers")
-
-        assert len(jobs) == 1
-        assert jobs[0]["title"] == "Senior Software Engineer"
-        assert jobs[0]["source_type"] == "career_page"
-        assert jobs[0]["company"] == "Acme"
-
-    def test_noise_filtered(self) -> None:
-        snapshot = 'text "Cookie Policy" [ref=1]\nbutton "Next"'
-
-        jobs = parse_career_page(snapshot, "Acme", "https://acme.com/careers")
-
-        assert jobs == []
-
-    def test_no_role_keyword_filtered(self) -> None:
-        snapshot = 'text "Welcome to our company page" [ref=1]'
-
-        jobs = parse_career_page(snapshot, "Acme", "https://acme.com/careers")
-
-        assert jobs == []
-
-    def test_deduplicates_titles(self) -> None:
-        snapshot = 'text "Senior Staff Engineer" [ref=1]\ntext "Senior Staff Engineer" [ref=2]'
-
-        jobs = parse_career_page(snapshot, "Acme", "https://acme.com/careers")
-
-        assert len(jobs) == 1
-
-    def test_jsonld_takes_precedence_over_regex(self) -> None:
-        """When HTML contains JSON-LD, regex fallback is not reached."""
+    def test_location_extracted_from_job_location_address(self) -> None:
         html = _html_with_jsonld(
-            '{"@type":"JobPosting","title":"Platform Eng","url":"https://ex.com/pe"}'
+            '{"@type":"JobPosting",'
+            '"title":"Frontend Engineer",'
+            '"url":"https://ex.com/fe",'
+            '"jobLocation":{"address":{"addressLocality":"Tokyo"}}}'
         )
-        # Also inject a regex-matching pattern (should be ignored)
-        html += 'text "Staff Data Engineer" [ref=1]'
 
-        jobs = parse_career_page(html, "Ex", "https://ex.com/careers")
+        result = _ADAPTER.list_jobs(html)
 
-        # Only the JSON-LD job should appear
-        assert len(jobs) == 1
-        assert jobs[0]["source_type"] == "career_page_jsonld"
-        assert jobs[0]["title"] == "Platform Eng"
+        assert result.jobs[0].location == "Tokyo"
 
+    def test_no_jsonld_returns_empty(self) -> None:
+        # A page with no JSON-LD: the adapter returns no jobs (the production
+        # sink then falls back to the Tier 2 agent, not a regex parser).
+        result = _ADAPTER.list_jobs("<html><body>no structured data here</body></html>")
 
-# --- ego_save_raw_html ---
+        assert result.jobs == ()
 
+    def test_external_id_derived_from_url(self) -> None:
+        # The adapter derives a stable external_id from the posting URL so the
+        # sink's (source_id, external_id) dedup is stable across crawls.
+        import hashlib
 
-class TestEgoSaveRawHtml:
-    @patch("scripts.crawl_full.run_ego")
-    def test_returns_true_on_success(self, mock_run_ego: MagicMock) -> None:
-        mock_run_ego.return_value = "cliLog saved 12345"
+        url = "https://ex.com/j/dedup"
+        html = _html_with_jsonld(f'{{"@type":"JobPosting","title":"Eng","url":"{url}"}}')
 
-        result = ego_save_raw_html("https://example.com", "/tmp/out.html", wait_seconds=5)
+        record = _ADAPTER.list_jobs(html).jobs[0]
 
-        assert result is True
-        mock_run_ego.assert_called_once()
-        script = mock_run_ego.call_args[0][0]
-        assert "document.documentElement.outerHTML" in script
-        assert "https://example.com" in script
-        assert "/tmp/out.html" in script
-
-    @patch("scripts.crawl_full.run_ego")
-    def test_returns_false_on_failure(self, mock_run_ego: MagicMock) -> None:
-        mock_run_ego.return_value = "ERROR: timeout"
-
-        result = ego_save_raw_html("https://example.com", "/tmp/out.html")
-
-        assert result is False
-
-    @patch("scripts.crawl_full.run_ego")
-    def test_script_uses_evaluate_not_snapshot_text(self, mock_run_ego: MagicMock) -> None:
-        mock_run_ego.return_value = "cliLog saved 100"
-
-        ego_save_raw_html("https://example.com", "/tmp/out.html")
-
-        script = mock_run_ego.call_args[0][0]
-        assert "evaluate" in script
-        assert "snapshotText" not in script
-
-    @patch("scripts.crawl_full.run_ego")
-    def test_default_wait_seconds(self, mock_run_ego: MagicMock) -> None:
-        mock_run_ego.return_value = "cliLog saved 100"
-
-        ego_save_raw_html("https://example.com", "/tmp/out.html")
-
-        script = mock_run_ego.call_args[0][0]
-        assert "await wait(8)" in script
-
-    @patch("scripts.crawl_full.run_ego")
-    def test_custom_wait_seconds(self, mock_run_ego: MagicMock) -> None:
-        mock_run_ego.return_value = "cliLog saved 100"
-
-        ego_save_raw_html("https://example.com", "/tmp/out.html", wait_seconds=12)
-
-        script = mock_run_ego.call_args[0][0]
-        assert "await wait(12)" in script
+        assert record.external_id == hashlib.sha256(url.encode()).hexdigest()[:16]

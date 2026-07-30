@@ -310,6 +310,13 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
         "/api/v1/crawl-plans/readiness",
         "/api/v1/crawl-plans/empty-state-cta",
         "/api/v1/crawl-plans/scope-preview",
+        # Phase 6.3: source-specific crawl-permission routes.
+        "/api/v1/crawl-permissions",
+        "/api/v1/crawl-permissions/{permission_id}",
+        "/api/v1/crawl-permissions/{permission_id}/grant",
+        "/api/v1/crawl-permissions/{permission_id}/deny",
+        "/api/v1/crawl-permissions/{permission_id}/revoke",
+        "/api/v1/crawl-sources/{source_id}/permissions",
     }
 
 

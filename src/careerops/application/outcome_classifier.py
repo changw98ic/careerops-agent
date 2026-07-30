@@ -1,4 +1,4 @@
-"""Source attempt outcome classifier (real-autonomous-career-loop Phase 5.6).
+"""Source attempt outcome classifier (real-autonomous-career-loop Phase 5.6 + 6.1).
 
 Maps a ``CrawlSourceResult`` (postings tuple, status_code, body_prefix,
 expected_fields_missing) plus policy decision and backoff reason onto the
@@ -18,6 +18,12 @@ Classification rules (from the task spec):
 Iron constraint (task 5.6): empty results, HTTP 403, CAPTCHA, model
 judgement alone, and temporary network failures MUST NOT collapse into
 ``AUTH_REQUIRED`` without explicit login evidence.
+
+Task 6.1 additions: login requirements are detected ONLY from explicit
+positive signals — login redirect (``_has_login_redirect_signal``), login
+wall over job content on a 200 page (``_has_login_evidence``), explicit
+login message, or authentication-required job API response.  Empty results,
+generic 403, CAPTCHA alone, and model judgement alone are NOT login evidence.
 """
 
 from __future__ import annotations
@@ -32,6 +38,8 @@ from careerops.infrastructure.temporal.m1_crawl_sink import CrawlSourceResult
 __all__ = [
     "ClassificationInput",
     "classify_outcome",
+    "has_login_evidence",
+    "has_login_redirect_signal",
 ]
 
 
@@ -46,6 +54,23 @@ _LOGIN_EVIDENCE_SIGNALS: tuple[str, ...] = (
     "please log in",
     "you must be logged in",
     "access denied",
+)
+
+# Login-redirect URL / body substrings (lowercased).  Task 6.1: a 3xx
+# redirect whose ``Location`` header or body snippet contains one of these
+# AND zero job postings is explicit login-evidence — the source requires
+# authentication before it will serve job content.
+_LOGIN_REDIRECT_SIGNALS: tuple[str, ...] = (
+    "/login",
+    "/signin",
+    "/sign-in",
+    "/auth/login",
+    "/account/login",
+    "/sso/login",
+    "login.microsoftonline",
+    "login.live.com",
+    "accounts.google.com",
+    "auth0.com/authorize",
 )
 
 _CAPTCHA_SIGNALS: tuple[str, ...] = (
@@ -86,6 +111,19 @@ def _has_login_evidence(body_prefix: str) -> bool:
     """
     snippet = body_prefix[:4096].lower()
     return any(signal in snippet for signal in _LOGIN_EVIDENCE_SIGNALS)
+
+
+def _has_login_redirect_signal(body_prefix: str) -> bool:
+    """Check body prefix for explicit login-redirect URL evidence.
+
+    Task 6.1: a redirect whose ``Location`` header or response body contains
+    a login URL (``/login``, ``/signin``, SSO endpoints) is positive evidence
+    that the source requires authentication.  The body_prefix for HTTP
+    redirects typically carries the ``Location`` header value or a short HTML
+    snippet with the redirect URL.
+    """
+    snippet = body_prefix[:4096].lower()
+    return any(signal in snippet for signal in _LOGIN_REDIRECT_SIGNALS)
 
 
 def classify_outcome(inp: ClassificationInput) -> CrawlAttemptOutcome:
@@ -139,9 +177,23 @@ def classify_outcome(inp: ClassificationInput) -> CrawlAttemptOutcome:
             return CrawlAttemptOutcome.AUTH_REQUIRED
         return CrawlAttemptOutcome.DYNAMIC_OR_UNSUPPORTED
 
+    # 5b. Login redirect (3xx + login URL in Location/body) → AUTH_REQUIRED.
+    #     Task 6.1: a redirect to a login URL is explicit positive evidence.
+    #     Without the redirect signal, 3xx falls through to DYNAMIC below.
+    if 300 <= result.status_code < 400:
+        if _has_login_redirect_signal(result.body_prefix):
+            return CrawlAttemptOutcome.AUTH_REQUIRED
+        return CrawlAttemptOutcome.DYNAMIC_OR_UNSUPPORTED
+
     # 6. No adapter + no job content → NOT_JOB_SOURCE.
     if not inp.has_adapter:
         return CrawlAttemptOutcome.NOT_JOB_SOURCE
+
+    # 7a. 200 + login wall evidence in body → AUTH_REQUIRED.
+    #     Task 6.1: a 200 page that shows a login wall over job content (e.g.
+    #     "sign in to continue", "login required") is explicit evidence.
+    if result.status_code == 200 and _has_login_evidence(result.body_prefix):
+        return CrawlAttemptOutcome.AUTH_REQUIRED
 
     # 7. 200 + no captcha + expected fields present → VERIFIED_EMPTY.
     #    This is the "clean 200 with a proper adapter that found no jobs" case.
@@ -162,3 +214,11 @@ def classify_outcome(inp: ClassificationInput) -> CrawlAttemptOutcome:
 
     # 10. Fallback — status 0 (no response) or unknown → NOT_JOB_SOURCE.
     return CrawlAttemptOutcome.NOT_JOB_SOURCE
+
+
+# ---------------------------------------------------------------------------
+# Public re-exports so callers (e.g. the permission service) can check
+# login evidence without importing private helpers.
+# ---------------------------------------------------------------------------
+has_login_evidence = _has_login_evidence
+has_login_redirect_signal = _has_login_redirect_signal

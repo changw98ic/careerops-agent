@@ -8,7 +8,7 @@ from uuid import UUID
 from fastapi import Depends, FastAPI
 
 from careerops import __version__
-from careerops.api.auth_dependency import require_api_auth, require_web_auth
+from careerops.api.auth_dependency import require_api_auth
 from careerops.api.errors import install_error_handlers
 from careerops.api.metrics_middleware import MetricsMiddleware
 from careerops.api.middleware import RequestIdMiddleware
@@ -16,6 +16,7 @@ from careerops.api.routes.agent_console import router as agent_console_router
 from careerops.api.routes.agent_runs import router as agent_runs_router
 from careerops.api.routes.application_workspace import router as application_workspace_router
 from careerops.api.routes.applications import router as applications_router
+from careerops.api.routes.crawl_permissions import router as crawl_permissions_router
 from careerops.api.routes.crawl_plans import router as crawl_plans_router
 from careerops.api.routes.crawl_runs import router as crawl_runs_router
 from careerops.api.routes.crawl_sources import router as crawl_sources_router
@@ -34,7 +35,6 @@ from careerops.api.routes.resumes import router as resumes_router
 from careerops.api.routes.review import install_review_endpoint
 from careerops.api.routes.smart_intake import router as smart_intake_router
 from careerops.api.routes.system_send import router as system_send_router
-from careerops.application.dashboard import DashboardSnapshotProvider
 from careerops.application.ports.readiness import ReadinessProbe
 from careerops.auth.service import ConsoleAuthService
 from careerops.config import RuntimeEnvironment, Settings, get_settings
@@ -45,7 +45,6 @@ from careerops.domain.applications import (
 )
 from careerops.domain.email_payloads import EmailAccountSummary
 from careerops.infrastructure.auth import create_console_auth_service
-from careerops.infrastructure.dashboard import RuntimeDashboardSnapshotProvider
 from careerops.infrastructure.database.postgres_application_repo import (
     PostgresApplicationRepository,
 )
@@ -53,9 +52,8 @@ from careerops.infrastructure.memory_repos import InMemoryApplicationRepository
 from careerops.infrastructure.redis import RedisAuthRateLimiter
 from careerops.infrastructure.runtime import RuntimeResources
 from careerops.observability import Metrics
-from careerops.web import ConsoleWebSettings, install_console_web
-from careerops.web.jobs_ui import web_router as jobs_ui_router
-from careerops.web.matching_ui import router as matching_ui_router
+from careerops.web import ConsoleWebSettings
+from careerops.web.security import ConsoleSecurityHeadersMiddleware
 
 # ---------------------------------------------------------------------------
 # Protocol adapters for InMemoryApplicationRepository
@@ -110,7 +108,6 @@ def create_app(
     *,
     readiness_probe: ReadinessProbe | None = None,
     console_auth_service: ConsoleAuthService | None = None,
-    dashboard_provider: DashboardSnapshotProvider | None = None,
 ) -> FastAPI:
     resolved = settings or get_settings()
     # Create metrics first so it can be wired into the runtime's graph
@@ -125,13 +122,6 @@ def create_app(
         auth_service = create_console_auth_service(
             probe.database,
             rate_limiter=RedisAuthRateLimiter(probe.redis_sync),
-        )
-    resolved_dashboard_provider = dashboard_provider
-    if resolved_dashboard_provider is None and isinstance(probe, RuntimeResources):
-        resolved_dashboard_provider = RuntimeDashboardSnapshotProvider(
-            probe,
-            probe.database,
-            resolved,
         )
 
     @asynccontextmanager
@@ -256,6 +246,18 @@ def create_app(
         app.state.crawl_source_service = crawl_source_service
         app.state.crawl_plan_service = crawl_plan_service
         app.state.crawl_run_service = crawl_run_service
+        # Phase 6.2: source-specific crawl-permission service.  Composes the
+        # permission repo (Phase 5.2) + source repo (for pausing) + audit sink.
+        from careerops.application.crawl_permission_service import (
+            CrawlPermissionService,
+            LoggingPermissionAuditSink,
+        )
+
+        app.state.crawl_permission_service = CrawlPermissionService(
+            probe.crawl_permission_repo,  # type: ignore[arg-type]
+            probe.crawl_source_repo,  # type: ignore[arg-type]
+            audit_sink=LoggingPermissionAuditSink(),
+        )
         # Section 5 crawl execution service (tasks 5.1, 5.5, 5.6). Wired
         # through RuntimeResources; reachable from API routes and Temporal
         # activities via app.state.crawl_execution_service.
@@ -511,7 +513,7 @@ def create_app(
     app.include_router(health_router)
     app.include_router(metrics_router)
 
-    # Build web_settings once; needed for both console web and API auth.
+    # Build the browser-origin settings once for the API auth and CSRF gates.
     web_settings: ConsoleWebSettings | None = None
     if auth_service is not None:
         web_settings = ConsoleWebSettings(
@@ -520,15 +522,10 @@ def create_app(
             cookie_secure=resolved.console_cookie_secure,
         )
         app.state.web_settings = web_settings
+        app.add_middleware(ConsoleSecurityHeadersMiddleware)
 
-    # Auth API for Vue SPA (session/login/bootstrap/logout).
-    import os
-    from pathlib import Path
-
+    # Auth API for the separate Vue frontend (session/login/bootstrap/logout).
     from careerops.web.api_auth import router as auth_router
-
-    serve_spa = os.environ.get("CAREEROPS_SERVE_SPA", "").lower() in ("1", "true", "yes")
-    frontend_dist = Path(__file__).resolve().parent.parent.parent.parent / "frontend" / "dist"
 
     app.include_router(auth_router)
 
@@ -550,6 +547,7 @@ def create_app(
     app.include_router(crawl_sources_router, dependencies=[Depends(require_api_auth)])
     app.include_router(crawl_plans_router, dependencies=[Depends(require_api_auth)])
     app.include_router(crawl_runs_router, dependencies=[Depends(require_api_auth)])
+    app.include_router(crawl_permissions_router, dependencies=[Depends(require_api_auth)])
     # Section-6 inbox router (tasks 6.7-6.8). Same auth guard; candidate
     # ownership resolved server-side. Additive — no existing routes broken.
     app.include_router(inbox_router, dependencies=[Depends(require_api_auth)])
@@ -595,58 +593,27 @@ def create_app(
     # carry Cache-Control: no-store and bounded cursor pagination.
     app.include_router(reply_drafts_router, dependencies=[Depends(require_api_auth)])
 
-    # Check if Vue SPA is enabled; if so, skip old Jinja2 UI routes.
-    if not serve_spa:
-        app.include_router(jobs_ui_router, dependencies=[Depends(require_web_auth)])
-        app.include_router(matching_ui_router, dependencies=[Depends(require_web_auth)])
-
-    if auth_service is not None and not serve_spa:
-        if web_settings is None:
-            raise ValueError("web_settings is required when console authentication is installed")
-        if resolved_dashboard_provider is None:
-            raise ValueError(
-                "a dashboard provider is required when console authentication is installed"
-            )
-        install_console_web(app, auth_service, resolved_dashboard_provider, web_settings)
-        # Review endpoint (plan v0.4 §2.7 / §3 Stage 3): mounted when the
-        # runtime actually compiled the graph (durable in PRODUCTION via
-        # PostgresSaver + PostgresSideEffectStore, in-memory otherwise).
-        if (
-            resolved.environment is not RuntimeEnvironment.PRODUCTION
-            and isinstance(probe, RuntimeResources)
-            and probe.career_graph is not None
-            and probe.review_mapping is not None
-            and probe.side_effect_kernel is not None
-        ):
-            install_review_endpoint(
-                app,
-                auth_service=auth_service,
-                rate_limiter=RedisAuthRateLimiter(probe.redis_sync),
-                review_mapping=probe.review_mapping,
-                career_graph=probe.career_graph,
-                side_effect_kernel=probe.side_effect_kernel,
-                web_settings=web_settings,
-            )
-    # Vue SPA: serve static assets and fallback to index.html for client routing.
-    from fastapi.responses import FileResponse
-    from starlette.staticfiles import StaticFiles
-
-    if serve_spa and frontend_dist.is_dir():
-        app.mount("/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="static")
-
-        @app.get("/{full_path:path}", include_in_schema=False)
-        async def spa_fallback(full_path: str) -> FileResponse:  # pyright: ignore[reportUnusedFunction]
-            # API routes should not be caught by SPA fallback
-            if full_path.startswith("api/"):
-                from fastapi import HTTPException
-
-                raise HTTPException(status_code=404, detail="Not found")
-            # Serve the file if it exists, otherwise serve index.html for SPA routing.
-            file_path = frontend_dist / full_path
-            if file_path.is_file():
-                return FileResponse(file_path)
-            return FileResponse(frontend_dist / "index.html")
-
+    # Review endpoint (plan v0.4 §2.7 / §3 Stage 3): mounted when the runtime
+    # actually compiled the graph (durable in PRODUCTION via
+    # PostgresSaver + PostgresSideEffectStore, in-memory otherwise).
+    if (
+        auth_service is not None
+        and web_settings is not None
+        and resolved.environment is not RuntimeEnvironment.PRODUCTION
+        and isinstance(probe, RuntimeResources)
+        and probe.career_graph is not None
+        and probe.review_mapping is not None
+        and probe.side_effect_kernel is not None
+    ):
+        install_review_endpoint(
+            app,
+            auth_service=auth_service,
+            rate_limiter=RedisAuthRateLimiter(probe.redis_sync),
+            review_mapping=probe.review_mapping,
+            career_graph=probe.career_graph,
+            side_effect_kernel=probe.side_effect_kernel,
+            web_settings=web_settings,
+        )
     # -----------------------------------------------------------------------
     # OpenAPI: declare standard error responses on every path
     # -----------------------------------------------------------------------

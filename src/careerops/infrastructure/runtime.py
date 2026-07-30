@@ -157,6 +157,7 @@ class RuntimeResources:
             PostgresContactRepository,
         )
         from careerops.infrastructure.database.postgres_crawl_repo import (
+            PostgresCrawlPermissionRepository,
             PostgresCrawlPlanRepository,
             PostgresCrawlRunRepository,
             PostgresCrawlSourceRepository,
@@ -200,6 +201,7 @@ class RuntimeResources:
         self.crawl_source_repo = PostgresCrawlSourceRepository(self.database)
         self.crawl_plan_repo = PostgresCrawlPlanRepository(self.database)
         self.crawl_run_repo = PostgresCrawlRunRepository(self.database)
+        self.crawl_permission_repo = PostgresCrawlPermissionRepository(self.database)
 
         from careerops.application.agent_runtime import AgentRuntime
         from careerops.application.agent_services import (

@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "careerops",
+  "project_id": "c57b8a0d-8acc-415e-95c1-2e20c101aede"
+}

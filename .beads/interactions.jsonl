@@ -1,0 +1,1 @@
+{"id":"int-e84914ce11c07ecc078f68423ecfd3e5","kind":"field_change","created_at":"2026-07-30T02:15:36.205165Z","actor":"changw98ic","issue_id":"careerops-m4h","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Beads 数据库、自动提交、origin 远端和任务读写均已验证"}}

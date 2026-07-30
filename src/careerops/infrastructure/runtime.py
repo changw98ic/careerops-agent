@@ -296,6 +296,17 @@ class RuntimeResources:
             sink=crawl_sink,
         )
 
+        # Phase 7.1: Tier 2 budget coordinator (Postgres-backed, durable across
+        # worker restarts).  Injected into BoundedTier2Orchestrator when the
+        # remaining Tier 2 dependencies (session checker, eligibility checker)
+        # are wired.  CrawlActivationService and bounded_tier2 will consume this
+        # via the BudgetChecker protocol.
+        from careerops.infrastructure.database.postgres_tier2_budget import (
+            PostgresTier2Budget,
+        )
+
+        self.tier2_budget: PostgresTier2Budget = PostgresTier2Budget(self.database)
+
     async def check(self) -> ReadinessReport:
         if self._closed:
             return ReadinessReport(

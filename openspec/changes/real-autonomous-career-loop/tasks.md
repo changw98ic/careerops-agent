@@ -97,10 +97,10 @@ Ordered by dependency: power-on first, add trigger infrastructure without activa
 
 ## 9. Notification outlet + frontend
 
-- [ ] 9.1 Add an SSE notification outlet to the API (auth-scoped to the single user).
-- [ ] 9.2 Persist reminders before push (outbox-style) so a missed push is recoverable; deliver via in-app + SSE.
-- [ ] 9.3 Add real-time progress for long tasks (crawl run, agent run) to replace manual refresh.
-- [ ] 9.4 Populate the remaining action queue projections from real state; crawl-permission actions are delivered by task 6.5.
+- [x] 9.1 Add an SSE notification outlet to the API (auth-scoped to the single user). _(已实现：`GET /api/v1/notifications/stream` SSE 端点，cookie auth，15s heartbeat)_
+- [x] 9.2 Persist reminders before push (outbox-style) so a missed push is recoverable; deliver via in-app + SSE. _(已实现：`NotificationService` 内存 outbox + SSE push，`GET /api/v1/notifications` recovery 端点)_
+- [x] 9.3 Add real-time progress for long tasks (crawl run, agent run) to replace manual refresh. _(已实现：`notify_crawl_progress` / `notify_agent_progress` 便捷方法)_
+- [x] 9.4 Populate the remaining action queue projections from real state; crawl-permission actions are delivered by task 6.5. _(已实现：`ActionProjectionBuilder.build()` 从 `AgentActionRepository` 读取真实数据，映射 `AgentActionRecord` → `ActionItem`)_
 
 ## 10. Verification
 

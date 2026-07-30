@@ -13,6 +13,7 @@ from careerops.api.errors import install_error_handlers
 from careerops.api.metrics_middleware import MetricsMiddleware
 from careerops.api.middleware import RequestIdMiddleware
 from careerops.api.routes.agent_console import router as agent_console_router
+from careerops.api.routes.notifications import router as notifications_router
 from careerops.api.routes.agent_runs import router as agent_runs_router
 from careerops.api.routes.application_workspace import router as application_workspace_router
 from careerops.api.routes.applications import router as applications_router
@@ -278,6 +279,29 @@ def create_app(
         )
         app.state.agent_run_repository = probe.agent_run_repo
         app.state.agent_runtime = probe.agent_runtime
+
+        # Phase 9: notification service (SSE + outbox).  The action repo is
+        # wired from the probe so ActionProjectionBuilder can read persisted
+        # actions instead of returning an empty stub queue.
+        from careerops.application.notification_service import (
+            NotificationService,
+            SSEChannel,
+        )
+        from careerops.agent_console.action_projection import (
+            ActionProjectionBuilder,
+        )
+
+        sse_channel = SSEChannel()
+        app.state.notification_service = NotificationService(sse_channel)
+        app.state.sse_channel = sse_channel
+
+        # Wire action repo from probe for real action queue projection.
+        action_repo = getattr(probe, "agent_action_repo", None)
+        if action_repo is not None:
+            app.state.agent_console_action_repo = action_repo
+            app.state.action_projection = ActionProjectionBuilder(
+                agent_action_repo=action_repo,
+            )
         app.state.resume_review_service = probe.resume_review_service
         app.state.interview_preparation_service = probe.interview_preparation_service
         # Section-7 application workspace service (tasks 7.2-7.7). Composes the
@@ -553,6 +577,9 @@ def create_app(
     app.include_router(inbox_router, dependencies=[Depends(require_api_auth)])
     app.include_router(agent_runs_router, dependencies=[Depends(require_api_auth)])
     app.include_router(agent_console_router, dependencies=[Depends(require_api_auth)])
+    # Phase 9: notification routes (SSE stream + recovery).  The SSE endpoint
+    # uses cookie auth without CSRF (GET-only, EventSource sends cookies).
+    app.include_router(notifications_router, dependencies=[Depends(require_api_auth)])
     # Section-7 application-workspace router (tasks 7.8). Additive paths only
     # (detail / prepare / channels / channel / package / timeline /
     # confirm-external-submission / state); the M3 application routes are

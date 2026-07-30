@@ -42,6 +42,7 @@ __all__ = [
     "MatchingChainResult",
     "InboxProjector",
     "ScheduleActivator",
+    "TemporalScheduleActivator",
     "BudgetChecker",
 ]
 
@@ -83,6 +84,7 @@ class ScheduleActivator(Protocol):
         interval: timedelta,
         *,
         paused: bool = False,
+        owner_id: UUID | None = None,
     ) -> bool: ...
 
 
@@ -232,6 +234,7 @@ class CrawlActivationService:
                     source.id,
                     interval,
                     paused=False,
+                    owner_id=owner_id,
                 )
                 activated += 1
             except Exception:
@@ -326,3 +329,50 @@ class CrawlActivationService:
                 chained=False,
                 skip_reason="projection error",
             )
+
+
+# ---------------------------------------------------------------------------
+# Concrete adapter: ScheduleActivator -> ScheduleManager
+# ---------------------------------------------------------------------------
+
+
+class TemporalScheduleActivator:
+    """Adapts the ``ScheduleActivator`` Protocol to ``ScheduleManager``.
+
+    Delegates to ``ScheduleManager.ensure_schedule()`` with per-source
+    deterministic schedule IDs (``crawl:{source_id}``), the
+    ``CrawlScheduledWorkflow``, and the configured task queue.
+    """
+
+    def __init__(
+        self,
+        schedule_manager: object,
+        task_queue: str = "careerops-m0",
+    ) -> None:
+        self._manager = schedule_manager
+        self._task_queue = task_queue
+
+    async def activate_source_schedule(
+        self,
+        source_id: UUID,
+        interval: timedelta,
+        *,
+        paused: bool = False,
+        owner_id: UUID | None = None,
+    ) -> bool:
+        from careerops.workflows.s5_contracts import ScheduledCrawlWorkflowInput
+        from careerops.workflows.s5_workflows import CrawlScheduledWorkflow
+
+        schedule_id = f"crawl:{source_id}"
+        arg = ScheduledCrawlWorkflowInput(
+            owner_id=str(owner_id) if owner_id else "",
+        )
+        return await self._manager.ensure_schedule(  # type: ignore[union-attr]
+            schedule_id=schedule_id,
+            workflow=CrawlScheduledWorkflow,
+            arg=arg,
+            interval=interval,
+            task_queue=self._task_queue,
+            paused=paused,
+            note=f"source={source_id}",
+        )

@@ -83,11 +83,20 @@ def _load_schema() -> dict[str, object]:
     )
 
 
-def _validate_posting(item: dict[str, object], source_url: str) -> RawJobRecord | str:
+def _validate_posting(
+    item: dict[str, object],
+    source_url: str,
+    *,
+    source_html: str = "",
+) -> RawJobRecord | str:
     """Validate a single posting dict against the canonical schema.
 
     Returns the validated ``RawJobRecord`` on success, or an error string
     describing the validation failure.
+
+    Phase 7.6 hardening: when ``source_html`` is provided, the title must
+    appear as a substring in the source HTML (fail-closed: hallucinated
+    postings are discarded).
     """
     title_raw = item.get("title")
     if title_raw is None:
@@ -100,6 +109,10 @@ def _validate_posting(item: dict[str, object], source_url: str) -> RawJobRecord 
         val = item.get(field_name)
         if val is not None and not isinstance(val, (str, int, float)):
             return f"field '{field_name}' is not a string: {type(val).__name__}"
+
+    # Source cross-validation: title must appear in the source HTML.
+    if source_html and title.lower() not in source_html.lower():
+        return f"title not found in source HTML: {title!r}"
 
     location = str(item.get("location", "")).strip()
     url = str(item.get("url", "")).strip() or source_url
@@ -119,6 +132,8 @@ def _validate_posting(item: dict[str, object], source_url: str) -> RawJobRecord 
 def _validate_postings(
     postings_raw: list[object],
     source_url: str,
+    *,
+    source_html: str = "",
 ) -> tuple[list[RawJobRecord], list[str]]:
     """Validate a list of posting dicts.
 
@@ -131,7 +146,7 @@ def _validate_postings(
             errors.append(f"posting[{i}]: not a dict")
             continue
         item = cast("dict[str, object]", raw_item)
-        result = _validate_posting(item, source_url)
+        result = _validate_posting(item, source_url, source_html=source_html)
         if isinstance(result, str):
             errors.append(f"posting[{i}]: {result}")
         else:
@@ -188,7 +203,7 @@ class LLMJobExtractor:
             return []
 
         records, errors = _validate_postings(
-            cast("list[object]", postings_obj), source_url
+            cast("list[object]", postings_obj), source_url, source_html=html
         )
 
         # If all postings validated, return them.
@@ -216,7 +231,7 @@ class LLMJobExtractor:
             return records
 
         repaired_records, repair_errors = _validate_postings(
-            cast("list[object]", repair_postings), source_url
+            cast("list[object]", repair_postings), source_url, source_html=html
         )
 
         if repair_errors:

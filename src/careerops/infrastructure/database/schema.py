@@ -3995,3 +3995,38 @@ sa.Index(
     smart_intake_decisions.c.candidate_id,
     smart_intake_decisions.c.created_at,
 )
+
+# ---------------------------------------------------------------------------
+# Tier 2 budget persistence (real-autonomous-career-loop Phase 7.1)
+# ---------------------------------------------------------------------------
+
+tier2_budget_daily = sa.Table(
+    "tier2_budget_daily",
+    metadata,
+    # Single-row-per-day table keyed by the UTC date.
+    sa.Column("day", sa.Date(), primary_key=True),
+    sa.Column(
+        "consumed",
+        sa.Integer(),
+        server_default=sa.text("0"),
+        nullable=False,
+    ),
+    sa.CheckConstraint("consumed >= 0", name="consumed_nonnegative"),
+)
+
+tier2_budget_leases = sa.Table(
+    "tier2_budget_leases",
+    metadata,
+    sa.Column("lease_id", sa.String(128), primary_key=True),
+    sa.Column("source_id", sa.String(128), nullable=False),
+    sa.Column(
+        "acquired_at",
+        sa.DateTime(timezone=True),
+        server_default=sa.func.now(),
+        nullable=False,
+    ),
+)
+sa.Index(
+    "ix_tier2_budget_leases_source",
+    tier2_budget_leases.c.source_id,
+)

@@ -87,6 +87,25 @@
                       <a-tag :color="policyColor(record.robots_status)" size="small">机{{ policyLabel(record.robots_status) }}</a-tag>
                     </a-space>
                   </template>
+                  <template v-else-if="column.key === 'permission'">
+                    <template v-if="getPermissionForSource(record.id)">
+                      <a-space :size="4">
+                        <a-tag :color="permStateColor(getPermissionForSource(record.id).state)" size="small">
+                          {{ permStateLabel(getPermissionForSource(record.id).state) }}
+                        </a-tag>
+                        <template v-if="getPermissionForSource(record.id).state === 'pending'">
+                          <a-button type="link" size="small" :loading="permActionId === getPermissionForSource(record.id).id" @click="grantPerm(getPermissionForSource(record.id).id)">授权</a-button>
+                          <a-button type="link" size="small" danger :loading="permActionId === getPermissionForSource(record.id).id" @click="denyPerm(getPermissionForSource(record.id).id)">拒绝</a-button>
+                        </template>
+                        <template v-else-if="getPermissionForSource(record.id).state === 'granted'">
+                          <span class="muted" style="font-size: 11px">
+                            {{ getPermissionForSource(record.id).expires_at ? '至 ' + formatDate(getPermissionForSource(record.id).expires_at) : '永久' }}
+                          </span>
+                        </template>
+                      </a-space>
+                    </template>
+                    <span v-else class="muted">-</span>
+                  </template>
                   <template v-else-if="column.key === 'action'">
                     <a-space>
                       <a-popconfirm
@@ -308,6 +327,7 @@ import { api, formatApiError, parseApiError } from '../api/client.js'
 const head = ref({ active: null, next_run_at: null, state: 'draft' })
 const sources = ref([])
 const versions = ref([])
+const permissions = ref([])
 
 const loading = ref(false)
 const initialLoading = ref(true)
@@ -315,6 +335,7 @@ const historyLoading = ref(false)
 const planActionLoading = ref(false)
 const runNowLoading = ref(false)
 const sourceActionId = ref('')
+const permActionId = ref('')
 const activatingId = ref('')
 const error = ref('')
 const unavailable = ref(false)
@@ -326,7 +347,8 @@ const sourceColumns = [
   { title: '标识', key: 'identifier', dataIndex: 'source_identifier', ellipsis: true },
   { title: '状态', key: 'state', dataIndex: 'state', width: 100 },
   { title: '策略', key: 'policy', width: 180 },
-  { title: '操作', key: 'action', width: 100 },
+  { title: '权限', key: 'permission', width: 200 },
+  { title: '操作', key: 'action', width: 140 },
 ]
 
 const versionColumns = [
@@ -362,6 +384,18 @@ function policyColor(status) {
 
 function policyLabel(status) {
   return { allowed: '允许', blocked: '封禁', unknown: '未知' }[status] || status
+}
+
+function permStateColor(state) {
+  return { pending: 'orange', granted: 'green', denied: 'red', revoked: 'red', expired: 'default' }[state] || 'default'
+}
+
+function permStateLabel(state) {
+  return { pending: '待授权', granted: '已授权', denied: '已拒绝', revoked: '已撤销', expired: '已过期' }[state] || state
+}
+
+function getPermissionForSource(sourceId) {
+  return permissions.value.find((p) => p.source_id === sourceId) || null
 }
 
 // --- Formatting ---
@@ -431,11 +465,21 @@ async function loadHistory() {
   }
 }
 
+async function loadPermissions() {
+  try {
+    const data = await api.listCrawlPermissions({ limit: 200 })
+    permissions.value = data.items || data || []
+  } catch {
+    // Permissions endpoint may not be available yet; fail silently.
+    permissions.value = []
+  }
+}
+
 async function loadAll() {
   loading.value = true
   error.value = ''
   unavailable.value = false
-  await Promise.all([loadSources(), loadHead(), loadHistory()])
+  await Promise.all([loadSources(), loadHead(), loadHistory(), loadPermissions()])
   loading.value = false
   initialLoading.value = false
 }
@@ -448,7 +492,7 @@ async function pauseSource(id) {
   try {
     await api.pauseCrawlSource(id)
     message.success('已暂停')
-    await loadSources()
+    await Promise.all([loadSources(), loadPermissions()])
   } catch (err) {
     const info = parseApiError(err)
     if (info.isDependencyNotReady) unavailable.value = true
@@ -464,7 +508,7 @@ async function resumeSource(id) {
   try {
     await api.resumeCrawlSource(id)
     message.success('已启用')
-    await loadSources()
+    await Promise.all([loadSources(), loadPermissions()])
   } catch (err) {
     const info = parseApiError(err)
     if (info.isDependencyNotReady) unavailable.value = true
@@ -475,6 +519,38 @@ async function resumeSource(id) {
     }
   } finally {
     sourceActionId.value = ''
+  }
+}
+
+async function grantPerm(id) {
+  permActionId.value = id
+  error.value = ''
+  try {
+    await api.grantCrawlPermission(id)
+    message.success('已授权')
+    await Promise.all([loadPermissions(), loadSources()])
+  } catch (err) {
+    const info = parseApiError(err)
+    if (info.isDependencyNotReady) unavailable.value = true
+    else error.value = formatApiError(err, '授权失败。')
+  } finally {
+    permActionId.value = ''
+  }
+}
+
+async function denyPerm(id) {
+  permActionId.value = id
+  error.value = ''
+  try {
+    await api.denyCrawlPermission(id)
+    message.success('已拒绝')
+    await loadPermissions()
+  } catch (err) {
+    const info = parseApiError(err)
+    if (info.isDependencyNotReady) unavailable.value = true
+    else error.value = formatApiError(err, '拒绝失败。')
+  } finally {
+    permActionId.value = ''
   }
 }
 

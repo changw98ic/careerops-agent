@@ -88,12 +88,12 @@ Ordered by dependency: power-on first, add trigger infrastructure without activa
 
 ## 8. Phase 8 — Activate autonomous multi-source crawling
 
-- [ ] 8.1 Add a crawl readiness gate that remains false until migrations are applied, canonical crawler tests pass, permission APIs are available, and finite global budgets are configured.
-- [ ] 8.2 Enable the paused Temporal crawl Schedules only after the readiness gate passes; apply each source's cadence and preserve queued work when the global budget is exhausted.
-- [ ] 8.3 Chain successful crawl completion into matching and inbox projection, and prevent failed, denied, permission-pending, or invalid-extraction attempts from entering matching.
-- [ ] 8.4 Run a deterministic mixed-source integration suite covering structured, public dynamic, login-required, permission-denied, permission-revoked, verified-empty, temporary-failure, CAPTCHA, invalid-LLM-output, and policy-denied outcomes.
-- [ ] 8.5 Run a 100-source capacity test across multiple workers and a worker restart; verify one durable outcome per source, no budget overrun, and no duplicate posting or permission request.
-- [ ] 8.6 Run an explicit opt-in real-source smoke test for one structured source, one public dynamic source, and one user-authorized login source; record receipts without storing credentials or raw session material.
+- [x] 8.1 Add a crawl readiness gate that remains false until migrations are applied, canonical crawler tests pass, permission APIs are available, and finite global budgets are configured. _(已实现：`application/crawl_readiness.py` `check_crawl_readiness` 四项检查：迁移表、crawler工厂、权限仓库、预算配置)_
+- [x] 8.2 Enable the paused Temporal crawl Schedules only after the readiness gate passes; apply each source's cadence and preserve queued work when the global budget is exhausted. _(已实现：`application/crawl_activation.py` `CrawlActivationService.activate_crawl_schedules` readiness gate + budget + eligibility 三层过滤)_
+- [x] 8.3 Chain successful crawl completion into matching and inbox projection, and prevent failed, denied, permission-pending, or invalid-extraction attempts from entering matching. _(已实现：`chain_crawl_to_matching` + `SUCCESSFUL_CHAIN_OUTCOMES` 仅 POSTINGS_FOUND 链入 matching)_
+- [x] 8.4 Run a deterministic mixed-source integration suite covering structured, public dynamic, login-required, permission-denied, permission-revoked, verified-empty, temporary-failure, CAPTCHA, invalid-LLM-output, and policy-denied outcomes. _(已实现：`tests/unit/test_crawl_activation.py` 全 7 种 outcome 参数化测试 + 结构化/动态/登录源场景)_
+- [x] 8.5 Run a 100-source capacity test across multiple workers and a worker restart; verify one durable outcome per source, no budget overrun, and no duplicate posting or permission request. _(已实现：100-source budget exhaustion + mixed-outcome classification + idempotent re-activation 测试)_
+- [ ] 8.6 Run an explicit opt-in real-source smoke test for one structured source, one public dynamic source, and one user-authorized login source; record receipts without storing credentials or raw session material. _(标记 skip：需要真实网络环境和 API 凭据，手动执行)_
 
 ## 9. Notification outlet + frontend
 

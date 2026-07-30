@@ -55,6 +55,7 @@ __all__ = [
     "CrawlSourceAttempt",
     "CrawlSourcePermission",
     "PERMISSION_TERMINAL_STATES",
+    "SUCCESSFUL_CHAIN_OUTCOMES",
     "TERMINAL_STOP_OUTCOMES",
     "TIER2_ELIGIBLE_OUTCOMES",
     "is_permission_transition_allowed",
@@ -108,6 +109,15 @@ TIER2_ELIGIBLE_OUTCOMES: frozenset[CrawlAttemptOutcome] = frozenset(
 # it as non-retryable.
 TERMINAL_STOP_OUTCOMES: frozenset[CrawlAttemptOutcome] = frozenset(
     {CrawlAttemptOutcome.POLICY_DENIED}
+)
+
+# Outcomes that chain into matching and inbox projection (Phase 8.3).
+# Only ``POSTINGS_FOUND`` triggers the matching chain.  All other outcomes
+# (including ``VERIFIED_EMPTY``, ``TRANSIENT_FAILURE``, ``AUTH_REQUIRED``,
+# ``DYNAMIC_OR_UNSUPPORTED``, ``NOT_JOB_SOURCE``, ``POLICY_DENIED``) are
+# filtered out and never reach the inbox.
+SUCCESSFUL_CHAIN_OUTCOMES: frozenset[CrawlAttemptOutcome] = frozenset(
+    {CrawlAttemptOutcome.POSTINGS_FOUND}
 )
 
 

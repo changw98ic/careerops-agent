@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://careerops.local/schemas/reply_draft.json",
+  "title": "reply_draft",
+  "description": "Drafter (A) output for the autonomous A/B approval loop (real-autonomous-career-loop design D2). A composes a single email on top of a template skeleton grounded in trusted business state.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["subject", "body"],
+  "properties": {
+    "subject": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The email subject line."
+    },
+    "body": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The full email body, ready to send."
+    }
+  }
+}

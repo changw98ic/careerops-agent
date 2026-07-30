@@ -1,10 +1,11 @@
-"""POST ``/api/v1/review/{approval_id}`` — the HITL review decision endpoint.
+"""POST ``/api/v1/review/{approval_id}`` — the human-review fallback endpoint.
 
-Plan v0.4 §2.5 / §2.7 / §3 Stage 3. This router is the ONLY HTTP entry point
-that resumes the LangGraph review gate. It is mounted solely in non-PRODUCTION
-(v1 demo/test); ``api/app.py`` declines to mount it in PRODUCTION and
-``RuntimeResources`` does not even build the in-memory graph there, so there is
-no silent degradation to in-memory state.
+real-autonomous-career-loop Phase 3: the per-message ``review_gate`` interrupt
+is gone, replaced by the autonomous A/B approval loop. This router is now the
+HUMAN FALLBACK for the rare case A/B did not converge (or the model was
+unavailable): the graph leaves such an approval PENDING and ends, and a human
+decides it here. It is mounted solely in non-PRODUCTION (v1 demo/test);
+``api/app.py`` declines to mount it in PRODUCTION.
 
 Security chain (every gate fails closed):
 
@@ -24,15 +25,15 @@ Security chain (every gate fails closed):
    ``requested_for`` field. Mismatch -> 403.
 
 After the gates, the endpoint reverse-resolves the approval to its
-``thread_id`` / ``intent_id`` via ``ReviewMappingStore``, claims the resume
-(first writer wins), and invokes ``graph.invoke(Command(resume=...))``. A repeat
-of the SAME decision returns the cached result (200); a CONFLICTING decision on
-an already-completed approval returns 409.
+``intent_id`` via ``ReviewMappingStore``, claims the decision (first writer
+wins), and applies the human decision directly to the ``SideEffectKernel``
+(``decide_approval``). On ``approve`` it then executes the send through the
+kernel (the graph is NOT re-invoked — re-running would replay crawl + A/B
+needlessly). A repeat of the SAME decision returns the cached result (200); a
+CONFLICTING decision on an already-completed approval returns 409.
 
-ADR 0006 invariants hold: the endpoint never widens the model gate, never passes
-tools, and the decision payload it sends is the constrained
-``ReviewRequest`` (action + optional edited subject/body only) — never an
-arbitrary dict.
+The human-approved send is recorded in the audit chain as USER-initiated
+(actor_type defaults to USER); only the autonomous A/B path records AGENT.
 """
 
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
@@ -46,7 +47,6 @@ from uuid import UUID
 
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse
-from langgraph.types import Command
 from pydantic import BaseModel, Field, model_validator
 
 from careerops.application.side_effect_kernel import (
@@ -62,7 +62,6 @@ from careerops.auth.contracts import (
 )
 from careerops.auth.crypto import hash_subject
 from careerops.domain.side_effects import ApprovalDecision
-from careerops.orchestration.kernel_adapter import ReviewDecisionError
 from careerops.orchestration.mapping_store import (
     MappingConflictError,
     MappingNotFoundError,
@@ -141,17 +140,6 @@ def _json(status_code: int, message: str, **extra: object) -> JSONResponse:
     return JSONResponse(status_code=status_code, content=payload)
 
 
-def _decision_payload(approval_id: UUID, request: ReviewRequest) -> dict[str, object]:
-    """Build the JSON-safe resume payload consumed by ``parse_review_decision``."""
-    payload: dict[str, object] = {"action": request.action, "approval_id": str(approval_id)}
-    if request.action == "edit" and request.edited_drafts:
-        payload["edited_drafts"] = [
-            {"id": item.id, "subject": item.subject, "body": item.body}
-            for item in request.edited_drafts
-        ]
-    return payload
-
-
 def _approval_action_for(kernel: SideEffectKernel, record: object) -> str | None:
     """Map the recorded terminal decision of ``record.approval_id`` to an action.
 
@@ -186,34 +174,17 @@ def _is_duplicate(existing: str | None, requested: str) -> bool:
     return False
 
 
-def _interrupt_value(graph: Any, config: dict[str, object]) -> dict[str, object] | None:
-    """Return the current review_gate interrupt payload, if any.
-
-    After an ``edit`` resume the graph re-interrupts on a NEW approval; the
-    endpoint surfaces the new approval_id / intent_id so the client knows what to
-    review next. Returns ``None`` when the graph is at END (approve/reject).
-    """
-    state = graph.get_state(config)
-    if not state.next:
+def _kernel_receipt(kernel: SideEffectKernel, intent_id: UUID) -> dict[str, object] | None:
+    """Return the latest provider receipt for ``intent_id`` from the kernel, if any."""
+    replay = kernel.replay(intent_id)
+    if not replay.receipts:
         return None
-    tasks = getattr(state, "tasks", ()) or ()
-    for task in tasks:
-        interrupts = getattr(task, "interrupts", ()) or ()
-        for interrupt in interrupts:
-            value = getattr(interrupt, "value", None)
-            if isinstance(value, dict):
-                return cast("dict[str, object]", value)
-    return None
-
-
-def _latest_receipt(values: dict[str, object]) -> dict[str, object] | None:
-    receipts = values.get("send_receipts")
-    if not isinstance(receipts, (tuple, list)) or not receipts:
-        return None
-    latest = receipts[-1]
-    if isinstance(latest, dict):
-        return cast("dict[str, object]", latest)
-    return None
+    latest = replay.receipts[-1]
+    return {
+        "provider": latest.provider,
+        "provider_resource_id": latest.provider_resource_id,
+        "reconciliation_key": latest.reconciliation_key,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -317,24 +288,47 @@ def install_review_endpoint(
         except MappingNotFoundError:
             return _json(404, "approval not found")
 
-        # 8. Resume the graph with the constrained decision.
-        config: dict[str, object] = {"configurable": {"thread_id": record.thread_id}}
+        # 8. Apply the human decision directly to the kernel. The autonomous A/B
+        #    loop already ran at review_gate; this is the human fallback for an
+        #    approval the loop left PENDING (non-convergence / model unavailable).
+        #    The graph is NOT re-invoked — re-running would replay crawl + A/B
+        #    needlessly. ``edit`` is a transport-level concern expressed as a
+        #    reject here (the current approval is invalidated; the drafts remain
+        #    visible in graph state for the human to handle manually).
+        record_ = cast("Any", record)
+        kernel_action = "reject" if body.action == "edit" else body.action
         try:
-            graph.invoke(Command(resume=_decision_payload(approval_id, body)), config)
-        except ReviewDecisionError as exc:
-            return _json(409, f"review decision rejected: {exc}")
+            kernel.decide_approval(
+                approval_id,
+                action=kernel_action,
+                requested_for=record_.requested_for,
+                now=now,
+                # Human-review fallback: the actor is the USER. Only the
+                # autonomous A/B path records AGENT (task 3.7).
+            )
         except ApprovalInvalidError as exc:
             return _json(409, f"approval no longer decidable: {exc}")
 
-        # 9. Mark complete and build the response from the resulting graph state.
+        # 9. On approve, execute the send through the kernel and capture the
+        #    receipt. On reject/edit, no send occurs.
+        receipt: dict[str, object] | None = None
+        if body.action == "approve":
+            try:
+                outcome = kernel.execute(cast("UUID", record_.intent_id), now=now)
+            except ApprovalInvalidError as exc:
+                return _json(409, f"approval no longer decidable: {exc}")
+            receipt = _kernel_receipt(kernel, cast("UUID", record_.intent_id))
+            if receipt is not None:
+                receipt["final_state"] = outcome.status.value
+
+        # 10. Mark complete and build the response.
         review_mapping.complete_resume(approval_id, completed_at=now.isoformat())
-        return _success_response(graph, config, record, body.action)
+        return _success_response(record, body.action, receipt)
 
     def _success_response(
-        graph: Any,
-        config: dict[str, object],
         record: object,
         action: str,
+        receipt: dict[str, object] | None,
     ) -> JSONResponse:
         record_ = cast("Any", record)
         base = {
@@ -342,8 +336,6 @@ def install_review_endpoint(
             "intent_id": str(record_.intent_id),
         }
         if action == "approve":
-            values = cast("dict[str, object]", graph.get_state(config).values)
-            receipt = _latest_receipt(values)
             return JSONResponse(
                 status_code=200,
                 content={
@@ -354,17 +346,12 @@ def install_review_endpoint(
                 },
             )
         if action == "edit":
-            interrupt = _interrupt_value(graph, config)
-            new_approval = str(interrupt["approval_id"]) if interrupt else None
-            new_intent = str(interrupt["intent_id"]) if interrupt else None
             return JSONResponse(
                 status_code=200,
                 content={
-                    "status": "edit_pending",
+                    "status": "edit_recorded",
                     "decision": "rejected",
                     **base,
-                    "new_approval_id": new_approval,
-                    "new_intent_id": new_intent,
                 },
             )
         return JSONResponse(

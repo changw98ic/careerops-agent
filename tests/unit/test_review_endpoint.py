@@ -42,6 +42,7 @@ from careerops.auth.contracts import (
     InvalidSession,
 )
 from careerops.config import RuntimeEnvironment, Settings
+from careerops.domain.side_effects import ApprovalDecision
 from careerops.infrastructure.database.side_effect_memory import InMemorySideEffectStore
 from careerops.integrations.fake_side_effect_provider import FakeSideEffectProvider
 from careerops.model_gateway.base import DisabledModelAdapter
@@ -169,13 +170,23 @@ def _build_stack(
 
 
 def _drive_to_review(graph: object, *, thread_id: str, requested_for: str) -> dict[str, str]:
+    """Run the graph to completion and return the (escalated) approval/intent ids.
+
+    With the autonomous A/B loop and a DISABLED model, review_gate escalates
+    every draft (default-deny), leaving one PENDING approval for the human
+    fallback. The ids are read from terminal state — there is no interrupt to
+    resume. (Method name retained for brevity; it no longer "drives to" an
+    interrupt.)
+    """
     cfg: dict[str, object] = {"configurable": {"thread_id": thread_id}}
     graph.invoke({"requested_for": requested_for}, cfg)  # type: ignore[attr-defined]
     state = graph.get_state(cfg)  # type: ignore[attr-defined]
-    assert state.next == ("review_gate",), state.next
-    interrupt = state.tasks[0].interrupts[0].value
-    assert isinstance(interrupt, dict)
-    return {"approval_id": interrupt["approval_id"], "intent_id": interrupt["intent_id"]}  # type: ignore[index]
+    assert state.next == (), state.next
+    values = state.values
+    return {
+        "approval_id": str(values["pending_approval_id"]),
+        "intent_id": str(values["pending_intent_id"]),
+    }  # type: ignore[index]
 
 
 def _make_client(
@@ -385,7 +396,11 @@ class TestDecisionLifecycle:
 
 
 class TestEditFlow:
-    def test_edit_reinterrupts_on_new_approval(self) -> None:
+    def test_edit_records_reject_and_does_not_send(self) -> None:
+        """The graph-level interrupt edit loop is gone (A/B revises internally).
+        A human ``edit`` on an escalated approval is recorded as a REJECT (the
+        current approval is invalidated); no send occurs and no new approval is
+        created."""
         graph, kernel, mapping = _build_stack()
         ids = _drive_to_review(graph, thread_id=THREAD_ID, requested_for=str(USER_ID))
         client = _make_client(graph, kernel, mapping)
@@ -406,34 +421,15 @@ class TestEditFlow:
 
         assert response.status_code == 200
         body = response.json()
-        assert body["status"] == "edit_pending"
+        assert body["status"] == "edit_recorded"
         assert body["decision"] == "rejected"
-        new_approval = body["new_approval_id"]
-        assert new_approval is not None
-        assert new_approval != ids["approval_id"]
+        # No new approval is minted by the human-edit fallback.
+        assert "new_approval_id" not in body
 
-    def test_edit_then_approve_new_approval_succeeds(self) -> None:
-        graph, kernel, mapping = _build_stack()
-        ids = _drive_to_review(graph, thread_id=THREAD_ID, requested_for=str(USER_ID))
-        client = _make_client(graph, kernel, mapping)
-
-        cfg: dict[str, object] = {"configurable": {"thread_id": THREAD_ID}}
-        drafts = graph.get_state(cfg).values.get("drafts")  # type: ignore[attr-defined]
-        draft_id = drafts[0]["id"]  # type: ignore[index]
-
-        edit_resp = _auth_post(
-            client,
-            ids["approval_id"],
-            {
-                "action": "edit",
-                "edited_drafts": [{"id": draft_id, "subject": "Edited", "body": "Edited body"}],
-            },
-        )
-        new_approval = edit_resp.json()["new_approval_id"]
-
-        approve_resp = _auth_post(client, new_approval, {"action": "approve"})
-        assert approve_resp.status_code == 200
-        assert approve_resp.json()["decision"] == "approved"
+        # The approval is REJECTED in the kernel; nothing was sent.
+        replay = kernel.replay(UUID(ids["intent_id"]))
+        assert replay.approvals[0].decision is ApprovalDecision.REJECTED
+        assert len(replay.receipts) == 0
 
 
 # ---------------------------------------------------------------------------

@@ -1,24 +1,32 @@
 """``review_gate`` node + capability resolver (plan v0.4 §2.5, §2.6, §2.7).
 
-This module is the ONLY place the LangGraph graph pauses for human input. The
-``review_gate`` node:
+The per-message human-approval gate has been replaced (real-autonomous-career-loop
+design D2) by a dual-model OA approval loop. The ``review_gate`` node now:
 
 1. Builds an idempotent ``ProposalInput`` whose idempotency key embeds
    ``review_revision`` and the canonical payload hash, so the same draft set
    always re-uses the same intent.
-2. Calls ``kernel.propose`` (idempotent on the key) and then
+2. Runs the autonomous A/B approval loop (``ABApprovalLoop``) over each draft:
+   drafter A refines the template skeleton into a sendable email; reviewer B
+   reviews A's draft along an orthogonal axis. B approves -> the draft may send;
+   B rejects -> A revises; at most 5 rounds, else escalate.
+3. Calls ``kernel.propose`` (idempotent on the key) and
    ``kernel.get_or_create_pending_approval`` (atomic find-or-create under the
-   kernel RLock). Because LangGraph resume re-runs the WHOLE node, both calls
-   must be safe to repeat.
-3. Persists ``thread_id <-> approval_id <-> intent_id`` via
+   kernel RLock). Both are safe to repeat on graph re-runs.
+4. Persists ``thread_id <-> approval_id <-> intent_id`` via
    ``ReviewMappingStore.put_if_absent``.
-4. ``interrupt(...)`` with a JSON-safe payload (UUIDs as strings).
-5. On resume, parses the decision (constraining what a reviewer may change) and
-   calls ``kernel.decide_approval`` (idempotent, owner-checked). Returns
-   ``Command(goto="send" | "draft" | END)``.
+5. If EVERY draft's A/B loop approved: calls ``kernel.decide_approval(approve,
+   actor_type=AGENT)`` (task 3.7: agent-initiated sends are recorded as AGENT)
+   and routes to ``send`` — no human click, no interrupt.
+6. If ANY draft escalated (non-convergence, model unavailable, provider error):
+   leaves the approval PENDING and routes to END, so the human-review fallback
+   (``POST /api/v1/review/{approval_id}``) can still decide it. The send does
+   NOT proceed autonomously (default-deny on uncertainty).
 
 ``untrusted_claims`` is ALWAYS ``{}``. The capability resolver provides trusted
-facts only; it is forbidden to substitute ``True`` literals.
+facts only; it is forbidden to substitute ``True`` literals. ``parse_review_decision``
+is retained for the human-review fallback endpoint that resumes an escalated
+approval.
 """
 
 # langgraph ships without bundled pyright stubs; suppress the missing-stub
@@ -36,12 +44,14 @@ from uuid import UUID
 
 from langchain_core.runnables.config import RunnableConfig
 from langgraph.graph import END
-from langgraph.types import Command, interrupt
+from langgraph.types import Command
 
+from careerops.application.audit import AuditActorType
 from careerops.application.side_effect_kernel import (
     ProposalInput,
     SideEffectKernel,
 )
+from careerops.model_gateway.base import StructuredModelClient
 from careerops.orchestration.mapping_store import (
     ReviewMappingStore,
 )
@@ -60,6 +70,7 @@ __all__ = [
     "drafts_payload_hash",
     "parse_review_decision",
     "review_gate",
+    "review_gate_ab",
     "review_idempotency_key",
 ]
 
@@ -250,31 +261,118 @@ def _draft_to_payload_entry(draft: DraftDTO) -> dict[str, object]:
     }
 
 
+def _draft_to_context(draft: DraftDTO, state: CareerOpsState) -> "DraftContext":
+    """Build the trusted ``DraftContext`` A grounds its draft on.
+
+    ``recipient`` / ``job_external_id`` come from the draft (trusted, extracted
+    by upstream nodes). Job title / company / resume summary are read from
+    trusted graph state. There is no inbound excerpt for the application-send
+    path (the reply path would populate ``inbound_excerpt``).
+    """
+    from careerops.application.approval_loop import DraftContext
+    job_title = ""
+    company = ""
+    jobs = state.get("filtered_jobs") or state.get("raw_job_records") or ()
+    target_id = draft.get("job_external_id", "")
+    for job in jobs:
+        if job.get("external_id", "") == target_id:
+            job_title = str(job.get("title", ""))
+            raw = job.get("raw_data")
+            if isinstance(raw, dict):
+                company = str(raw.get("company", "") or raw.get("company_name", ""))
+            break
+    return DraftContext(
+        recipient=draft.get("recipient", ""),
+        job_title=job_title,
+        company=company,
+        resume_summary=str(state.get("resume_text", "") or ""),
+        inbound_excerpt="",
+        intent="application",
+    )
+
+
+def review_gate_ab(
+    state: CareerOpsState,
+    drafts: tuple[DraftDTO, ...],
+    *,
+    model_client: StructuredModelClient,
+    capability_resolver: CapabilityResolver,
+    trace_id: str = "",
+) -> tuple[tuple[DraftDTO, ...], tuple["ApprovalLoopResult", ...], bool]:
+    """Run the autonomous A/B approval loop over each draft.
+
+    Returns ``(final_drafts, results, all_approved)``:
+
+    - ``final_drafts``: the draft tuple with each draft's subject/body replaced
+      by A's final output (the template skeleton when A could not produce one).
+    - ``results``: one ``ApprovalLoopResult`` per draft, in order.
+    - ``all_approved``: True only when every draft's loop approved.
+
+    The loop itself is default-deny: any uncertainty escalates that draft
+    rather than auto-sending (see ``approval_loop.ABApprovalLoop``).
+    """
+    from careerops.application.approval_loop import (
+        ABApprovalLoop,
+        ApprovalLoopResult,
+        DraftResult,
+    )
+
+    loop = ABApprovalLoop(client=model_client, capability_resolver=capability_resolver)
+    final: list[DraftDTO] = []
+    results: list[ApprovalLoopResult] = []
+    all_approved = True
+    for draft in drafts:
+        skeleton = DraftResult(
+            subject=draft.get("subject", ""),
+            body=draft.get("body", ""),
+        )
+        context = _draft_to_context(draft, state)
+        result = loop.run(skeleton, context, trace_id=trace_id)
+        results.append(result)
+        if result.outcome != "approved":
+            all_approved = False
+        merged = dict(draft)
+        merged["subject"] = result.subject
+        merged["body"] = result.body
+        merged["revision"] = int(draft.get("revision", 0)) + result.rounds
+        final.append(DraftDTO(merged))  # type: ignore[typeddict-item]
+    return tuple(final), tuple(results), all_approved
+
+
 def review_gate(
     state: CareerOpsState,
     *,
     kernel: SideEffectKernel,
     review_mapping: ReviewMappingStore,
     capability_resolver: CapabilityResolver,
+    model_client: StructuredModelClient | None = None,
     config: Optional[RunnableConfig] = None,  # noqa: UP045  -- LangGraph matches the literal string "Optional[RunnableConfig]"
     now: Any | None = None,
     end_node: str = END,
     send_node: str = "send",
     draft_node: str = "draft",
 ) -> Command[Any]:
-    """LangGraph review_gate node.
+    """LangGraph review_gate node, driven by the autonomous A/B approval loop.
 
     Inputs are passed as keyword args via ``functools.partial`` (or any
     closure-equivalent) when the graph is built in ``orchestration.graph``.
     The node returns ``Command(goto=...)`` so the conditional edge never needs
     a separate routing table.
 
-    ``now`` is injected for deterministic tests; production callers pass a
-    ``datetime.datetime``-compatible callable result. ``end_node`` / ``send_node``
-    / ``draft_node`` are injectable so a graph built with non-default node names
-    still routes correctly.
+    The per-message human ``interrupt`` has been removed (design D2). Instead
+    the A/B loop runs inline: when every draft is approved by reviewer B, the
+    node records an AGENT-initiated approval and routes to ``send``; when any
+    draft escalates, the approval is left PENDING and the node routes to END so
+    the human-review fallback can still decide it.
+
+    ``model_client`` is the same MiMo client used elsewhere (two independent
+    calls with distinct prompts play A and B). ``now`` is injected for
+    deterministic tests. ``end_node`` / ``send_node`` / ``draft_node`` are
+    injectable so a graph built with non-default node names still routes.
     """
     from datetime import UTC, datetime
+
+    from careerops.application.approval_loop import AB_ACTOR_ID
 
     requested_for = state.get("requested_for", "")
     if not requested_for:
@@ -285,11 +383,30 @@ def review_gate(
 
     actual_now: datetime = now if isinstance(now, datetime) else datetime.now(tz=UTC)
     revision = int(state.get("review_revision", 0))
+    thread_id = _thread_id_from_config(config)
+    trace_id = f"review_gate:{thread_id}:r{revision}"
 
-    capability = capability_resolver.for_send_batch(drafts)
+    # Run the autonomous A/B approval loop. When the model is not configured
+    # (e.g. tests with DisabledModelAdapter, or MODEL_PROVIDER=disabled), every
+    # draft escalates and the flow falls back to human review — it never
+    # auto-sends on uncertainty.
+    if model_client is None:
+        # No model client wired: behave as fully escalated (default-deny).
+        final_drafts = drafts
+        all_approved = False
+    else:
+        final_drafts, _results, all_approved = review_gate_ab(
+            state,
+            drafts,
+            model_client=model_client,
+            capability_resolver=capability_resolver,
+            trace_id=trace_id,
+        )
+
+    capability = capability_resolver.for_send_batch(final_drafts)
 
     payload: dict[str, object] = {
-        "drafts": [_draft_to_payload_entry(d) for d in drafts],
+        "drafts": [_draft_to_payload_entry(d) for d in final_drafts],
         "revision": revision,
     }
     proposal = ProposalInput(
@@ -297,7 +414,7 @@ def review_gate(
         resource_type="email_thread",
         resource_id=capability.resource_id,
         idempotency_key=review_idempotency_key(
-            requested_for=requested_for, review_revision=revision, drafts=drafts
+            requested_for=requested_for, review_revision=revision, drafts=final_drafts
         ),
         created_by="langgraph.review_gate",
         target=dict(capability.target),
@@ -315,7 +432,6 @@ def review_gate(
         result.intent.id, requested_for=requested_for, now=actual_now
     )
 
-    thread_id = _thread_id_from_config(config)
     review_mapping.put_if_absent(
         _record_factory(
             thread_id=thread_id,
@@ -325,63 +441,40 @@ def review_gate(
         )
     )
 
-    interrupt_payload: dict[str, object] = {
-        "approval_id": str(approval.id),
-        "intent_id": str(result.intent.id),
-        "revision": revision,
-    }
-    raw_decision = interrupt(interrupt_payload)
-    decision = parse_review_decision(raw_decision, expected_approval_id=approval.id)
-
-    if decision.action == "approve":
+    if all_approved:
+        # A/B convergence: record an AGENT-initiated approval (task 3.7) and
+        # route straight to the send chain — no human click, no interrupt.
         kernel.decide_approval(
             approval.id,
             action="approve",
             requested_for=requested_for,
             now=actual_now,
+            actor_type=AuditActorType.AGENT,
+            actor_id=AB_ACTOR_ID,
+            decision_rule_reference="autonomous_ab_approval_loop",
         )
         return Command(
             goto=send_node,
             update={
-                "approved_draft_ids": tuple(d.get("id", "") for d in drafts),
+                "drafts": final_drafts,
+                "approved_draft_ids": tuple(d.get("id", "") for d in final_drafts),
                 "pending_approval_id": str(approval.id),
                 "pending_intent_id": str(result.intent.id),
+                "ab_outcome": "approved",
             },
         )
 
-    if decision.action == "edit":
-        # Edit: reject the current approval (its payload is now stale) and
-        # loop back to draft. The next review_gate pass will propose a NEW
-        # intent (different idempotency key because revision + drafts hash
-        # changed); the old approval stays REJECTED for replay.
-        kernel.decide_approval(
-            approval.id,
-            action="reject",
-            requested_for=requested_for,
-            now=actual_now,
-        )
-        edited_payload = decision.edited_payload or EditedDraftPayload(drafts=())
-        return Command(
-            goto=draft_node,
-            update={
-                "edit_payload": edited_payload,
-                "review_revision": revision + 1,
-                "pending_approval_id": str(approval.id),
-                "pending_intent_id": str(result.intent.id),
-            },
-        )
-
-    kernel.decide_approval(
-        approval.id,
-        action="reject",
-        requested_for=requested_for,
-        now=actual_now,
-    )
+    # Escalation (non-convergence / model unavailable / provider error): leave
+    # the approval PENDING and route to END. The human-review fallback
+    # (POST /api/v1/review/{approval_id}) can still decide it; the send does
+    # NOT proceed autonomously (default-deny on uncertainty).
     return Command(
         goto=end_node,
         update={
+            "drafts": final_drafts,
             "pending_approval_id": str(approval.id),
             "pending_intent_id": str(result.intent.id),
+            "ab_outcome": "escalated",
         },
     )
 

@@ -222,5 +222,9 @@ class CareerOpsState(TypedDict, total=False):
     pending_intent_id: str | None
     approved_draft_ids: tuple[str, ...]
     edit_payload: EditedDraftPayload | None
+    # Outcome of the autonomous A/B approval loop at review_gate
+    # (real-autonomous-career-loop design D2): "approved" (B approved, sent
+    # autonomously as AGENT) or "escalated" (left for human review, not sent).
+    ab_outcome: str
     send_receipts: AnnotatedReceipts
     errors: AnnotatedErrors

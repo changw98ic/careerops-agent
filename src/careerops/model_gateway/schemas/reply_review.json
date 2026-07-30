@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://careerops.local/schemas/reply_review.json",
+  "title": "reply_review",
+  "description": "Reviewer (B) verdict for the autonomous A/B approval loop (real-autonomous-career-loop design D2). B reviews A's draft along an orthogonal axis (wording risk, recipient correctness, over-promise). B sees ONLY the draft, never A's self-assessment.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "issues"],
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["approve", "reject"],
+      "description": "approve = draft is safe to send; reject = revise per issues."
+    },
+    "issues": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Concrete problems when rejecting (wording risk, wrong recipient, over-promise, etc.). Empty when approving."
+    }
+  }
+}

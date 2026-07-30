@@ -25,7 +25,6 @@ from uuid import UUID, uuid4
 
 import pytest
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.types import Command
 
 from careerops.application.side_effect_kernel import (
     ApprovalInvalidError,
@@ -139,55 +138,56 @@ def _build_graph(
     return graph, kernel, provider, store, review_mapping
 
 
-def _drive_to_review(graph: object, cfg: Mapping[str, object]) -> dict[str, str]:
+def _run_graph(graph: object, cfg: Mapping[str, object]) -> dict[str, str]:
+    """Run the graph to completion and return the escalated approval/intent ids.
+
+    With the autonomous A/B loop and a DISABLED model, review_gate escalates
+    every draft (default-deny), leaving exactly one PENDING approval and ending
+    the graph. The ids are read from terminal state (no interrupt to resume).
+    """
     graph.invoke({"requested_for": "user-1"}, cfg)  # type: ignore[attr-defined]
     state = graph.get_state(cfg)  # type: ignore[attr-defined]
-    assert state.next == ("review_gate",), state.next
-    iv = state.tasks[0].interrupts[0].value
-    assert isinstance(iv, dict)
-    return {"approval_id": iv["approval_id"], "intent_id": iv["intent_id"]}
+    assert state.next == (), state.next
+    values = state.values
+    return {
+        "approval_id": str(values["pending_approval_id"]),
+        "intent_id": str(values["pending_intent_id"]),
+    }
 
 
 # ---------------------------------------------------------------------------
-# 1. resume does not duplicate approval
+# 1. A/B escalation leaves exactly one PENDING approval (human fallback)
 # ---------------------------------------------------------------------------
 
 
-class TestResumeDoesNotDuplicateApproval:
-    def test_one_pending_approval_before_resume(self) -> None:
+class TestEscalationLeavesOnePendingApproval:
+    def test_run_leaves_one_pending_approval(self) -> None:
         graph, kernel, _p, _s, _m = _build_graph()
         cfg = {"configurable": {"thread_id": "t1"}}
-        ids = _drive_to_review(graph, cfg)
+        ids = _run_graph(graph, cfg)
         replay = kernel.replay(UUID(ids["intent_id"]))
         assert len(replay.approvals) == 1
         assert replay.approvals[0].decision is ApprovalDecision.PENDING
 
-    def test_resume_rerun_keeps_one_approval(self) -> None:
-        """PoC-1 confirmed resume re-runs review_gate from the top. The
-        proposal's idempotency key (revision + drafts hash) AND
-        ``get_or_create_pending_approval`` together must keep the approval
-        count at exactly 1 even though the node runs twice.
-
-        This is verified by counting approvals BEFORE resume (1) and after
-        a successful approve-resume (still 1: the existing approval was
-        promoted to APPROVED, not duplicated).
-        """
+    def test_human_fallback_approve_then_send(self) -> None:
+        """The escalated approval is left PENDING; the human-review fallback
+        (decide_approval(approve) + execute) sends exactly once and promotes
+        the single approval to APPROVED — the approval is not duplicated."""
         graph, kernel, _p, _s, _m = _build_graph()
-        cfg = {"configurable": {"thread_id": "t-rerun"}}
-        ids = _drive_to_review(graph, cfg)
-        # Before resume: 1 PENDING approval.
-        pre = kernel.replay(UUID(ids["intent_id"]))
-        assert len(pre.approvals) == 1
-        assert pre.approvals[0].decision is ApprovalDecision.PENDING
-
-        graph.invoke(  # type: ignore[attr-defined]
-            Command(resume={"action": "approve", "approval_id": ids["approval_id"]}),
-            cfg,
+        cfg = {"configurable": {"thread_id": "t-fallback"}}
+        ids = _run_graph(graph, cfg)
+        # Human-review fallback (the POST /api/v1/review path operates this way).
+        kernel.decide_approval(
+            UUID(ids["approval_id"]),
+            action="approve",
+            requested_for="user-1",
+            now=NOW,
         )
-        # After resume: still 1 approval, now APPROVED.
+        kernel.execute(UUID(ids["intent_id"]), now=NOW)
         post = kernel.replay(UUID(ids["intent_id"]))
         assert len(post.approvals) == 1
         assert post.approvals[0].decision is ApprovalDecision.APPROVED
+        assert len(post.receipts) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -380,38 +380,39 @@ class TestEditCreatesNewIntent:
         # Different revisions -> different keys.
         assert key_v0 != key_v1_edited
 
-    def test_full_edit_flow_two_intents(self) -> None:
-        """End-to-end edit: review_gate rejects the first approval, loops to
-        draft, comes back with revision+1 and proposes a NEW intent."""
-        graph, kernel, _p, _s, _m = _build_graph()
-        cfg = {"configurable": {"thread_id": "t-edit"}}
-        ids_v0 = _drive_to_review(graph, cfg)
-        intent_v0 = UUID(ids_v0["intent_id"])
-
-        # Send an edit decision: subject/body for draft d1.
-        draft = graph.get_state(cfg).values.get("drafts")[0]  # type: ignore[attr-defined]
-        draft_id = draft["id"]
-        graph.invoke(  # type: ignore[attr-defined]
-            Command(
-                resume={
-                    "action": "edit",
-                    "approval_id": ids_v0["approval_id"],
-                    "edited_drafts": [{"id": draft_id, "subject": "Edited", "body": "Edited body"}],
-                }
+    def test_two_revisions_produce_distinct_intents(self) -> None:
+        """The graph-level interrupt edit loop is gone (A/B revises internally).
+        This test verifies the building block that survives: the propose
+        idempotency key embeds revision + drafts hash, so a revised draft set
+        proposes a distinct intent. Two graph runs at different revisions would
+        therefore never collide on the same intent."""
+        drafts_v0 = (
+            DraftDTO(
+                id="d1",
+                job_external_id="job-1",
+                recipient="hiring@example.com",
+                subject="Application: Backend",
+                body="v0 body",
+                revision=0,
             ),
-            cfg,
         )
-        # After the edit pass, review_gate interrupts AGAIN on a NEW approval.
-        state2 = graph.get_state(cfg)  # type: ignore[attr-defined]
-        assert state2.next == ("review_gate",), state2.next
-        ids_v1 = state2.tasks[0].interrupts[0].value
-        assert isinstance(ids_v1, dict)
-        # New intent_id is different.
-        assert ids_v1["intent_id"] != ids_v0["intent_id"]
-
-        # The old intent's approval is REJECTED.
-        replay_v0 = kernel.replay(intent_v0)
-        assert replay_v0.approvals[0].decision is ApprovalDecision.REJECTED
+        drafts_v1 = (
+            DraftDTO(
+                id="d1",
+                job_external_id="job-1",
+                recipient="hiring@example.com",
+                subject="Application: Backend",
+                body="revised body",
+                revision=1,
+            ),
+        )
+        key_v0 = review_idempotency_key(
+            requested_for="user-1", review_revision=0, drafts=drafts_v0
+        )
+        key_v1 = review_idempotency_key(
+            requested_for="user-1", review_revision=1, drafts=drafts_v1
+        )
+        assert key_v0 != key_v1
 
 
 # ---------------------------------------------------------------------------

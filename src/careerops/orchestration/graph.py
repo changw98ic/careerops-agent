@@ -101,6 +101,7 @@ def build_graph(
             kernel=kernel,
             review_mapping=review_mapping,
             capability_resolver=capability_resolver,
+            model_client=model_client,
         ),
     )
     graph.add_node("send", partial(send_node, kernel=kernel, send_callback=send_callback))

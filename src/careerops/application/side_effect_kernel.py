@@ -484,6 +484,8 @@ class SideEffectKernel:
         requested_for: str,
         now: datetime,
         decision_rule_reference: str | None = None,
+        actor_type: AuditActorType = AuditActorType.USER,
+        actor_id: str | None = None,
     ) -> ApprovalRequest:
         """Idempotently decide an approval.
 
@@ -501,6 +503,11 @@ class SideEffectKernel:
         transport-level concern handled in the orchestration layer (it rejects
         the current approval and re-proposes); the kernel only sees the
         resulting reject.
+
+        ``actor_type`` / ``actor_id`` are forwarded to ``approve`` for the audit
+        record. The autonomous A/B approval loop passes
+        ``actor_type=AGENT`` (task 3.7: every agent-initiated send is recorded
+        as AGENT-initiated); the human-review path leaves the USER default.
         """
         with self._lock:
             store = self._store
@@ -514,6 +521,8 @@ class SideEffectKernel:
                     approval_id,
                     now=now,
                     decision_rule_reference=decision_rule_reference,
+                    actor_type=actor_type,
+                    actor_id=actor_id,
                 )
             if action == "reject":
                 return self.reject(
@@ -529,6 +538,8 @@ class SideEffectKernel:
         *,
         now: datetime,
         decision_rule_reference: str | None = None,
+        actor_type: AuditActorType = AuditActorType.USER,
+        actor_id: str | None = None,
     ) -> ApprovalRequest:
         store = self._store
         approval = store.get_approval(approval_id)
@@ -566,11 +577,15 @@ class SideEffectKernel:
             now=now,
             current_payload_version_id=payload_version.id,
         )
+        # Actor recorded in the tamper-evident audit chain. Defaults to USER +
+        # the approval owner (the human-review path); the autonomous A/B loop
+        # passes actor_type=AGENT / actor_id="ab_reviewer" (task 3.7). The
+        # event_type is unchanged so _audit_chain_complete still passes.
         self._audit.append(
             AuditEventDraft(
                 event_type="side_effect_approved",
-                actor_type=AuditActorType.USER,
-                actor_id=approval.requested_for,
+                actor_type=actor_type,
+                actor_id=actor_id if actor_id is not None else approval.requested_for,
                 resource_type="action_intent",
                 resource_id=intent.id,
                 trace_id=intent.idempotency_key,

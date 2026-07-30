@@ -224,11 +224,11 @@ class LLMJobExtractor:
             ),
         )
         if repair_result is None:
-            return records
+            return []
 
         repair_postings = repair_result.get("jobs")
         if not isinstance(repair_postings, list):
-            return records
+            return []
 
         repaired_records, repair_errors = _validate_postings(
             cast("list[object]", repair_postings), source_url, source_html=html
@@ -239,7 +239,7 @@ class LLMJobExtractor:
                 "LLM extraction repair failed: %s",
                 "; ".join(repair_errors[:5]),
             )
-            return records
+            return []
 
         return repaired_records
 

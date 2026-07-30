@@ -28,13 +28,7 @@ _E2E_GMAIL_AVAILABLE = bool(os.environ.get("CAREEROPS_E2E_GMAIL_TOKEN"))
 _E2E_DB_AVAILABLE = bool(os.environ.get("DATABASE_URL"))
 _E2E_FULL = _E2E_GMAIL_AVAILABLE and _E2E_DB_AVAILABLE
 
-pytestmark = pytest.mark.skipif(
-    not _E2E_FULL,
-    reason=(
-        "Phase 10.1-10.3 integration tests require CAREEROPS_E2E_GMAIL_TOKEN "
-        "and DATABASE_URL environment variables"
-    ),
-)
+# Phase 10: E2E tests run directly against real environment; no skip.
 
 
 # ---------------------------------------------------------------------------

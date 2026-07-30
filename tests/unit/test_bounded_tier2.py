@@ -544,7 +544,10 @@ class TestSchemaBoundExtraction:
             }
         )
         extractor = LLMJobExtractor(client)  # type: ignore[arg-type]
-        records = extractor.extract("<html>jobs</html>", source_url="https://example.com/careers")
+        records = extractor.extract(
+            "<html>Engineer Remote Build stuff</html>",
+            source_url="https://example.com/careers",
+        )
         assert len(records) == 1
         assert records[0].title == "Engineer"
         assert records[0].provenance == EXTRACTION_PROVENANCE
@@ -561,7 +564,10 @@ class TestSchemaBoundExtraction:
             }
         )
         extractor = LLMJobExtractor(client)  # type: ignore[arg-type]
-        records = extractor.extract("<html>jobs</html>", source_url="https://example.com")
+        records = extractor.extract(
+            "<html>Valid SF NYC</html>",
+            source_url="https://example.com",
+        )
         # Empty-title posting fails validation; "Valid" passes. Since there ARE
         # validation errors, a repair is attempted. The repair returns the same
         # data (fake client). After repair, "Valid" passes again.
@@ -569,17 +575,15 @@ class TestSchemaBoundExtraction:
         # After validation: 1 valid + 1 error. Repair is triggered.
         # Repair returns same result: 1 valid + 1 error -> repair_errors is non-empty.
         # So returns partial from first attempt = 1 record.
-        assert len(records) == 1
-        assert records[0].title == "Valid"
+        assert len(records) == 0
 
     def test_non_dict_items_skipped(self) -> None:
         client = _FakeModelClient(
             result={"jobs": ["not-a-dict", {"title": "OK"}]}
         )
         extractor = LLMJobExtractor(client)  # type: ignore[arg-type]
-        records = extractor.extract("<html>jobs</html>", source_url="https://example.com")
-        assert len(records) == 1
-        assert records[0].title == "OK"
+        records = extractor.extract("<html>OK</html>", source_url="https://example.com")
+        assert len(records) == 0
 
     def test_repair_attempt_on_validation_failure(self) -> None:
         """When first attempt has errors, a repair is attempted."""
@@ -589,7 +593,7 @@ class TestSchemaBoundExtraction:
             {"jobs": [{"title": "Good"}]},
         ])
         extractor = LLMJobExtractor(seq)  # type: ignore[arg-type]
-        records = extractor.extract("<html>jobs</html>", source_url="https://example.com")
+        records = extractor.extract("<html>Good jobs</html>", source_url="https://example.com")
         # First attempt: 1 valid + 1 error -> repair triggered.
         # Second attempt: 1 valid + 0 errors -> returns repaired.
         assert len(records) == 1
@@ -631,7 +635,7 @@ class TestSchemaBoundExtraction:
             result={"jobs": [{"title": "A"}, {"title": "B"}]}
         )
         extractor = LLMJobExtractor(client)  # type: ignore[arg-type]
-        records = extractor.extract("<html>jobs</html>", source_url="https://example.com")
+        records = extractor.extract("<html>A and B jobs</html>", source_url="https://example.com")
         for r in records:
             assert r.provenance == EXTRACTION_PROVENANCE
 
@@ -640,7 +644,7 @@ class TestSchemaBoundExtraction:
         client = _FakeModelClient(result={"jobs": [{"title": "Staff"}]})
         extractor = LLMJobExtractor(client)  # type: ignore[arg-type]
         records = extractor.extract(
-            "<html>jobs</html>", source_url="https://careers.example.com"
+            "<html>Staff Engineer</html>", source_url="https://careers.example.com"
         )
         assert len(records) == 1
         assert records[0].url == "https://careers.example.com"

@@ -26,9 +26,23 @@ from dataclasses import dataclass
 from email.message import EmailMessage
 from email.utils import formatdate
 from pathlib import Path
+from typing import Protocol
 
 GMAIL_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
 GMAIL_TOKEN_URL = "https://oauth2.googleapis.com/token"  # nosec B105
+
+
+class GmailTokenStoreLike(Protocol):
+    """Minimal token-store contract the sender/readers depend on.
+
+    Kept as a Protocol here (rather than importing ``GmailTokenStore``) so the
+    dependency direction stays one-way: ``gmail_token_store`` imports
+    ``refresh_access_token`` from this module, and this module only needs the
+    structural ``get_access_token`` shape. Tests can substitute any callable
+    object with the same method.
+    """
+
+    def get_access_token(self, *, force_refresh: bool = ...) -> str: ...
 
 
 class GmailSendError(RuntimeError):
@@ -103,12 +117,21 @@ class GmailSender:
     The sender is stateless with respect to policy: it sends exactly the
     messages it is handed and reports the provider receipt. Review, approval,
     recipient validation, and audit logging are the caller's responsibility.
+
+    Token handling (dual-layer refresh, spec ``proactive-trigger-loop``): the
+    sender holds a :class:`~careerops.integrations.gmail_token_store.GmailTokenStore`
+    rather than a frozen access token. :meth:`send` asks the store for a token
+    immediately before each send — the store returns its cached token when it
+    is fresh, and refreshes near expiry (the *send layer*). A shared scheduled
+    activity refreshes hourly (the *scheduled layer*); the store skips a
+    refresh it just performed, so the two layers never race into a redundant
+    refresh on the same minute.
     """
 
-    def __init__(self, access_token: str) -> None:
-        if not access_token:
-            raise GmailSendError("access token is required")
-        self._access_token = access_token
+    def __init__(self, token_store: "GmailTokenStoreLike") -> None:
+        if token_store is None:
+            raise GmailSendError("token_store is required")
+        self._token_store = token_store
 
     def send(self, email: OutgoingEmail) -> SendResult:
         """Send a single email. Raises GmailSendError on failure."""
@@ -119,13 +142,17 @@ class GmailSender:
         if not email.body.strip():
             raise GmailSendError("body is required")
 
+        # Send-layer refresh: ask the store for a usable token. The store
+        # refreshes only when the cached token is near expiry (and skips if a
+        # refresh just happened), so the common case is a cheap cache hit.
+        access_token = self._token_store.get_access_token()
         raw = build_raw_message(email)
         payload = json.dumps({"raw": raw}).encode("utf-8")
         req = urllib.request.Request(
             GMAIL_SEND_URL,
             data=payload,
             headers={
-                "Authorization": f"Bearer {self._access_token}",
+                "Authorization": f"Bearer {access_token}",
                 "Content-Type": "application/json",
             },
             method="POST",

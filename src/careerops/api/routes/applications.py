@@ -549,15 +549,15 @@ async def send_application_email(
         response.status_code = 422
         return {"error": "INVALID_RECIPIENT"}
 
-    # Send email via GmailSender
-    import json
+    # Send email via GmailSender backed by the shared GmailTokenStore
+    # (dual-layer refresh: the store refreshes near expiry / on schedule).
     from pathlib import Path
 
     from careerops.integrations.gmail_sender import (
         GmailSender,
         OutgoingEmail,
-        refresh_access_token,
     )
+    from careerops.integrations.gmail_token_store import GmailTokenStore
 
     token_file = (
         Path(__file__).resolve().parent.parent.parent.parent / "secrets" / "gmail_send_token.json"
@@ -566,21 +566,13 @@ async def send_application_email(
         response.status_code = 503
         return {"error": "GMAIL_NOT_CONFIGURED"}
 
-    tok = json.loads(token_file.read_text())
-    if "gmail.send" not in tok.get("scope", ""):
+    try:
+        store = GmailTokenStore.from_token_file(token_file)
+    except RuntimeError:
         response.status_code = 503
-        return {"error": "GMAIL_SEND_SCOPE_MISSING"}
+        return {"error": "GMAIL_NOT_CONFIGURED"}
 
-    access_token = tok["access_token"]
-    if tok.get("refresh_token"):
-        with contextlib.suppress(Exception):
-            access_token = refresh_access_token(
-                client_id=tok["client_id"],
-                client_secret=tok["client_secret"],
-                refresh_token=tok["refresh_token"],
-            )  # use stored token on failure
-
-    sender = GmailSender(access_token)
+    sender = GmailSender(store)
     email = OutgoingEmail(
         to=body.to,
         subject=body.subject,

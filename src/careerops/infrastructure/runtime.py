@@ -61,6 +61,18 @@ class SyncRedisClient(Protocol):
     def close(self) -> None: ...
 
 
+class _AttachmentPathResolver:
+    """Adapter exposing ``LocalContentAddressedStorage.path_for_digest`` as the
+    ``AttachmentPathResolver.get(content_hash)`` protocol the Gmail send
+    provider expects (content hash -> on-disk file path)."""
+
+    def __init__(self, storage: LocalContentAddressedStorage) -> None:
+        self._storage = storage
+
+    def get(self, content_hash: str) -> str | Path | None:
+        return self._storage.path_for_digest(content_hash)
+
+
 class RuntimeResources:
     """Process-owned clients and bounded, non-sensitive readiness probes."""
 
@@ -115,6 +127,7 @@ class RuntimeResources:
         self.review_mapping: ReviewMappingStore | None = None
         self.side_effect_kernel: object | None = None
         self.model_client: object | None = None
+        self.gmail_token_store: object | None = None
         self._build_career_graph_stack()
         # Production graph construction can stop early when the optional
         # LangGraph checkpointer is unavailable. Agent routes still need the
@@ -383,9 +396,6 @@ class RuntimeResources:
         approvals and disambiguate duplicate vs conflicting decisions.
         """
         from careerops.application.side_effect_kernel import SideEffectKernel
-        from careerops.integrations.fake_side_effect_provider import (
-            FakeSideEffectProvider,
-        )
         from careerops.model_gateway.factory import create_model_client
         from careerops.orchestration.graph import build_graph
         from careerops.orchestration.mapping_store import InMemoryReviewMappingStore
@@ -423,7 +433,7 @@ class RuntimeResources:
             )
 
             side_effect_store = InMemorySideEffectStore()
-            side_effect_provider = FakeSideEffectProvider()
+            side_effect_provider = self._build_side_effect_provider()
 
         from careerops.infrastructure.database.audit import PostgresAuditWriterEngine
 
@@ -492,21 +502,23 @@ class RuntimeResources:
         return saver
 
     def _build_side_effect_provider(self) -> SideEffectProvider:
-        """Build the production side-effect provider.
+        """Build the side-effect provider.
 
-        Uses ``GmailSideEffectProvider`` when both ``auto_send_enabled`` and
-        ``external_writes_enabled`` are True; otherwise falls back to
-        ``FakeSideEffectProvider``. Storage is passed to the Gmail provider
-        so it can resolve attachment hashes to actual file paths for sending.
+        Returns ``GmailSideEffectProvider`` (real Gmail API send) when both
+        ``auto_send_enabled`` and ``external_writes_enabled`` are True and a
+        usable OAuth token file exists; otherwise ``FakeSideEffectProvider``.
+        If the flags are on but no usable token is found, this fails loud so
+        the misconfiguration surfaces at startup instead of silently using fake.
         """
         settings = self._settings
         if settings.auto_send_enabled and settings.external_writes_enabled:
-            # Token loading placeholder: this path is unreachable because the
-            # settings validator blocks auto_send_enabled/external_writes_enabled.
-            # When unblocked, load the real OAuth token from the credentials store.
+            gmail = self._build_gmail_provider()
+            if gmail is not None:
+                return gmail
             raise RuntimeError(
-                "Gmail OAuth token loading is not yet implemented; "
-                "auto_send_enabled/external_writes_enabled must remain disabled"
+                "auto_send_enabled/external_writes_enabled are on but no usable "
+                "Gmail send token was found at secrets/gmail_send_token.json "
+                "(run scripts/gmail_auth_send.py to authorize gmail.send)"
             )
 
         from careerops.integrations.fake_side_effect_provider import (
@@ -514,6 +526,44 @@ class RuntimeResources:
         )
 
         return FakeSideEffectProvider()
+
+    def _build_gmail_provider(self) -> SideEffectProvider | None:
+        """Build a ``GmailSideEffectProvider`` backed by a shared token store.
+
+        Loads ``secrets/gmail_send_token.json`` into a single
+        :class:`~careerops.integrations.gmail_token_store.GmailTokenStore`,
+        then constructs ``GmailSender`` against that store. The store is
+        retained on ``self.gmail_token_store`` so the Gmail read path
+        (``GmailReader``) reuses the same refresh cadence — ``gmail.send`` and
+        ``gmail.readonly`` were granted together, so one refresh token serves
+        both directions.
+
+        Dual-layer refresh (spec ``proactive-trigger-loop``): a scheduled
+        activity refreshes hourly and the send path refreshes just before send
+        when the cached token is near expiry. The initial ``refresh_now`` here
+        makes a broken credential fail fast at startup.
+
+        Returns None when the token file is absent. Raises when the file exists
+        but is incomplete or the initial refresh fails.
+        """
+        from pathlib import Path
+
+        from careerops.integrations.gmail_side_effect_provider import (
+            GmailSideEffectProvider,
+        )
+        from careerops.integrations.gmail_sender import GmailSender
+        from careerops.integrations.gmail_token_store import GmailTokenStore
+
+        token_file = Path("secrets/gmail_send_token.json")
+        if not token_file.exists():
+            return None
+        store = GmailTokenStore.from_token_file(token_file)
+        store.refresh_now()  # fail-fast on a broken credential + cache token
+        self.gmail_token_store = store  # share with the read path (GmailReader)
+        return GmailSideEffectProvider(
+            GmailSender(store),
+            storage=_AttachmentPathResolver(self.storage),
+        )
 
 
 def _verify_storage_directory(root: Path) -> None:

@@ -10,18 +10,18 @@ Ordered by dependency: power-on first, add trigger infrastructure without activa
 - **Phase 2 触发循环（定时）**：⚠️ 未接。代码只见 activity（`drain_outbox` / `sweep_expired_approvals` / `create_scheduled_run`）+ 现成的 `CrawlScheduledWorkflow`，**无 `create_schedule`**。2.1–2.4 退回未完成。
   - **定时方案（2026-07-30 已定）**：
     - **爬虫**：Phase 2 只注册处于暂停状态的 Schedule；完成来源结果、权限和全局预算后，才在 8.2 启用。启用后按站分频率（公开源 ~1h、登录源 2–4h），消费每个来源自己的间隔字段。
-    - **登录令牌刷新（双层）**：① 定时层每小时刷一次；② 发信层发信前检查、过期就刷。两层共用 `refresh_access_token` + 共享令牌存放处，发信层跳过刚刷过的，避免撞车。→ 新增（原 proposal 未列）
+    - **登录令牌刷新（双层）** ✅ 已实现：① 定时层每小时刷一次；② 发信层发信前检查、过期就刷。两层共用 `refresh_access_token` + `GmailTokenStore`，发信层跳过刚刷过的避免撞车。_(`gmail_token_store.py` + `GmailSender` 改用 token_store)_
     - **收信定时（2.1）**：收信补通后（见 1.3），挂 Schedule 轮询拉新邮件，~5–10 分钟一次（招聘回复够用；要近实时得上 Gmail 推送，复杂，先不上）。
     - **暂缓**：sweep（2.2，A/B 审批后基本无用）、outbox（2.2，待定 —— 其实该接，补发漏发的邮件）。
 - **多站点爬虫基线（2026-07-30 审阅）**：已有 `LLMJobExtractor`、`CrawlAgent` 和 demo/test 代码，但生产 runtime/worker 仍走 `CrawlExecutionService -> RealCrawlActivitySink -> EgoBrowserExecutor`；测试引用的 `crawl_agent_service.py` 已不存在。现有两条路径必须先合并，禁止再新增第三条路径。
 - **未核实（保留 `[ ]`）**：1.5 / 2.5 验证项、Phase 4–8 多站点爬虫落地、Phase 9 / 10。
-- **已确认未通、待做（本次 explore 核实）**：1.3 收信 —— MailSyncService 不拉邮件、无拉邮件 activity；要补 GmailReader（增量 history.list）+ 注册 worker activity + 接 run_sync_step。OAuth 授权齐（send + readonly）。
+- **已实现（本批 workflow）**：1.3 收信 —— `GmailReader`（history.list 增量拉）+ `MailSyncReaderActivities` 注册 worker；2.4 `ScheduleManager`（schedule CRUD）；登录双层刷新 `GmailTokenStore`（定时层 + 发信层）。2.1/2.3 具体 schedule 注册待门控打开后做。
 
 ## 1. Phase 1 — Power on real providers
 
 - [x] 1.1 Configure a real model provider as the single-user default in `model_gateway/factory.py` + settings (replace the `disabled` default); fail fast with an actionable error when credentials are absent. _(已完成：`anthropic-compat` + MiMo)_
 - [x] 1.2 Inject the real Gmail send provider (`GmailSideEffectProvider`) into `infrastructure/runtime.py`, replacing `FakeSideEffectProvider`. _(已完成：发送路径用户确认已通)_
-- [ ] 1.3 Add a real Gmail read provider and wire it into the mail-sync path so inbound threads reach mail intelligence. _(已确认**未通**：MailSyncService 自己不拉邮件、靠 caller 喂；worker 无拉邮件 activity；三次搜索无 Gmail 读接口调用。**待做**：补 GmailReader 用增量 history.list 拉新邮件 → 注册成 worker activity → 喂 run_sync_step。OAuth 授权齐：send + readonly 都有)_
+- [x] 1.3 Add a real Gmail read provider and wire it into the mail-sync path so inbound threads reach mail intelligence. _(已实现：`gmail_reader.py` GmailReader 用 history.list 增量拉 → messages.get → 组装 run_sync_step dict；注册成 worker activity `MailSyncReaderActivities.fetch_and_sync`，条件注册)_
 - [x] 1.4 Flip capability flags for the single user: `MODEL_PROVIDER`, `EXTERNAL_WRITES_ENABLED`, `AUTO_SEND_ENABLED`, and Google OAuth in the resolver/config defaults. _(已完成：模型 + 发送 + OAuth 令牌均已确认)_
 - [ ] 1.5 Verify agent services (intake, matching, resume review) no longer return `unavailable` out of the box; verify an application send reaches a real Gmail account and returns a provider receipt. _(未核实：验证项)_
 
@@ -30,7 +30,7 @@ Ordered by dependency: power-on first, add trigger infrastructure without activa
 - [ ] 2.1 Register a Temporal Schedule that drives `MailSyncService` on a cadence.
 - [ ] 2.2 Register Temporal Schedules that drive `drain_outbox` and `sweep_expired_approvals` (currently orphaned activities).
 - [ ] 2.3 Add crawl-Schedule registration that consumes each source's `interval_seconds` but creates every crawl Schedule paused; do not enable it before task 8.1 passes.
-- [ ] 2.4 Add idempotent create, update, pause, resume, and delete operations for managed Temporal Schedules.
+- [x] 2.4 Add idempotent create, update, pause, resume, and delete operations for managed Temporal Schedules. _(已实现：`schedule_manager.py` ScheduleManager ensure_schedule/pause/resume/delete/trigger/describe)_
 - [ ] 2.5 Verify the mail/outbox schedules and paused crawl schedules survive a worker restart without duplicate side effects, using existing `run_identity` and send idempotency.
 
 ## 3. Phase 3 — Dual-model OA approval loop (replace human review)

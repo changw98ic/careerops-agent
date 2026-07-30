@@ -16,6 +16,10 @@ from careerops.infrastructure.temporal.activities import (
 )
 from careerops.infrastructure.temporal.agent_activities import AgentActivities
 from careerops.infrastructure.temporal.ego_browser_executor import EgoBrowserExecutor
+from careerops.infrastructure.temporal.mail_sync_activities import (
+    GmailTokenRefreshActivities,
+    MailSyncReaderActivities,
+)
 from careerops.infrastructure.temporal.m1_activities import (
     CrawlActivitySink,
     M1CrawlActivities,
@@ -75,6 +79,11 @@ class M1ActivityBundles:
     outbox_drain: OutboxDrainActivities | None = None
     approval_sweeper: ApprovalSweeperActivities | None = None
     crawl_execution: S5CrawlExecutionActivities | None = None
+    # Phase 1.3 / 2.1: inbound mail read + the dual-layer token refresh's
+    # scheduled layer. Default None => worker stays fail-closed (no mail
+    # reading) until a configured bundle is injected.
+    mail_reader: MailSyncReaderActivities | None = None
+    gmail_token_refresh: GmailTokenRefreshActivities | None = None
 
 
 def build_worker(
@@ -120,6 +129,12 @@ def build_worker(
         all_activities.append(m1.outbox_drain.drain_outbox)
     if m1.approval_sweeper is not None:
         all_activities.append(m1.approval_sweeper.sweep_expired_approvals)
+    # Phase 1.3 / 2.1: conditional registration keeps a worker without a
+    # configured mail reader fail-closed (no inbound polling / token refresh).
+    if m1.mail_reader is not None:
+        all_activities.append(m1.mail_reader.fetch_and_sync)
+    if m1.gmail_token_refresh is not None:
+        all_activities.append(m1.gmail_token_refresh.refresh_gmail_token)
 
     return Worker(
         client,
@@ -262,6 +277,40 @@ def main() -> None:
         source_repository=source_repo,
     )
 
+    # Phase 1.3 / 2.1: wire inbound mail reading + the dual-layer token
+    # refresh's scheduled layer. Only injected when a usable Gmail token file
+    # exists, so environments without OAuth stay fail-closed (no mail reader).
+    mail_reader_bundle = None
+    token_refresh_bundle = None
+    from pathlib import Path
+
+    token_path = Path("secrets/gmail_send_token.json")
+    if token_path.exists():
+        from careerops.application.mail_sync_service import MailSyncService
+        from careerops.infrastructure.database.postgres_mail_sync_repo import (
+            PostgresMailAccountRepository,
+            PostgresSyncRunRepository,
+            PostgresThreadLinkRepository,
+        )
+        from careerops.infrastructure.temporal.mail_sync_activities import (
+            GmailTokenRefreshActivities,
+            MailSyncReaderActivities,
+        )
+        from careerops.integrations.gmail_reader import GmailReader
+        from careerops.integrations.gmail_token_store import GmailTokenStore
+
+        token_store = GmailTokenStore.from_token_file(token_path)
+        mail_service = MailSyncService(
+            PostgresMailAccountRepository(engine),
+            PostgresSyncRunRepository(engine),
+            PostgresThreadLinkRepository(engine),
+        )
+        mail_reader_bundle = MailSyncReaderActivities(
+            reader=GmailReader(token_store),
+            service=mail_service,
+        )
+        token_refresh_bundle = GmailTokenRefreshActivities(token_store)
+
     m1_activities = M1ActivityBundles(
         outbox_drain=OutboxDrainActivities(publisher=outbox_publisher),
         approval_sweeper=ApprovalSweeperActivities(kernel=kernel),
@@ -269,6 +318,8 @@ def main() -> None:
             executor=executor,
             run_creator=run_creator,
         ),
+        mail_reader=mail_reader_bundle,
+        gmail_token_refresh=token_refresh_bundle,
     )
 
     asyncio.run(

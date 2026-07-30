@@ -293,11 +293,11 @@ def cmd_send(args: argparse.Namespace) -> None:
     from careerops.integrations.gmail_sender import (
         GmailSender,
         GmailSendError,
-        refresh_access_token,
     )
     from careerops.integrations.gmail_side_effect_provider import (
         GmailSideEffectProvider,
     )
+    from careerops.integrations.gmail_token_store import GmailTokenStore
 
     token_file = PROJECT_ROOT / "secrets" / "gmail_send_token.json"
     if not token_file.exists():
@@ -330,19 +330,10 @@ def cmd_send(args: argparse.Namespace) -> None:
         print("Aborted. Nothing was sent.")
         return
 
-    # Refresh access token if a refresh token is available
-    access_token = tok["access_token"]
-    if tok.get("refresh_token"):
-        try:
-            access_token = refresh_access_token(
-                client_id=tok["client_id"],
-                client_secret=tok["client_secret"],
-                refresh_token=tok["refresh_token"],
-            )
-        except GmailSendError as e:
-            print(f"Warning: token refresh failed ({e}); using stored token.")
-
-    sender = GmailSender(access_token)
+    # Shared token store: dual-layer refresh (scheduled hourly + just-before-
+    # send) reuses one refresh routine and skips a refresh it just did.
+    store = GmailTokenStore.from_token_file(token_file)
+    sender = GmailSender(store)
 
     # Build the kernel with Postgres-backed stores and the Gmail provider.
     db_url = os.environ.get("CAREEROPS_DATABASE_URL")

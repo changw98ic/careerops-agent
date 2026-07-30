@@ -259,6 +259,20 @@ class LocalContentAddressedStorage:
             raise InvalidObjectKey("SHA-256 must be 64 lowercase hex characters")
         return f"sha256/{digest[:2]}/{digest[2:4]}/{digest}"
 
+    def path_for_digest(self, digest: str) -> Path | None:
+        """Return the on-disk path of a stored blob by digest, or None if absent.
+
+        Read-only resolution for providers (e.g. the Gmail send adapter) that
+        need a real file path to attach. The canonical content-addressed layout
+        is ``<root>/sha256/<digest[:2]>/<digest[2:4]>/<digest>``. The digest is
+        validated against the canonical pattern; an invalid or missing blob
+        returns None rather than raising.
+        """
+        if not _DIGEST.fullmatch(digest):
+            return None
+        path = self._root / "sha256" / digest[:2] / digest[2:4] / digest
+        return path if path.is_file() else None
+
     @contextmanager
     def _root_fd(self, *, create: bool = False) -> Generator[int]:
         descriptor = os.open(self._root.anchor, _DIRECTORY_FLAGS)

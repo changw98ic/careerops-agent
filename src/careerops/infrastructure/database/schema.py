@@ -2800,6 +2800,140 @@ sa.Index(
 )
 
 # ---------------------------------------------------------------------------
+# real-autonomous-career-loop Phase 5 (tasks 5.1/5.2): durable per-source
+# attempt outcomes and source-specific crawl permissions. Both are NEW tables
+# (additive); they reference job_sources via ON DELETE CASCADE so retiring a
+# source removes its attempt/permission history without dangling FKs.
+# ---------------------------------------------------------------------------
+
+crawl_source_attempts = sa.Table(
+    "crawl_source_attempts",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "source_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.job_sources.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    # Nullable: a Tier 1 probe may classify a source without binding to a full
+    # crawl run; the attempt outcome is still recorded.
+    sa.Column(
+        "crawl_run_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.crawl_runs.id", ondelete="SET NULL"),
+        nullable=True,
+    ),
+    sa.Column("attempt_no", sa.Integer(), nullable=False),
+    # Canonical Tier 1 outcome (domain enum CrawlAttemptOutcome). Replaces the
+    # fragmented non-canonical outcome signals in crawl_runs.error_category.
+    sa.Column("outcome", sa.String(32), nullable=False),
+    sa.Column("executor_mode", sa.String(16), server_default="http", nullable=False),
+    # Browser actions consumed by this attempt (Tier 2 budget accounting, 7.x).
+    sa.Column("action_count", sa.Integer(), server_default=sa.text("0"), nullable=False),
+    # BOUNDED safe summary: status code, signal flags, counts, next-eligible
+    # hint. NEVER raw page content, credentials, or PII.
+    sa.Column(
+        "evidence_summary",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column("started_at", sa.DateTime(timezone=True)),
+    sa.Column("finished_at", sa.DateTime(timezone=True)),
+    sa.Column("next_eligible_at", sa.DateTime(timezone=True)),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.Column(
+        "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.UniqueConstraint(
+        "source_id", "attempt_no", name="uq_crawl_source_attempts_source_attempt_no"
+    ),
+    sa.CheckConstraint(
+        "outcome IN ('postings_found','verified_empty','not_job_source',"
+        "'transient_failure','auth_required','dynamic_or_unsupported','policy_denied')",
+        name="outcome_values",
+    ),
+    sa.CheckConstraint("executor_mode IN ('http', 'ego')", name="executor_mode_values"),
+    sa.CheckConstraint("attempt_no > 0", name="attempt_no_positive"),
+    sa.CheckConstraint("action_count >= 0", name="action_count_nonnegative"),
+    sa.CheckConstraint(
+        "jsonb_typeof(evidence_summary) = 'object'", name="evidence_summary_object"
+    ),
+)
+
+sa.Index(
+    "ix_crawl_source_attempts_source_created",
+    crawl_source_attempts.c.source_id,
+    crawl_source_attempts.c.created_at,
+)
+sa.Index(
+    "ix_crawl_source_attempts_next_eligible",
+    crawl_source_attempts.c.next_eligible_at,
+)
+
+crawl_source_permissions = sa.Table(
+    "crawl_source_permissions",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "source_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.job_sources.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column("domain_scope", sa.Text(), server_default="", nullable=False),
+    sa.Column("state", sa.String(16), server_default="pending", nullable=False),
+    # Disclosed purpose / requested frequency / action+time limits (bounded
+    # JSONB object). This is the consent contract the user grants against.
+    sa.Column(
+        "disclosed_terms",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    # Decision timestamps — each set when the matching transition is persisted.
+    sa.Column("requested_at", sa.DateTime(timezone=True)),
+    sa.Column("granted_at", sa.DateTime(timezone=True)),
+    sa.Column("denied_at", sa.DateTime(timezone=True)),
+    sa.Column("revoked_at", sa.DateTime(timezone=True)),
+    sa.Column("expired_at", sa.DateTime(timezone=True)),
+    # Configured grant deadline (distinct from expired_at = when it lapsed).
+    sa.Column("expires_at", sa.DateTime(timezone=True)),
+    sa.Column(
+        "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.Column(
+        "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+    sa.CheckConstraint(
+        "state IN ('pending', 'granted', 'denied', 'revoked', 'expired')",
+        name="state_values",
+    ),
+    sa.CheckConstraint(
+        "jsonb_typeof(disclosed_terms) = 'object'", name="disclosed_terms_object"
+    ),
+    # HARD CONSTRAINT: at most one PENDING request per source (spec scenario
+    # "Repeated crawl sees an existing pending request -> reuses the existing
+    # request instead of creating repeated prompts"). Enforced at the DB so the
+    # Phase-6 permission service cannot create duplicate prompts under concurrency.
+)
+
+sa.Index(
+    "ix_crawl_source_permissions_source_state",
+    crawl_source_permissions.c.source_id,
+    crawl_source_permissions.c.state,
+)
+# Partial unique index: only one pending permission per source at a time.
+sa.Index(
+    "uq_crawl_source_permissions_pending_source",
+    crawl_source_permissions.c.source_id,
+    postgresql_where=crawl_source_permissions.c.state == "pending",
+)
+
+# ---------------------------------------------------------------------------
 # End-to-end career loop Section 6: inbox filter decisions + requirement matches
 # ---------------------------------------------------------------------------
 

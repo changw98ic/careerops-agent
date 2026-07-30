@@ -73,13 +73,24 @@ from careerops.domain.profiles import (
     LocationPreference,
     RemoteRules,
 )
+from careerops.domain.crawl_attempts import (
+    CrawlAttemptOutcome,
+    CrawlPermissionState,
+    CrawlSourceAttempt,
+    CrawlSourcePermission,
+    is_permission_transition_allowed,
+)
 from careerops.infrastructure.database.schema import (
     crawl_plan_versions,
     crawl_runs,
+    crawl_source_attempts,
+    crawl_source_permissions,
     job_sources,
 )
 
 __all__ = [
+    "PostgresCrawlAttemptRepository",
+    "PostgresCrawlPermissionRepository",
     "PostgresCrawlPlanRepository",
     "PostgresCrawlRunRepository",
     "PostgresCrawlSourceRepository",
@@ -446,6 +457,96 @@ class PostgresCrawlSourceRepository:
             result = conn.execute(sa.delete(job_sources).where(job_sources.c.id == source_id))
             if result.rowcount == 0:
                 raise NotFoundError("crawl source not found")
+
+    # -- discovery dedup (Phase 5.4) ---------------------------------------
+
+    def get_by_identity(
+        self,
+        owner_id: UUID,
+        company_id: UUID,
+        source_type: CrawlSourceType,
+        source_identifier: str,
+    ) -> CrawlSource | None:
+        """Return the source matching the business unique key
+        ``(company_id, source_type, source_identifier)``, or None.
+
+        Used by the discovery normalizer and :meth:`upsert_by_identity` to find
+        the canonical row for a discovered source without knowing its id.
+        """
+        with self._engine.begin() as conn:
+            row = (
+                conn.execute(
+                    sa.select(job_sources).where(
+                        sa.and_(
+                            job_sources.c.company_id == company_id,
+                            job_sources.c.source_type == source_type.value,
+                            job_sources.c.source_identifier == source_identifier,
+                        )
+                    )
+                )
+                .mappings()
+                .first()
+            )
+        return _row_to_source(row, owner_id) if row else None
+
+    def upsert_by_identity(self, source: CrawlSource) -> CrawlSource:
+        """Insert or update keyed by the business unique key
+        ``(company_id, source_type, source_identifier)``.
+
+        Closes the gap in :meth:`save` (which upserts on ``id`` only): two
+        discovery events for the same source collapse to ONE row. On conflict
+        the EXISTING row's id wins (the incoming id is ignored), and mutable
+        discovery fields (base_url, executor_mode, adapter_version,
+        last_discovery_at) are refreshed. The canonical row is then re-read by
+        identity and returned.
+        """
+        values = {
+            "id": source.id,
+            "company_id": source.company_id,
+            "source_type": source.source_type.value,
+            "source_identifier": source.source_identifier,
+            "base_url": source.base_url,
+            "executor_mode": source.executor_mode.value,
+            "state": source.state.value,
+            "trust_status": source.trust_status.value,
+            "terms_status": source.terms_status.value,
+            "robots_status": source.robots_status.value,
+            "adapter_version": source.adapter_version,
+            "enabled": source.enabled,
+            "verified_at": source.verified_at,
+            "last_discovery_at": source.last_discovery_at,
+            "last_run_at": source.last_run_at,
+            "last_run_metadata": dict(source.last_run_metadata),
+        }
+        with self._engine.begin() as conn:
+            upsert = (
+                pg_insert(job_sources)
+                .values(**values)
+                .on_conflict_do_update(
+                    constraint="uq_job_sources_company_type_identifier",
+                    set_={
+                        # Refresh mutable discovery fields; do NOT clobber
+                        # lifecycle state / policy status / enabled / last_run_*
+                        # that the user or a prior run may have set.
+                        "base_url": source.base_url,
+                        "executor_mode": source.executor_mode.value,
+                        "adapter_version": source.adapter_version,
+                        "last_discovery_at": source.last_discovery_at,
+                        "last_run_metadata": dict(source.last_run_metadata),
+                        "updated_at": sa.func.now(),
+                    },
+                )
+            )
+            conn.execute(upsert)
+        existing = self.get_by_identity(
+            source.owner_id,
+            source.company_id,
+            source.source_type,
+            source.source_identifier,
+        )
+        # The conflict target guarantees a row exists after the upsert.
+        assert existing is not None  # noqa: S101 - post-upsert invariant
+        return existing
 
 
 # ---------------------------------------------------------------------------
@@ -822,6 +923,297 @@ class PostgresCrawlRunRepository:
             if result.rowcount == 0:
                 raise NotFoundError("crawl run not found for owner")
         return self.get_by_id(owner_id, run_id)
+
+
+# ---------------------------------------------------------------------------
+# PostgresCrawlAttemptRepository (Phase 5.1/5.3)
+# ---------------------------------------------------------------------------
+
+
+def _attempt_outcome(value: str) -> CrawlAttemptOutcome:
+    try:
+        return CrawlAttemptOutcome(value)
+    except ValueError:
+        # Unknown legacy value round-trips as the closest safe non-terminal
+        # outcome; the service layer never writes an invalid value (CHECK
+        # enforced). This path only fires for corrupted rows.
+        return CrawlAttemptOutcome.TRANSIENT_FAILURE
+
+
+def _row_to_attempt(row: sa.RowMapping, owner_id: UUID) -> CrawlSourceAttempt:
+    """Map a ``crawl_source_attempts`` row onto :class:`CrawlSourceAttempt`.
+
+    ``owner_id`` is stamped on read (transitive via job_sources.company_id in
+    the single-user runtime; the table has no owner column).
+    """
+    evidence = row["evidence_summary"]
+    return CrawlSourceAttempt(
+        id=row["id"],
+        source_id=row["source_id"],
+        owner_id=owner_id,
+        attempt_no=int(row["attempt_no"]),
+        outcome=_attempt_outcome(str(row["outcome"])),
+        crawl_run_id=row["crawl_run_id"],
+        executor_mode=_executor_mode(str(row.get("executor_mode", "http"))),
+        action_count=int(row.get("action_count", 0)),
+        evidence_summary=dict(evidence) if isinstance(evidence, dict) else {},
+        started_at=row["started_at"],
+        finished_at=row["finished_at"],
+        next_eligible_at=row["next_eligible_at"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+class PostgresCrawlAttemptRepository:
+    """Append-only per-source attempt-outcome store on ``crawl_source_attempts``.
+
+    Every method takes the server-resolved ``owner_id`` (stamped on read); the
+    table has no owner column in the single-user runtime. ``attempt_no`` is the
+    monotonic per-source sequence — callers obtain it via
+    :meth:`next_attempt_no` so the ``uq_crawl_source_attempts_source_attempt_no``
+    unique key is not violated under retry.
+    """
+
+    def __init__(self, engine: Engine) -> None:
+        self._engine = engine
+
+    def next_attempt_no(self, owner_id: UUID, source_id: UUID) -> int:
+        stmt = sa.select(sa.func.coalesce(sa.func.max(crawl_source_attempts.c.attempt_no), 0)).where(
+            crawl_source_attempts.c.source_id == source_id
+        )
+        with self._engine.begin() as conn:
+            current = conn.execute(stmt).scalar() or 0
+        return int(current) + 1
+
+    def record(self, owner_id: UUID, attempt: CrawlSourceAttempt) -> CrawlSourceAttempt:
+        values = {
+            "id": attempt.id,
+            "source_id": attempt.source_id,
+            "crawl_run_id": attempt.crawl_run_id,
+            "attempt_no": attempt.attempt_no,
+            "outcome": attempt.outcome.value,
+            "executor_mode": attempt.executor_mode.value,
+            "action_count": attempt.action_count,
+            "evidence_summary": dict(attempt.evidence_summary),
+            "started_at": attempt.started_at,
+            "finished_at": attempt.finished_at,
+            "next_eligible_at": attempt.next_eligible_at,
+        }
+        with self._engine.begin() as conn:
+            conn.execute(pg_insert(crawl_source_attempts).values(**values))
+        return self.get_by_id(owner_id, attempt.id)
+
+    def get_by_id(self, owner_id: UUID, attempt_id: UUID) -> CrawlSourceAttempt:
+        with self._engine.begin() as conn:
+            row = (
+                conn.execute(
+                    sa.select(crawl_source_attempts).where(
+                        crawl_source_attempts.c.id == attempt_id
+                    )
+                )
+                .mappings()
+                .first()
+            )
+        if row is None:
+            raise NotFoundError("crawl source attempt not found")
+        return _row_to_attempt(row, owner_id)
+
+    def list_for_source(
+        self, owner_id: UUID, source_id: UUID, *, limit: int = 50
+    ) -> list[CrawlSourceAttempt]:
+        stmt = (
+            sa.select(crawl_source_attempts)
+            .where(crawl_source_attempts.c.source_id == source_id)
+            .order_by(crawl_source_attempts.c.attempt_no.desc())
+            .limit(limit)
+        )
+        with self._engine.begin() as conn:
+            rows = conn.execute(stmt).mappings().all()
+        return [_row_to_attempt(row, owner_id) for row in rows]
+
+    def latest_for_source(
+        self, owner_id: UUID, source_id: UUID
+    ) -> CrawlSourceAttempt | None:
+        stmt = (
+            sa.select(crawl_source_attempts)
+            .where(crawl_source_attempts.c.source_id == source_id)
+            .order_by(crawl_source_attempts.c.attempt_no.desc())
+            .limit(1)
+        )
+        with self._engine.begin() as conn:
+            row = conn.execute(stmt).mappings().first()
+        return _row_to_attempt(row, owner_id) if row else None
+
+
+# ---------------------------------------------------------------------------
+# PostgresCrawlPermissionRepository (Phase 5.2/5.3)
+# ---------------------------------------------------------------------------
+
+
+def _permission_state(value: str) -> CrawlPermissionState:
+    try:
+        return CrawlPermissionState(value)
+    except ValueError:
+        return CrawlPermissionState.PENDING
+
+
+def _row_to_permission(row: sa.RowMapping, owner_id: UUID) -> CrawlSourcePermission:
+    terms = row["disclosed_terms"]
+    return CrawlSourcePermission(
+        id=row["id"],
+        source_id=row["source_id"],
+        owner_id=owner_id,
+        state=_permission_state(str(row["state"])),
+        domain_scope=str(row.get("domain_scope", "")),
+        disclosed_terms=dict(terms) if isinstance(terms, dict) else {},
+        requested_at=row["requested_at"],
+        granted_at=row["granted_at"],
+        denied_at=row["denied_at"],
+        revoked_at=row["revoked_at"],
+        expired_at=row["expired_at"],
+        expires_at=row["expires_at"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+# The decision timestamp to stamp for each target state on transition. PENDING
+# has no entry here because transitions TO pending are not legal (terminal
+# states admit no further moves); re-request is a new row.
+_DECISION_TIMESTAMP_COLUMN: dict[CrawlPermissionState, str] = {
+    CrawlPermissionState.GRANTED: "granted_at",
+    CrawlPermissionState.DENIED: "denied_at",
+    CrawlPermissionState.REVOKED: "revoked_at",
+    CrawlPermissionState.EXPIRED: "expired_at",
+}
+
+
+class PostgresCrawlPermissionRepository:
+    """Per-source crawl-permission store on ``crawl_source_permissions``.
+
+    Stores the consent lifecycle ONLY — no password / raw session material
+    (tasks 5.2, 6.6, 10.5). The ``transition`` method enforces the state machine
+    in :data:`careerops.domain.crawl_attempts.ALLOWED_PERMISSION_TRANSITIONS` and
+    stamps the matching decision timestamp.
+    """
+
+    def __init__(self, engine: Engine) -> None:
+        self._engine = engine
+
+    def save(
+        self, owner_id: UUID, permission: CrawlSourcePermission
+    ) -> CrawlSourcePermission:
+        values = {
+            "id": permission.id,
+            "source_id": permission.source_id,
+            "domain_scope": permission.domain_scope,
+            "state": permission.state.value,
+            "disclosed_terms": dict(permission.disclosed_terms),
+            "requested_at": permission.requested_at,
+            "granted_at": permission.granted_at,
+            "denied_at": permission.denied_at,
+            "revoked_at": permission.revoked_at,
+            "expired_at": permission.expired_at,
+            "expires_at": permission.expires_at,
+        }
+        with self._engine.begin() as conn:
+            conn.execute(
+                pg_insert(crawl_source_permissions)
+                .values(**values)
+                .on_conflict_do_update(
+                    index_elements=[crawl_source_permissions.c.id],
+                    set_={
+                        "domain_scope": permission.domain_scope,
+                        "state": permission.state.value,
+                        "disclosed_terms": dict(permission.disclosed_terms),
+                        "requested_at": permission.requested_at,
+                        "granted_at": permission.granted_at,
+                        "denied_at": permission.denied_at,
+                        "revoked_at": permission.revoked_at,
+                        "expired_at": permission.expired_at,
+                        "expires_at": permission.expires_at,
+                        "updated_at": sa.func.now(),
+                    },
+                )
+            )
+        return self.get_by_id(owner_id, permission.id)
+
+    def get_by_id(self, owner_id: UUID, permission_id: UUID) -> CrawlSourcePermission:
+        with self._engine.begin() as conn:
+            row = (
+                conn.execute(
+                    sa.select(crawl_source_permissions).where(
+                        crawl_source_permissions.c.id == permission_id
+                    )
+                )
+                .mappings()
+                .first()
+            )
+        if row is None:
+            raise NotFoundError("crawl source permission not found")
+        return _row_to_permission(row, owner_id)
+
+    def get_unresolved_for_source(
+        self, owner_id: UUID, source_id: UUID
+    ) -> CrawlSourcePermission | None:
+        stmt = (
+            sa.select(crawl_source_permissions)
+            .where(
+                sa.and_(
+                    crawl_source_permissions.c.source_id == source_id,
+                    crawl_source_permissions.c.state == CrawlPermissionState.PENDING.value,
+                )
+            )
+            .order_by(crawl_source_permissions.c.created_at.desc())
+            .limit(1)
+        )
+        with self._engine.begin() as conn:
+            row = conn.execute(stmt).mappings().first()
+        return _row_to_permission(row, owner_id) if row else None
+
+    def list_for_source(
+        self, owner_id: UUID, source_id: UUID, *, limit: int = 50
+    ) -> list[CrawlSourcePermission]:
+        stmt = (
+            sa.select(crawl_source_permissions)
+            .where(crawl_source_permissions.c.source_id == source_id)
+            .order_by(crawl_source_permissions.c.created_at.desc())
+            .limit(limit)
+        )
+        with self._engine.begin() as conn:
+            rows = conn.execute(stmt).mappings().all()
+        return [_row_to_permission(row, owner_id) for row in rows]
+
+    def transition(
+        self,
+        owner_id: UUID,
+        permission_id: UUID,
+        *,
+        to: CrawlPermissionState,
+        now: datetime | None = None,
+    ) -> CrawlSourcePermission:
+        current = self.get_by_id(owner_id, permission_id)
+        if not is_permission_transition_allowed(current.state, to):
+            raise ValueError(
+                f"illegal crawl permission transition: {current.state.value} -> {to.value}"
+            )
+        stamp_column = _DECISION_TIMESTAMP_COLUMN.get(to)
+        patches: dict[str, Any] = {
+            "state": to.value,
+            "updated_at": now or sa.func.now(),
+        }
+        if stamp_column is not None:
+            patches[stamp_column] = now or sa.func.now()
+        with self._engine.begin() as conn:
+            result = conn.execute(
+                sa.update(crawl_source_permissions)
+                .where(crawl_source_permissions.c.id == permission_id)
+                .values(**patches)
+            )
+            if result.rowcount == 0:
+                raise NotFoundError("crawl source permission not found")
+        return self.get_by_id(owner_id, permission_id)
 
 
 # Re-export the domain exceptions so callers can import everything from one place.

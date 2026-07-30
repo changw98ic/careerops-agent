@@ -383,6 +383,31 @@ class CrawlSourceRepository(Protocol):
         """Delete the source (retention/retirement is the service's job)."""
         ...
 
+    def get_by_identity(
+        self,
+        owner_id: UUID,
+        company_id: UUID,
+        source_type: CrawlSourceType,
+        source_identifier: str,
+    ) -> CrawlSource | None:
+        """Return the source matching the business unique key
+        ``(company_id, source_type, source_identifier)``, or None.
+
+        Phase 5.4 discovery dedup: lets the normalizer find the canonical row
+        for a discovered source without knowing its id.
+        """
+        ...
+
+    def upsert_by_identity(self, source: CrawlSource) -> CrawlSource:
+        """Insert or update keyed by the business unique key so two discovery
+        events for the same source collapse to ONE row (Phase 5.4). On conflict
+        the existing row's id wins; mutable discovery fields are refreshed.
+
+        Distinct from :meth:`save` (idempotent on ``id``), which is used by the
+        seed path where ids are deterministic.
+        """
+        ...
+
 
 @runtime_checkable
 class CrawlPlanRepository(Protocol):

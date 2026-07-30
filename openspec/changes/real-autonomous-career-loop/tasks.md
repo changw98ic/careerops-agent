@@ -55,9 +55,9 @@ Ordered by dependency: power-on first, add trigger infrastructure without activa
 
 ## 5. Phase 5 — Durable source discovery and attempt outcomes
 
-- [ ] 5.1 Add an Alembic migration for `crawl_source_attempts`, storing source, crawl run, normalized outcome, evidence summary, executor, action count, timestamps, and next eligible time for every attempt.
-- [ ] 5.2 Add an Alembic migration for source-specific crawl permissions, storing source/domain scope, pending/granted/denied/revoked/expired status, disclosed purpose/frequency/limits, decision timestamps, and expiry without storing passwords or raw session material.
-- [ ] 5.3 Add canonical domain enums and Postgres repositories for the seven Tier 1 outcomes and permission state transitions; do not encode either state machine only inside `last_run_metadata`.
+- [x] 5.1 Add an Alembic migration for `crawl_source_attempts`, storing source, crawl run, normalized outcome, evidence summary, executor, action count, timestamps, and next eligible time for every attempt. _(已实现：migration 0031 + schema.py `crawl_source_attempts` 表)_
+- [x] 5.2 Add an Alembic migration for source-specific crawl permissions, storing source/domain scope, pending/granted/denied/revoked/expired status, disclosed purpose/frequency/limits, decision timestamps, and expiry without storing passwords or raw session material. _(已实现：migration 0032 + schema.py `crawl_source_permissions` 表)_
+- [x] 5.3 Add canonical domain enums and Postgres repositories for the seven Tier 1 outcomes and permission state transitions; do not encode either state machine only inside `last_run_metadata`. _(已实现：`domain/crawl_attempts.py` CrawlAttemptOutcome(7值) + CrawlPermissionState + Repositories; `postgres_crawl_repo.py` attempt/permission CRUD)_
 - [ ] 5.4 Add source discovery inputs for existing ATS / JsonLd / Sitemap results and confirmed career-page links, normalize source identities, and deduplicate them into the canonical `job_sources` registry.
 - [ ] 5.5 Build the Tier 1 source queue from the persisted registry and record exactly one durable attempt outcome for every scheduled source.
 - [ ] 5.6 Implement positive job-source evidence and outcome classification so empty results, HTTP 403, CAPTCHA, model judgement alone, and temporary network failures cannot become `AUTH_REQUIRED`.

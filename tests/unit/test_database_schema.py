@@ -37,6 +37,8 @@ EXPECTED_TABLES = {
     "content_objects",
     "crawl_plan_versions",
     "crawl_runs",
+    "crawl_source_attempts",
+    "crawl_source_permissions",
     "email_accounts",
     "email_event_proposals",
     "email_extractions",

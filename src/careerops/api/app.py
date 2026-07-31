@@ -13,7 +13,6 @@ from careerops.api.errors import install_error_handlers
 from careerops.api.metrics_middleware import MetricsMiddleware
 from careerops.api.middleware import RequestIdMiddleware
 from careerops.api.routes.agent_console import router as agent_console_router
-from careerops.api.routes.notifications import router as notifications_router
 from careerops.api.routes.agent_runs import router as agent_runs_router
 from careerops.api.routes.application_workspace import router as application_workspace_router
 from careerops.api.routes.applications import router as applications_router
@@ -30,6 +29,7 @@ from careerops.api.routes.mail_intelligence import router as mail_intelligence_r
 from careerops.api.routes.mail_sync import router as mail_sync_router
 from careerops.api.routes.matching import router as matching_router
 from careerops.api.routes.metrics import router as metrics_router
+from careerops.api.routes.notifications import router as notifications_router
 from careerops.api.routes.profile import router as profile_router
 from careerops.api.routes.reply_drafts import router as reply_drafts_router
 from careerops.api.routes.resumes import router as resumes_router
@@ -104,6 +104,66 @@ class _FollowUpRepoAdapter:
         self._repo.save_follow_up(reminder)
 
 
+async def _run_trigger_loop_bootstrap(probe: "RuntimeResources", settings: Settings):
+    """Build the Phase 2 collaborators and run the schedule bootstrap once.
+
+    Constructs a ``ScheduleManager`` from the runtime's Temporal client and a
+    ``CrawlActivationService`` from the runtime's existing Tier 2 budget +
+    source queue (both already satisfy the activation Protocols), then calls
+    ``bootstrap_trigger_loop``. May raise (e.g. Temporal not up); the caller
+    in ``lifespan`` treats it as best-effort with retry.
+    """
+    from careerops.application.crawl_activation import (
+        CrawlActivationService,
+        TemporalScheduleActivator,
+    )
+    from careerops.application.loop_bootstrap import bootstrap_trigger_loop
+    from careerops.infrastructure.temporal.schedule_manager import ScheduleManager
+
+    client = await probe.get_temporal_client()
+    schedule_manager = ScheduleManager(client)
+    activation_service = CrawlActivationService(
+        schedule_activator=TemporalScheduleActivator(
+            schedule_manager, task_queue="careerops-m0"
+        ),
+        budget_checker=probe.tier2_budget,
+        eligibility_checker=probe.source_queue_service,
+        inbox_projector=None,
+    )
+    return await bootstrap_trigger_loop(
+        settings,
+        probe,
+        schedule_manager=schedule_manager,
+        crawl_activation_service=activation_service,
+    )
+
+
+async def _bootstrap_trigger_loop_safe(
+    probe: "RuntimeResources", settings: Settings, app: FastAPI
+) -> None:
+    """Run the Phase 2 schedule bootstrap; best-effort with retry.
+
+    Retries the Temporal connect a few times (the compose startup race where
+    Temporal is not yet healthy when the API boots), then logs and gives up
+    without ever crashing the API. The next restart reconciles again.
+    """
+    import asyncio
+    import logging
+
+    log = logging.getLogger(__name__)
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            report = await _run_trigger_loop_bootstrap(probe, settings)
+            app.state.trigger_loop_report = report
+            return
+        except Exception as exc:  # noqa: BLE101 - temporal may not be up yet
+            last_exc = exc
+            if attempt < 2:
+                await asyncio.sleep(2 ** attempt)
+    log.warning("trigger-loop bootstrap skipped after retries: %s", last_exc)
+
+
 def create_app(
     settings: Settings | None = None,
     *,
@@ -134,6 +194,10 @@ def create_app(
             smart_intake_service = getattr(_app.state, "smart_intake_service", None)
             if smart_intake_service is not None:
                 smart_intake_service.revoke_unapplied(actor_id="smart-intake-capability-disabled")
+        # Phase 2: reconcile the self-driving trigger-loop schedules on startup.
+        # Best-effort (never crashes the API; retried inside the helper).
+        if isinstance(probe, RuntimeResources):
+            await _bootstrap_trigger_loop_safe(probe, resolved, _app)
         try:
             yield
         finally:
@@ -171,7 +235,6 @@ def create_app(
         )
         from careerops.application.matching import (
             EvidenceImportService,
-            MatchOrchestrator,
         )
         from careerops.application.profile_service import ProfileService
         from careerops.application.resume_service import ResumeService
@@ -179,7 +242,7 @@ def create_app(
 
         app.state.matching_repository = probe.matching_read_repo
         app.state.evidence_import_service = EvidenceImportService(probe.matching_read_repo)
-        app.state.match_orchestrator = MatchOrchestrator(data_repository=probe.matching_read_repo)
+        app.state.match_orchestrator = probe.match_orchestrator
         app.state.job_read_repository = probe.job_read_repo
         app.state.contact_repository = probe.contact_repo
         app.state.contact_service = ContactService(probe.contact_repo)
@@ -249,16 +312,7 @@ def create_app(
         app.state.crawl_run_service = crawl_run_service
         # Phase 6.2: source-specific crawl-permission service.  Composes the
         # permission repo (Phase 5.2) + source repo (for pausing) + audit sink.
-        from careerops.application.crawl_permission_service import (
-            CrawlPermissionService,
-            LoggingPermissionAuditSink,
-        )
-
-        app.state.crawl_permission_service = CrawlPermissionService(
-            probe.crawl_permission_repo,  # type: ignore[arg-type]
-            probe.crawl_source_repo,  # type: ignore[arg-type]
-            audit_sink=LoggingPermissionAuditSink(),
-        )
+        app.state.crawl_permission_service = probe.crawl_permission_service
         # Section 5 crawl execution service (tasks 5.1, 5.5, 5.6). Wired
         # through RuntimeResources; reachable from API routes and Temporal
         # activities via app.state.crawl_execution_service.
@@ -266,33 +320,27 @@ def create_app(
         # Section-6 inbox projection service + repository (tasks 6.1-6.6).
         # Connects the job projection to the active profile + crawl-plan
         # provenance. Same DI pattern as Section-2/4/5 services.
-        from careerops.application.inbox_service import InboxProjectionService
-
         app.state.inbox_repository = probe.inbox_repo
-        app.state.inbox_service = InboxProjectionService(
-            inbox_repo=probe.inbox_repo,
-            profile_repo=probe.profile_repo,
-            evidence_repo=probe.evidence_repo,
-            job_data_repo=probe.matching_read_repo,
-            capability_resolver=probe.capability_resolver,
-            model_client=probe.model_client,
-        )
+        app.state.inbox_service = probe.inbox_service
         app.state.agent_run_repository = probe.agent_run_repo
         app.state.agent_runtime = probe.agent_runtime
 
         # Phase 9: notification service (SSE + outbox).  The action repo is
         # wired from the probe so ActionProjectionBuilder can read persisted
         # actions instead of returning an empty stub queue.
+        from careerops.agent_console.action_projection import (
+            ActionProjectionBuilder,
+        )
         from careerops.application.notification_service import (
             NotificationService,
             SSEChannel,
         )
-        from careerops.agent_console.action_projection import (
-            ActionProjectionBuilder,
-        )
 
         sse_channel = SSEChannel()
-        app.state.notification_service = NotificationService(sse_channel)
+        app.state.notification_service = NotificationService(
+            sse_channel,
+            repository=getattr(probe, "notification_repo", None),
+        )
         app.state.sse_channel = sse_channel
 
         # Wire action repo from probe for real action queue projection.

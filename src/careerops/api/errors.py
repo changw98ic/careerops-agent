@@ -39,30 +39,6 @@ class CareerOpsHTTPException(HTTPException):
         raise NotImplementedError
 
 
-class UnauthorizedError(CareerOpsHTTPException):
-    error_code = ErrorCode.UNAUTHORIZED
-    message_default = "Authentication required"
-
-    @classmethod
-    def _status_code(cls) -> int:
-        return HTTPStatus.UNAUTHORIZED
-
-    def __init__(self, message: str = "", **kwargs: object) -> None:
-        super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
-
-
-class InvalidCredentialsError(CareerOpsHTTPException):
-    error_code = ErrorCode.INVALID_CREDENTIALS
-    message_default = "Invalid credentials"
-
-    @classmethod
-    def _status_code(cls) -> int:
-        return HTTPStatus.UNAUTHORIZED
-
-    def __init__(self, message: str = "", **kwargs: object) -> None:
-        super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
-
-
 class RateLimitedError(CareerOpsHTTPException):
     error_code = ErrorCode.RATE_LIMITED
     retryable = True
@@ -71,18 +47,6 @@ class RateLimitedError(CareerOpsHTTPException):
     @classmethod
     def _status_code(cls) -> int:
         return HTTPStatus.TOO_MANY_REQUESTS
-
-    def __init__(self, message: str = "", **kwargs: object) -> None:
-        super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
-
-
-class BootstrapClosedError(CareerOpsHTTPException):
-    error_code = ErrorCode.BOOTSTRAP_CLOSED
-    message_default = "Bootstrap is no longer available"
-
-    @classmethod
-    def _status_code(cls) -> int:
-        return HTTPStatus.FORBIDDEN
 
     def __init__(self, message: str = "", **kwargs: object) -> None:
         super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
@@ -331,7 +295,6 @@ class PayloadTooLargeError(CareerOpsHTTPException):
 
 _HTTP_ERROR_CODES: dict[int, ErrorCode] = {
     HTTPStatus.BAD_REQUEST.value: ErrorCode.BAD_REQUEST,
-    HTTPStatus.UNAUTHORIZED.value: ErrorCode.UNAUTHORIZED,
     HTTPStatus.FORBIDDEN.value: ErrorCode.FORBIDDEN,
     HTTPStatus.NOT_FOUND.value: ErrorCode.NOT_FOUND,
     HTTPStatus.METHOD_NOT_ALLOWED.value: ErrorCode.METHOD_NOT_ALLOWED,

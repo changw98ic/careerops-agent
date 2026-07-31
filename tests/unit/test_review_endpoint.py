@@ -343,9 +343,6 @@ class TestProductionGuard:
         prod_settings = Settings(
             _env_file=None,  # pyright: ignore[reportCallIssue]
             environment=RuntimeEnvironment.PRODUCTION,
-            console_cookie_secure=True,
-            console_allowed_hosts=("prod.example",),
-            console_allowed_origins=("https://prod.example",),
         )
         app = create_app(prod_settings)
 
@@ -391,9 +388,6 @@ class TestSettingsCapabilityResolver:
         settings = Settings(
             _env_file=None,  # pyright: ignore[reportCallIssue]
             environment=RuntimeEnvironment.PRODUCTION,
-            console_cookie_secure=True,
-            console_allowed_hosts=("prod.example",),
-            console_allowed_origins=("https://prod.example",),
         )
         resolver = SettingsCapabilityResolver(settings)
 

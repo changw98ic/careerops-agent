@@ -21,23 +21,23 @@ const NotFound = () => import('./views/NotFound.vue')
 
 const routes = [
   { path: '/', redirect: '/dashboard' },
-  { path: '/dashboard', name: 'dashboard', component: Dashboard, meta: { auth: true, title: 'Overview' } },
-  { path: '/jobs', name: 'jobs', component: Jobs, meta: { auth: true } },
-  { path: '/jobs/:id', name: 'job-detail', component: JobDetail, meta: { auth: true } },
-  { path: '/companies', name: 'companies', component: Companies, meta: { auth: true } },
-  { path: '/applications', name: 'applications', component: Applications, meta: { auth: true } },
-  { path: '/applications/:id', name: 'application-workspace', component: ApplicationWorkspace, meta: { auth: true } },
-  { path: '/profile', name: 'profile', component: Profile, meta: { auth: true } },
-  { path: '/resumes', name: 'resumes', component: Resumes, meta: { auth: true } },
-  { path: '/evidence', name: 'evidence', component: Evidence, meta: { auth: true } },
-  { path: '/crawl-plans', name: 'crawl-plans', component: CrawlPlans, meta: { auth: true } },
-  { path: '/crawl-runs', name: 'crawl-runs', component: CrawlRunHistory, meta: { auth: true } },
-  { path: '/crawl-runs/:id', name: 'crawl-run-detail', component: CrawlRunDetail, meta: { auth: true } },
-  { path: '/inbox', name: 'inbox', component: Inbox, meta: { auth: true } },
-  { path: '/inbox/:id', name: 'inbox-detail', component: InboxDetail, meta: { auth: true } },
-  { path: '/mail-follow-up', name: 'mail-follow-up', component: MailFollowUp, meta: { auth: true, title: '邮件跟进' } },
-  { path: '/reply-queue', name: 'reply-queue', component: ReplyReviewQueue, meta: { auth: true, title: '回复评审' } },
-  { path: '/ai-workbench', name: 'ai-workbench', component: AgentWorkbench, meta: { auth: true, title: '智能工作台', allowedTabs: ['matching', 'resume', 'interview'] } },
+  { path: '/dashboard', name: 'dashboard', component: Dashboard, meta: { title: 'Overview' } },
+  { path: '/jobs', name: 'jobs', component: Jobs },
+  { path: '/jobs/:id', name: 'job-detail', component: JobDetail },
+  { path: '/companies', name: 'companies', component: Companies },
+  { path: '/applications', name: 'applications', component: Applications },
+  { path: '/applications/:id', name: 'application-workspace', component: ApplicationWorkspace },
+  { path: '/profile', name: 'profile', component: Profile },
+  { path: '/resumes', name: 'resumes', component: Resumes },
+  { path: '/evidence', name: 'evidence', component: Evidence },
+  { path: '/crawl-plans', name: 'crawl-plans', component: CrawlPlans },
+  { path: '/crawl-runs', name: 'crawl-runs', component: CrawlRunHistory },
+  { path: '/crawl-runs/:id', name: 'crawl-run-detail', component: CrawlRunDetail },
+  { path: '/inbox', name: 'inbox', component: Inbox },
+  { path: '/inbox/:id', name: 'inbox-detail', component: InboxDetail },
+  { path: '/mail-follow-up', name: 'mail-follow-up', component: MailFollowUp, meta: { title: '邮件跟进' } },
+  { path: '/reply-queue', name: 'reply-queue', component: ReplyReviewQueue, meta: { title: '回复评审' } },
+  { path: '/ai-workbench', name: 'ai-workbench', component: AgentWorkbench, meta: { title: '智能工作台', allowedTabs: ['matching', 'resume', 'interview'] } },
   { path: '/404', name: 'not-found', component: NotFound },
   { path: '/:pathMatch(.*)*', name: 'catch-all', redirect: '/404' },
 ]
@@ -47,9 +47,9 @@ const router = createRouter({
   routes,
 })
 
-// Exported for unit tests (task 14.1/14.8): lets the suite assert every
-// workspace route carries the authenticated meta without instantiating the
-// browser history. Additive; the default export below is unchanged.
+// Exported for unit tests (task 14.1/14.8): lets the suite assert the route
+// table without instantiating the browser history. Additive; the default
+// export below is unchanged.
 export { routes }
 
 // Allowed tabs for the AI workbench route.  Kept in sync with the route meta

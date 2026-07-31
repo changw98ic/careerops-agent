@@ -170,6 +170,11 @@ id. On API startup the trigger-loop bootstrap registers the background schedules
 drain, approval sweep, per-candidate mail sync and per-candidate crawl) for every existing
 candidate — nothing else needs to be done to start the loop.
 
+Crawl schedules are scoped by each candidate's ACTIVE crawl plan: a candidate without an
+active plan silently gets no crawl schedules (the bootstrap records an info-level
+"no active plan" skip entry only). Create and activate a crawl plan for the candidate to
+start per-source crawl scheduling.
+
 ## Troubleshooting
 
 ### Migration service fails with exit code 1

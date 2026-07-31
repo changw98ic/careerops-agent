@@ -16,7 +16,9 @@ def _openapi() -> dict:
 class TestOpenApiErrorResponses:
     def test_every_path_declares_standard_error_codes(self) -> None:
         schema = _openapi()
-        required_statuses = {"401", "403", "404", "409", "422", "429", "503"}
+        # 401 was removed with the auth-layer error codes (auth-rm sweep):
+        # no handler can raise it anymore.
+        required_statuses = {"403", "404", "409", "422", "429", "503"}
         paths = schema.get("paths", {})
         assert len(paths) > 0, "OpenAPI schema should have paths"
 
@@ -50,11 +52,7 @@ class TestOpenApiErrorResponses:
         error_props = schemas["ErrorResponse"]["properties"]["error"]["properties"]
         code_enum = error_props["code"]["enum"]
         expected_codes = {
-            "UNAUTHORIZED",
-            "CSRF_REJECTED",
-            "INVALID_CREDENTIALS",
             "RATE_LIMITED",
-            "BOOTSTRAP_CLOSED",
             "CANDIDATE_PROFILE_REQUIRED",
             "NOT_FOUND",
             "CONFLICT",
@@ -80,7 +78,8 @@ class TestOpenApiErrorResponses:
         }
         assert set(code_enum) == expected_codes
 
-    def test_401_response_has_both_unauthorized_and_invalid_credentials_examples(self) -> None:
+    def test_401_is_no_longer_declared(self) -> None:
+        """The auth-layer 401 response was removed with the login layer."""
         schema = _openapi()
         paths = schema.get("paths", {})
         first_path = next(iter(paths))
@@ -89,11 +88,8 @@ class TestOpenApiErrorResponses:
             for m in paths[first_path]
             if m not in ("parameters", "summary", "description", "servers")
         )
-        resp_401 = paths[first_path][first_method]["responses"]["401"]
-        content = resp_401["content"]["application/json"]
-        examples = content.get("examples", {})
-        assert "unauthorized" in examples
-        assert "invalid_credentials" in examples
+        responses = paths[first_path][first_method]["responses"]
+        assert "401" not in responses
 
     def test_429_is_marked_retryable(self) -> None:
         schema = _openapi()

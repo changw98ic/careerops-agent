@@ -34,14 +34,6 @@ def make_client(
     readiness_probe: FixedReadinessProbe | None = None,
 ) -> httpx2.Client:
     values: dict[str, object] = {"environment": environment}
-    if environment is RuntimeEnvironment.PRODUCTION:
-        values.update(
-            {
-                "console_cookie_secure": True,
-                "console_allowed_hosts": ("careerops.example",),
-                "console_allowed_origins": ("https://careerops.example",),
-            }
-        )
     settings = Settings.model_validate(values)
     probe = readiness_probe or FixedReadinessProbe()
     return cast("httpx2.Client", TestClient(create_app(settings, readiness_probe=probe)))

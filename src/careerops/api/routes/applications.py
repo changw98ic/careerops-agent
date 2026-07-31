@@ -596,6 +596,16 @@ async def send_application_email(
     return _app_to_response(app)
 
 
+# ---------------------------------------------------------------------------
+# Legacy M3 compatibility handlers (events / resume-versions / packages /
+# follow-ups). The ``/api/v1/candidates/{candidate_id}`` path prefix is kept
+# for URL compatibility only: these handlers do NOT scope their lookup by the
+# path-supplied candidate id — they operate on application/resume ids taken
+# from the request body or sub-path. Successors that do scope by candidate
+# live in the application_workspace and reply_drafts routers.
+# ---------------------------------------------------------------------------
+
+
 @router.get(
     "/applications/{application_id}/events",
     response_model=ApplicationEventListResponse,

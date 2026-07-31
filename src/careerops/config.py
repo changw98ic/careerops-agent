@@ -53,17 +53,6 @@ class Settings(BaseSettings):
     temporal_namespace: str = Field(default="default", min_length=1, max_length=255)
     temporal_task_queue: str = Field(default="careerops-m0", min_length=1, max_length=255)
     readiness_timeout_seconds: float = Field(default=1.0, ge=0.05, le=10.0)
-    console_allowed_hosts: tuple[str, ...] = (
-        "127.0.0.1:8000",
-        "localhost:8000",
-    )
-    console_allowed_origins: tuple[str, ...] = (
-        "http://127.0.0.1:5173",
-        "http://localhost:5173",
-        "http://127.0.0.1:8000",
-        "http://localhost:8000",
-    )
-    console_cookie_secure: bool = False
     storage_root: Path = Path("data/objects")
     storage_max_object_bytes: int = Field(
         default=10 * 1024 * 1024,
@@ -102,10 +91,6 @@ class Settings(BaseSettings):
             raise ValueError("Redis URL must use redis:// or rediss://")
         if ":" not in self.temporal_address or "://" in self.temporal_address:
             raise ValueError("Temporal address must be a host:port authority")
-        if not self.console_allowed_hosts or not self.console_allowed_origins:
-            raise ValueError("console host and origin allowlists must be explicit")
-        if self.environment is RuntimeEnvironment.PRODUCTION and not self.console_cookie_secure:
-            raise ValueError("production console cookies must be Secure")
         if self.storage_root in {Path(""), Path(self.storage_root.anchor)}:
             raise ValueError("storage root must be a dedicated directory")
         loopback_hosts = {"127.0.0.1", "::1", "localhost"}

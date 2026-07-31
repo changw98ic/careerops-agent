@@ -63,17 +63,11 @@ def test_capability_flags_are_settable(flag: str) -> None:
 
 def test_environment_values_are_case_insensitive(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CAREEROPS_ENVIRONMENT", "production")
-    monkeypatch.setenv("CAREEROPS_CONSOLE_COOKIE_SECURE", "true")
-    monkeypatch.setenv("CAREEROPS_CONSOLE_ALLOWED_HOSTS", '["careerops.example"]')
-    monkeypatch.setenv("CAREEROPS_CONSOLE_ALLOWED_ORIGINS", '["https://careerops.example"]')
+    monkeypatch.setenv("CAREEROPS_BIND_PORT", "9001")
     settings = Settings()
 
     assert settings.environment is RuntimeEnvironment.PRODUCTION
-
-
-def test_production_rejects_insecure_console_cookies() -> None:
-    with pytest.raises(ValidationError, match="must be Secure"):
-        Settings.model_validate({"environment": "production"})
+    assert settings.bind_port == 9001
 
 
 def test_database_password_is_redacted_from_settings_repr() -> None:

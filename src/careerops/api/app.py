@@ -694,70 +694,12 @@ def create_app(
 # ---------------------------------------------------------------------------
 
 _ERROR_RESPONSE_SCHEMAS: dict[str, dict[str, object]] = {
-    "401": {
-        "description": "Unauthorized — missing or invalid credentials",
-        "content": {
-            "application/json": {
-                "schema": {"$ref": "#/components/schemas/ErrorResponse"},
-                "examples": {
-                    "unauthorized": {
-                        "summary": "UNAUTHORIZED",
-                        "value": {
-                            "error": {
-                                "code": "UNAUTHORIZED",
-                                "message": "Authentication required",
-                                "retryable": False,
-                                "details": None,
-                                "trace_id": "abc123",
-                            }
-                        },
-                    },
-                    "invalid_credentials": {
-                        "summary": "INVALID_CREDENTIALS",
-                        "value": {
-                            "error": {
-                                "code": "INVALID_CREDENTIALS",
-                                "message": "Invalid credentials",
-                                "retryable": False,
-                                "details": None,
-                                "trace_id": "abc123",
-                            }
-                        },
-                    },
-                },
-            }
-        },
-    },
     "403": {
-        "description": "Forbidden — CSRF, bootstrap, profile requirement, or policy denial",
+        "description": "Forbidden — candidate profile requirement, policy denial, or smart intake disabled",
         "content": {
             "application/json": {
                 "schema": {"$ref": "#/components/schemas/ErrorResponse"},
                 "examples": {
-                    "csrf_rejected": {
-                        "summary": "CSRF_REJECTED",
-                        "value": {
-                            "error": {
-                                "code": "CSRF_REJECTED",
-                                "message": "CSRF token rejected",
-                                "retryable": False,
-                                "details": None,
-                                "trace_id": "abc123",
-                            }
-                        },
-                    },
-                    "bootstrap_closed": {
-                        "summary": "BOOTSTRAP_CLOSED",
-                        "value": {
-                            "error": {
-                                "code": "BOOTSTRAP_CLOSED",
-                                "message": "Bootstrap is no longer available",
-                                "retryable": False,
-                                "details": None,
-                                "trace_id": "abc123",
-                            }
-                        },
-                    },
                     "candidate_profile_required": {
                         "summary": "CANDIDATE_PROFILE_REQUIRED",
                         "value": {
@@ -781,17 +723,17 @@ _ERROR_RESPONSE_SCHEMAS: dict[str, dict[str, object]] = {
                                 "trace_id": "abc123",
                             }
                         },
-                        "smart_intake_disabled": {
-                            "summary": "SMART_INTAKE_DISABLED",
-                            "value": {
-                                "error": {
-                                    "code": "SMART_INTAKE_DISABLED",
-                                    "message": "Smart intake is disabled",
-                                    "retryable": False,
-                                    "details": None,
-                                    "trace_id": "abc123",
-                                }
-                            },
+                    },
+                    "smart_intake_disabled": {
+                        "summary": "SMART_INTAKE_DISABLED",
+                        "value": {
+                            "error": {
+                                "code": "SMART_INTAKE_DISABLED",
+                                "message": "Smart intake is disabled",
+                                "retryable": False,
+                                "details": None,
+                                "trace_id": "abc123",
+                            }
                         },
                     },
                 },
@@ -927,11 +869,7 @@ def _install_openapi_error_responses(app: FastAPI) -> None:
                             "code": {
                                 "type": "string",
                                 "enum": [
-                                    "UNAUTHORIZED",
-                                    "CSRF_REJECTED",
-                                    "INVALID_CREDENTIALS",
                                     "RATE_LIMITED",
-                                    "BOOTSTRAP_CLOSED",
                                     "CANDIDATE_PROFILE_REQUIRED",
                                     "NOT_FOUND",
                                     "CONFLICT",

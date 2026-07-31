@@ -1,7 +1,9 @@
 """M7 Security Suite: adversarial and boundary tests.
 
-Covers M7.2: SSRF, DNS rebinding, redirect, XSS/CSP, CSRF, session,
-OAuth state/audience/revoke, prompt injection, attachment and secret scanning.
+Covers M7.2: SSRF, DNS rebinding, redirect, OAuth state/audience/revoke,
+prompt injection, attachment and secret scanning. The console security
+headers/CSRF invariants (CSP, ConsoleWebSettings) were removed with the
+login layer (auth-rm Task 9) and are no longer tested here.
 
 These tests verify the security invariants defined in the threat model
 and the M7 exit gate: known critical/high security findings = 0.
@@ -29,7 +31,6 @@ from careerops.policy.side_effect_policy import (
     SideEffectPolicyInput,
     SideEffectPolicyOutcome,
 )
-from careerops.web.security import CSP, ConsoleWebSettings
 
 NOW = datetime(2026, 7, 22, 12, 0, 0, tzinfo=UTC)
 
@@ -224,75 +225,6 @@ class TestSSRFProtection:
             )
         )
         assert decision.decision is CrawlDecision.DENY_TERMS_UNKNOWN
-
-
-# ---------------------------------------------------------------------------
-# XSS / CSP / HTML sanitization
-# ---------------------------------------------------------------------------
-
-
-class TestXSSProtection:
-    """Verify CSP enforcement and security headers."""
-
-    def test_csp_restricts_scripts(self) -> None:
-        """CSP allows only same-origin scripts for the SPA bundle; inline and eval stay blocked."""
-        assert "script-src 'self'" in CSP
-        assert "unsafe-eval" not in CSP
-
-    def test_csp_restricts_default(self) -> None:
-        """CSP default-src is 'none'."""
-        assert "default-src 'none'" in CSP
-
-    def test_csp_prevents_framing(self) -> None:
-        """CSP prevents clickjacking via frame-ancestors."""
-        assert "frame-ancestors 'none'" in CSP
-
-    def test_csp_restricts_form_action(self) -> None:
-        """CSP restricts form submissions to same origin."""
-        assert "form-action 'self'" in CSP
-
-    def test_csp_blocks_objects(self) -> None:
-        """CSP blocks plugins/objects."""
-        assert "object-src 'none'" in CSP
-
-
-# ---------------------------------------------------------------------------
-# CSRF / Origin validation
-# ---------------------------------------------------------------------------
-
-
-class TestCSRFProtection:
-    """Verify origin/host validation for CSRF protection."""
-
-    def test_console_settings_rejects_empty_allowlists(self) -> None:
-        """Console settings require explicit host and origin allowlists."""
-        with pytest.raises(ValueError, match="explicit"):
-            ConsoleWebSettings(allowed_hosts=frozenset(), allowed_origins=frozenset())
-
-    def test_console_settings_rejects_invalid_host(self) -> None:
-        """Console settings reject hosts with path separators."""
-        with pytest.raises(ValueError, match="invalid host"):
-            ConsoleWebSettings(
-                allowed_hosts=frozenset({"evil.com/path"}),
-                allowed_origins=frozenset({"http://localhost:8000"}),
-            )
-
-    def test_console_settings_rejects_invalid_origin(self) -> None:
-        """Console settings reject origins with credentials."""
-        with pytest.raises(ValueError, match="invalid origin"):
-            ConsoleWebSettings(
-                allowed_hosts=frozenset({"localhost:8000"}),
-                allowed_origins=frozenset({"http://user:pass@evil.com"}),
-            )
-
-    def test_secure_cookies_require_https(self) -> None:
-        """Secure cookie flag requires HTTPS origins."""
-        with pytest.raises(ValueError, match="HTTPS"):
-            ConsoleWebSettings(
-                allowed_hosts=frozenset({"localhost:8000"}),
-                allowed_origins=frozenset({"http://localhost:8000"}),
-                cookie_secure=True,
-            )
 
 
 # ---------------------------------------------------------------------------

@@ -11,7 +11,9 @@ vi.mock('vue-router', () => ({
 import { routes } from '../src/router.js'
 
 // Section 14.1 — every workspace route the unified frontend exposes must be
-// behind the authentication guard. Names mirror the router registrations.
+// registered. The authentication guard (and its per-route `meta.auth`
+// markers) was removed with the login layer (auth-rm Task 9): no route
+// carries auth meta anymore. Names mirror the router registrations.
 const SECTION_14_PROTECTED = [
   'profile',
   'resumes',
@@ -30,7 +32,7 @@ const SECTION_14_PROTECTED = [
   'dashboard',
 ]
 
-describe('Section 14.1 — authenticated route coverage', () => {
+describe('Section 14.1 — workspace route coverage', () => {
   const byName = new Map(routes.map((r) => [r.name, r]))
 
   it('registers every required workspace route', () => {
@@ -39,10 +41,9 @@ describe('Section 14.1 — authenticated route coverage', () => {
     }
   })
 
-  it('marks every Section 14 route with meta.auth = true', () => {
-    for (const name of SECTION_14_PROTECTED) {
-      const route = byName.get(name)
-      expect(route.meta?.auth, `${name} must require auth`).toBe(true)
+  it('no route carries the removed meta.auth marker (auth guard deleted)', () => {
+    for (const route of routes) {
+      expect(route.meta?.auth, `${route.name} must not require auth`).toBeUndefined()
     }
   })
 

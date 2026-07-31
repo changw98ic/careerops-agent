@@ -12,8 +12,12 @@ describe('api client', () => {
   let api, formatApiError
 
   beforeEach(async () => {
-    // Re-import to get fresh module state
+    // Re-import to get fresh module state. The per-candidate URL prefix
+    // (auth-rm Task 15) reads the candidate store, so a candidate must be
+    // selected before per-candidate calls can be made.
     vi.resetModules()
+    const candidateStore = await import('../src/stores/candidate.js')
+    candidateStore.switchCandidate('c1')
     const mod = await import('../src/api/client.js')
     api = mod.api
     formatApiError = mod.formatApiError
@@ -107,9 +111,9 @@ describe('api client', () => {
     await api.listAgentRuns({ capability: 'resume_review', limit: 10 })
     await api.startResumeReview({ canonical_job_id: 'job', job_version_id: 'version', resume_version_id: 'resume' })
 
-    expect(fetchSpy.mock.calls[0][0]).toContain('/api/v1/matches?')
-    expect(fetchSpy.mock.calls[1][0]).toContain('/api/v1/agents/runs?')
-    expect(fetchSpy.mock.calls[2][0]).toBe('/api/v1/agents/resume-review')
+    expect(fetchSpy.mock.calls[0][0]).toContain('/api/v1/candidates/c1/matches?')
+    expect(fetchSpy.mock.calls[1][0]).toContain('/api/v1/candidates/c1/agents/runs?')
+    expect(fetchSpy.mock.calls[2][0]).toBe('/api/v1/candidates/c1/agents/resume-review')
   })
 
   it('exposes smart intake preview and apply endpoints', async () => {
@@ -134,9 +138,9 @@ describe('api client', () => {
     })
     await api.getSmartIntakeCapability()
 
-    expect(fetchSpy.mock.calls[0][0]).toBe('/api/v1/smart-intake/previews')
-    expect(fetchSpy.mock.calls[1][0]).toBe('/api/v1/smart-intake/previews/p1')
-    expect(fetchSpy.mock.calls[2][0]).toBe('/api/v1/smart-intake/previews/p1/apply')
-    expect(fetchSpy.mock.calls[3][0]).toBe('/api/v1/smart-intake/capability')
+    expect(fetchSpy.mock.calls[0][0]).toBe('/api/v1/candidates/c1/smart-intake/previews')
+    expect(fetchSpy.mock.calls[1][0]).toBe('/api/v1/candidates/c1/smart-intake/previews/p1')
+    expect(fetchSpy.mock.calls[2][0]).toBe('/api/v1/candidates/c1/smart-intake/previews/p1/apply')
+    expect(fetchSpy.mock.calls[3][0]).toBe('/api/v1/candidates/c1/smart-intake/capability')
   })
 })

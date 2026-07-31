@@ -27,7 +27,7 @@
     <ModelDisabledNotice v-if="providerDisabled" context="workbench" />
 
     <FirstRunGuide
-      :profile-done="Boolean(user.candidate_id)"
+      :profile-done="Boolean(currentCandidateId)"
       :resume-done="resumes.length > 0"
       :evidence-done="evidence.length > 0"
       :crawl-plan-done="false"
@@ -242,7 +242,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { message } from 'ant-design-vue'
 import { api, formatApiError, parseApiError, smartIntakeUiEnabled } from '../api/client.js'
-import { user } from '../stores/session.js'
+import { currentCandidateId } from '../stores/candidate.js'
 import CandidateSetupNotice from '../components/CandidateSetupNotice.vue'
 import ModelDisabledNotice from '../components/ModelDisabledNotice.vue'
 import FirstRunGuide from '../components/FirstRunGuide.vue'
@@ -300,11 +300,11 @@ const capabilityState = ref(null)
 const actionLoading = reactive({ retry: false, stop: false, review: false })
 const runCenterLoading = ref(false)
 
-const canRunMatch = computed(() => Boolean(user.candidate_id && selectedJobId.value))
+const canRunMatch = computed(() => Boolean(currentCandidateId.value && selectedJobId.value))
 const canStartAgent = computed(
   () =>
     Boolean(
-      user.candidate_id &&
+      currentCandidateId.value &&
         selectedJobId.value &&
         selectedJobVersionId.value &&
         selectedResumeId.value,
@@ -393,7 +393,8 @@ async function runMatching() {
   loading.match = true
   error.value = ''
   const result = await callApi(
-    () => api.runMatch({ candidate_id: user.candidate_id, canonical_job_id: selectedJobId.value }),
+    // Candidate identity comes from the URL path now (no candidate_id body).
+    () => api.runMatch({ canonical_job_id: selectedJobId.value }),
     '运行匹配失败，请稍后重试。',
   )
   if (result) {

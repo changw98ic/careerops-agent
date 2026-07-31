@@ -54,6 +54,8 @@ describe('request — 401 (task 14)', () => {
 
     const { api } = await import('../src/api/client.js')
 
-    await expect(api.getMe()).rejects.toThrow('unauthorized')
+    // getMe was removed with the auth surface (auth-rm Task 15); listJobs is a
+    // global endpoint that still exercises the shared request() path.
+    await expect(api.listJobs()).rejects.toThrow('unauthorized')
   })
 })

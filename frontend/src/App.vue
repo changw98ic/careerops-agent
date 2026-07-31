@@ -87,6 +87,7 @@
           <div class="header-divider"></div>
           <span class="header-title">{{ pageTitle }}</span>
         </div>
+        <CandidateSelector />
       </a-layout-header>
 
       <a-layout-content class="app-content">
@@ -99,6 +100,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { message } from 'ant-design-vue'
 import {
   AuditOutlined,
   BankOutlined,
@@ -113,6 +115,8 @@ import {
   SolutionOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons-vue'
+import CandidateSelector from './components/CandidateSelector.vue'
+import { load as loadCandidates } from './stores/candidate.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -136,10 +140,16 @@ function onResize() {
 window.addEventListener('resize', onResize)
 onUnmounted(() => window.removeEventListener('resize', onResize))
 
-// collapse = true on mobile by default
-onMounted(() => {
+// collapse = true on mobile by default; then settle the current candidate so
+// per-candidate API calls always have an id to address.
+onMounted(async () => {
   if (isMobile.value) {
     collapsed.value = true
+  }
+  try {
+    await loadCandidates()
+  } catch (err) {
+    message.error(err.message || '加载候选人列表失败，请刷新重试。')
   }
 })
 

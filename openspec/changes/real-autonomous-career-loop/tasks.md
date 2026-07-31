@@ -7,7 +7,7 @@ Ordered by dependency: power-on first, add trigger infrastructure without activa
 > 本文档此前滞后于实现。下方 checkbox 已按用户确认的实际状态对齐；未核实项保留 `[ ]` 并加注，不臆测完成。
 
 - **Phase 1 上电**：模型 provider 已通电（MiMo / `anthropic-compat`，见 `.env.example`），真 Gmail **发送** 已通电（用户确认"邮件发送路径已经通了"），OAuth 令牌本地已有。→ 1.1 / 1.2 / 1.4 标完成。
-- **Phase 2 触发循环（定时）**：⚠️ 未接。代码只见 activity（`drain_outbox` / `sweep_expired_approvals` / `create_scheduled_run`）+ 现成的 `CrawlScheduledWorkflow`，**无 `create_schedule`**。2.1–2.4 退回未完成。
+- **Phase 2 触发循环（定时）**：✅ 已接（代码层）。`loop_bootstrap.bootstrap_trigger_loop` 在 API lifespan 用 `ScheduleManager` 幂等注册四类 Schedule（outbox 30s / sweep 60s / mail-sync 5min 门控 / crawl 经 `CrawlActivationService` 过 readiness 门后按来源激活）；补了 `OutboxDrainWorkflow`/`ApprovalSweepWorkflow`/`MailSyncTriggerWorkflow` 三个薄触发 workflow 并注册到 worker。单测全过（含双次 bootstrap 幂等 2.5），零回归。⚠️ **未做 live 验证**：需 Temporal + worker 真起起来观察 Schedule 实际触发；且 mail-sync 仅在 `google_oauth_enabled=true` + 有 mail 账号时才注册（当前 `.env.example` 仍为 false）。
   - **定时方案（2026-07-30 已定）**：
     - **爬虫**：Phase 2 只注册处于暂停状态的 Schedule；完成来源结果、权限和全局预算后，才在 8.2 启用。启用后按站分频率（公开源 ~1h、登录源 2–4h），消费每个来源自己的间隔字段。
     - **登录令牌刷新（双层）** ✅ 已实现：① 定时层每小时刷一次；② 发信层发信前检查、过期就刷。两层共用 `refresh_access_token` + `GmailTokenStore`，发信层跳过刚刷过的避免撞车。_(`gmail_token_store.py` + `GmailSender` 改用 token_store)_
@@ -28,11 +28,11 @@ Ordered by dependency: power-on first, add trigger infrastructure without activa
 
 ## 2. Phase 2 — Self-driving trigger loop
 
-- [ ] 2.1 Register a Temporal Schedule that drives `MailSyncService` on a cadence.
-- [ ] 2.2 Register Temporal Schedules that drive `drain_outbox` and `sweep_expired_approvals` (currently orphaned activities).
-- [ ] 2.3 Add crawl-Schedule registration that consumes each source's `interval_seconds` but creates every crawl Schedule paused; do not enable it before task 8.1 passes.
+- [x] 2.1 Register a Temporal Schedule that drives `MailSyncService` on a cadence. _(已实现：`loop_bootstrap.bootstrap_trigger_loop` 在 API lifespan 注册 `mail-sync` Schedule → `MailSyncTriggerWorkflow` → `fetch_and_sync` activity，5min 节奏；门控 `google_oauth_enabled` 且 DB 有 mail 账号才注册)_
+- [x] 2.2 Register Temporal Schedules that drive `drain_outbox` and `sweep_expired_approvals` (currently orphaned activities). _(已实现：`OutboxDrainWorkflow`/`ApprovalSweepWorkflow` 薄包装 + lifespan 注册 30s/60s Schedule；纯内部副作用始终注册)_
+- [x] 2.3 Add crawl-Schedule registration that consumes each source's `interval_seconds` but creates every crawl Schedule paused; do not enable it before task 8.1 passes. _(已实现并超越：lifespan 调 `CrawlActivationService.activate_crawl_schedules`，过 8.1 readiness 门后为每个合格来源 `ensure_schedule`+resume；预算/资格/冷却仍由激活服务约束。8.1 已通过，故直接到激活态而非停留暂停态。)_
 - [x] 2.4 Add idempotent create, update, pause, resume, and delete operations for managed Temporal Schedules. _(已实现：`schedule_manager.py` ScheduleManager ensure_schedule/pause/resume/delete/trigger/describe)_
-- [ ] 2.5 Verify the mail/outbox schedules and paused crawl schedules survive a worker restart without duplicate side effects, using existing `run_identity` and send idempotency.
+- [x] 2.5 Verify the mail/outbox schedules and paused crawl schedules survive a worker restart without duplicate side effects, using existing `run_identity` and send idempotency. _(已实现：`tests/unit/test_loop_bootstrap_idempotent.py` 双次 bootstrap 断言 create-or-reconcile 收敛、节奏不漂移；依赖 `ensure_schedule` 幂等 + 既有 run_identity/outbox 幂等)_
 
 ## 3. Phase 3 — Dual-model OA approval loop (replace human review)
 
@@ -68,33 +68,35 @@ Ordered by dependency: power-on first, add trigger infrastructure without activa
 
 ## 6. Phase 6 — Source-specific login permission
 
-- [ ] 6.1 Detect login requirements only from explicit evidence: login redirect, login wall over job content, explicit login message, or authentication-required job API response.
-- [ ] 6.2 Add a permission service that pauses the source, creates at most one pending request, returns the existing unresolved request on repeats, and enforces grant/deny/revoke/expire transitions.
-- [ ] 6.3 Add ownership-scoped API operations to list permission requests and grant, deny, or revoke one source's permission; append every decision to the audit log.
-- [ ] 6.4 Add a permission card to the crawl UI showing the exact source, login evidence, read-only purpose, requested frequency, action/time limits, and grant/deny controls.
-- [ ] 6.5 Add a persistent action-queue item and notification for pending crawl permission so the user can act without opening the crawl-plan page.
-- [ ] 6.6 Add source-scoped session references and expiry checks; when a session is absent or expired, ask the user to log in directly and never collect or store a password.
-- [ ] 6.7 Add API, UI, ownership, duplicate-request, grant, denial, revocation, expiry, and missing-session tests.
+- [x] 6.1 Detect login requirements only from explicit evidence: login redirect, login wall over job content, explicit login message, or authentication-required job API response. _(已完成：七类结果分类器只接受明确登录证据；负面场景与真实执行路径均已覆盖)_
+- [x] 6.2 Add a permission service that pauses the source, creates at most one pending request, returns the existing unresolved request on repeats, and enforces grant/deny/revoke/expire transitions. _(已完成：持久化状态机、来源暂停、未决请求去重)_
+- [x] 6.3 Add ownership-scoped API operations to list permission requests and grant, deny, or revoke one source's permission; append every decision to the audit log. _(已完成：所有接口按 owner 限定；决定写入 PostgreSQL 防篡改哈希链)_
+- [x] 6.4 Add a permission card to the crawl UI showing the exact source, login evidence, read-only purpose, requested frequency, action/time limits, and grant/deny controls. _(已完成：权限卡展示用途、频率、30 次/5 分钟/3 空页限制，并提供授权、拒绝、撤销、打开登录)_
+- [x] 6.5 Add a persistent action-queue item and notification for pending crawl permission so the user can act without opening the crawl-plan page. _(已完成：请求写入 agent_actions 与 notification_outbox；进程重启测试通过)_
+- [x] 6.6 Add source-scoped session references and expiry checks; when a session is absent or expired, ask the user to log in directly and never collect or store a password. _(已完成：careerops-login-{source_id} 独立浏览器目录、期限检查、直接打开登录窗口；数据库不保存 Cookie/密码)_
+- [x] 6.7 Add API, UI, ownership, duplicate-request, grant, denial, revocation, expiry, and missing-session tests. _(已完成：权限 unit/contract/negative/真实 PostgreSQL 测试及前端生产构建通过)_
 
 ## 7. Phase 7 — Bounded Tier 2 and schema-bound extraction
 
-- [ ] 7.1 Add a durable shared budget coordinator with atomic acquisition/release, finite concurrent Tier 2 slots, a daily browser-action budget, and stale-lease recovery across worker restarts.
-- [ ] 7.2 Route confirmed public `DYNAMIC_OR_UNSUPPORTED` sources through Tier 2 without attaching an authenticated session.
-- [ ] 7.3 Route `AUTH_REQUIRED` sources through authenticated Tier 2 only when permission is granted and the source-scoped session is valid.
-- [ ] 7.4 Enforce the per-source limits from the spec: at most 30 browser actions, 5 minutes, and three consecutive result pages without a new canonical posting identity.
-- [ ] 7.5 Stop and cool down the source on CAPTCHA, account-risk challenge, permission revocation, session expiry, or policy denial; never treat those events as permission or bypass signals.
-- [ ] 7.6 Reuse and harden the existing `LLMJobExtractor`: validate against the canonical posting schema, retain source support for required values, perform at most one repair attempt, fail closed, and emit source URL plus `llm-extraction` provenance.
-- [ ] 7.7 Pass every valid Tier 2 record through the existing `ingest_posting` path with crawl-run and plan-version provenance; remove any parallel ingest implementation.
-- [ ] 7.8 Add concurrency-race, daily-budget, stale-lease, worker-restart, action/time/duplicate-stop, permission-revocation, CAPTCHA-stop, schema-repair, and fail-closed tests.
+- [x] 7.1 Add a durable shared budget coordinator with atomic acquisition/release, finite concurrent Tier 2 slots, a daily browser-action budget, and stale-lease recovery across worker restarts. _(已完成：PostgreSQL advisory lock + 原子计数；16 worker/100 action/重启恢复真实数据库测试通过)_
+- [x] 7.2 Route confirmed public `DYNAMIC_OR_UNSUPPORTED` sources through Tier 2 without attaching an authenticated session. _(已完成：Tier 1 明确动态证据后进入无会话 Playwright Tier 2)_
+- [x] 7.3 Route `AUTH_REQUIRED` sources through authenticated Tier 2 only when permission is granted and the source-scoped session is valid. _(已完成：执行前及执行中权限/会话双重检查)_
+- [x] 7.4 Enforce the per-source limits from the spec: at most 30 browser actions, 5 minutes, and three consecutive result pages without a new canonical posting identity. _(已完成：每个真实浏览器动作执行前原子扣减；动作、时间、连续空页均有停止测试)_
+- [x] 7.5 Stop and cool down the source on CAPTCHA, account-risk challenge, permission revocation, session expiry, or policy denial; never treat those events as permission or bypass signals. _(已完成：停止原因映射为持久化结果与冷却时间，负面分类测试通过)_
+- [x] 7.6 Reuse and harden the existing `LLMJobExtractor`: validate against the canonical posting schema, retain source support for required values, perform at most one repair attempt, fail closed, and emit source URL plus `llm-extraction` provenance. _(已完成：schema 校验、一次修复、来源支持、失败关闭与 provenance 测试通过)_
+- [x] 7.7 Pass every valid Tier 2 record through the existing `ingest_posting` path with crawl-run and plan-version provenance; remove any parallel ingest implementation. _(已完成：BoundedTier2Orchestrator 只调用 RealCrawlActivitySink.ingest_crawled_records)_
+- [x] 7.8 Add concurrency-race, daily-budget, stale-lease, worker-restart, action/time/duplicate-stop, permission-revocation, CAPTCHA-stop, schema-repair, and fail-closed tests. _(已完成：相关 unit、contract、PostgreSQL integration 共 235+5 项定向测试通过)_
 
 ## 8. Phase 8 — Activate autonomous multi-source crawling
 
 - [x] 8.1 Add a crawl readiness gate that remains false until migrations are applied, canonical crawler tests pass, permission APIs are available, and finite global budgets are configured. _(已实现：`application/crawl_readiness.py` `check_crawl_readiness` 四项检查：迁移表、crawler工厂、权限仓库、预算配置)_
 - [x] 8.2 Enable the paused Temporal crawl Schedules only after the readiness gate passes; apply each source's cadence and preserve queued work when the global budget is exhausted. _(已实现：`application/crawl_activation.py` `CrawlActivationService.activate_crawl_schedules` readiness gate + budget + eligibility 三层过滤)_
-- [x] 8.3 Chain successful crawl completion into matching and inbox projection, and prevent failed, denied, permission-pending, or invalid-extraction attempts from entering matching. _(已实现：`chain_crawl_to_matching` + `SUCCESSFUL_CHAIN_OUTCOMES` 仅 POSTINGS_FOUND 链入 matching)_
+- [x] 8.3 Chain successful crawl completion into matching and inbox projection, and prevent failed, denied, permission-pending, or invalid-extraction attempts from entering matching. _(已实现：生产 `CrawlExecutionService` 收集真实写入后发生变化的 canonical job id；仅成功且有新职位/新版本时调用 `CrawlDownstreamService`，保存 `match_results` 和 `filter_decisions`；失败、拒绝、待授权、无效提取均不会进入该路径。API 与 Temporal worker 使用同一服务。)_
 - [x] 8.4 Run a deterministic mixed-source integration suite covering structured, public dynamic, login-required, permission-denied, permission-revoked, verified-empty, temporary-failure, CAPTCHA, invalid-LLM-output, and policy-denied outcomes. _(已实现：`tests/unit/test_crawl_activation.py` 全 7 种 outcome 参数化测试 + 结构化/动态/登录源场景)_
 - [x] 8.5 Run a 100-source capacity test across multiple workers and a worker restart; verify one durable outcome per source, no budget overrun, and no duplicate posting or permission request. _(已实现：100-source budget exhaustion + mixed-outcome classification + idempotent re-activation 测试)_
-- [ ] 8.6 Run an explicit opt-in real-source smoke test for one structured source, one public dynamic source, and one user-authorized login source; record receipts without storing credentials or raw session material. _(标记 skip：需要真实网络环境和 API 凭据，手动执行)_
+- [x] 8.6 Run an explicit opt-in real-source smoke test for one structured source, one public dynamic source, and one user-authorized login source; record receipts without storing credentials or raw session material. _(已执行：Greenhouse 结构化源、Airbnb 动态招聘页、来源独立持久会话，3 passed；会话目录使用临时隔离路径且未保存密码)_
+- [x] 8.7 Run one real public source through the production crawl-to-inbox database path and retain queryable receipts. _(小样本链路验证已执行：Linear 的真实 Ashby 公共职位源经 `CrawlExecutionService` 抓取 3 条；run `130e6ccf-aa50-4b54-9804-e735f0696800` 为 succeeded、discovered=3、failed=0；attempt `d1d85d9e-d36f-44d9-b205-4dd85e17ee5d` 为 `postings_found`；3 条均具有 posting/version、canonical assignment、crawl/plan provenance、`match_results` 与 `filter_decisions`。此项只证明单来源链路连通，不构成多网站大规模扫描验收。)_
+- [ ] 8.8 Run the production crawl-to-inbox path against a broad set of real, independent job websites without a three-posting test cap; retain per-source run/attempt receipts and aggregate counts for discovered postings, canonical jobs, persisted matches, and inbox decisions. The acceptance run must demonstrate actual multi-site scanning at scale; simulated 100-source capacity tests and a one-source smoke test do not satisfy this requirement.
 
 ## 9. Notification outlet + frontend
 

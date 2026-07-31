@@ -59,13 +59,10 @@ def _make_client() -> httpx2.Client:
 def _mutation_headers(
     *,
     idempotency_key: str = "test-key-01",
-    csrf_token: str = "test-csrf-token",
 ) -> dict[str, str]:
     return {
         "Idempotency-Key": idempotency_key,
-        "X-CSRF-Token": csrf_token,
         "Origin": "http://testserver",
-        "Cookie": f"careerops_csrf={csrf_token}; careerops_session=valid-session",
     }
 
 

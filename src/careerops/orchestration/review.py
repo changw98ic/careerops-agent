@@ -46,12 +46,12 @@ from careerops.application.side_effect_kernel import (
     ApprovalInvalidError,
     SideEffectKernel,
 )
-from careerops.auth.contracts import (
-    AuthAction,
-    AuthRateLimiter,
-)
-from careerops.auth.crypto import hash_subject
 from careerops.domain.side_effects import ApprovalDecision
+from careerops.infrastructure.rate_limit import (
+    RateLimitAction,
+    RateLimiter,
+    hash_subject,
+)
 from careerops.orchestration.mapping_store import (
     MappingConflictError,
     MappingNotFoundError,
@@ -64,7 +64,7 @@ __all__ = [
     "install_review_endpoint",
 ]
 
-_REVIEW_RATE_LIMIT_ACTION = AuthAction.REVIEW
+_REVIEW_RATE_LIMIT_ACTION = RateLimitAction.REVIEW
 
 # Fixed actor for the loopback reviewer (the console login is gone; there is
 # no session principal). Review audit records use actor_type=USER with this
@@ -171,7 +171,7 @@ def _kernel_receipt(kernel: SideEffectKernel, intent_id: UUID) -> dict[str, obje
 def install_review_endpoint(
     app: FastAPI,
     *,
-    rate_limiter: AuthRateLimiter,
+    rate_limiter: RateLimiter,
     review_mapping: ReviewMappingStore,
     career_graph: object,
     side_effect_kernel: object,

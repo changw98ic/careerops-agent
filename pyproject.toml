@@ -25,7 +25,6 @@ dependencies = [
 
 [project.scripts]
 careerops = "careerops:main"
-careerops-bootstrap = "careerops.cli.auth:main"
 careerops-worker = "careerops.infrastructure.temporal.worker:main"
 careerops-worker-health = "careerops.infrastructure.temporal.health:main"
 careerops-smart-intake-retention = "careerops.infrastructure.smart_intake_retention:main"

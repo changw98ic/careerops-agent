@@ -1,7 +1,7 @@
 UV_PROJECT_ENVIRONMENT := venv
 export UV_PROJECT_ENVIRONMENT
 
-.PHONY: audit bootstrap coverage demo-llm-crawl format migrate migration-check run security setup verify \
+.PHONY: audit coverage demo-llm-crawl format migrate migration-check run security setup verify \
 	verify-compose verify-db verify-frontend verify-m0 verify-m1 verify-m1-contracts verify-m1-full \
 	verify-temporal
 
@@ -15,9 +15,6 @@ setup:
 
 run:
 	uv run careerops
-
-bootstrap:
-	uv run careerops-bootstrap
 
 format:
 	uv run ruff format .

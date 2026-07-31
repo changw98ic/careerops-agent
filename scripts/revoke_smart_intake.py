@@ -16,14 +16,14 @@ from pydantic import SecretStr
 
 from careerops.api.contracts import ErrorCode
 from careerops.application.smart_intake import SmartIntakeService
-from careerops.auth.contracts import AuthAction
 from careerops.config import get_settings
 from careerops.infrastructure.database.engine import create_database_engine
 from careerops.infrastructure.database.schema import smart_intake_decisions, smart_intake_previews
+from careerops.infrastructure.rate_limit import RateLimitAction
 
 
 class _UnusedLimiter:
-    def check(self, action: AuthAction, subject_hash: str, *, now: datetime) -> bool:
+    def check(self, action: RateLimitAction, subject_hash: str, *, now: datetime) -> bool:
         return False
 
 

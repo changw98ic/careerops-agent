@@ -39,8 +39,6 @@ from careerops.api.errors import (
     StaleSmartIntakePreviewError,
 )
 from careerops.application.audit import AuditActorType, AuditEventDraft
-from careerops.auth.contracts import AuthAction
-from careerops.auth.crypto import hash_subject
 from careerops.domain.applications import ConfirmationStatus, ResumeParseStatus
 from careerops.infrastructure.database.audit import PostgresAuditWriter
 from careerops.infrastructure.database.schema import (
@@ -54,6 +52,7 @@ from careerops.infrastructure.database.schema import (
     smart_intake_decisions,
     smart_intake_previews,
 )
+from careerops.infrastructure.rate_limit import RateLimitAction, RateLimiter, hash_subject
 from careerops.model_gateway.anthropic_compat import ModelInvocationError
 from careerops.model_gateway.base import StructuredModelClient, StructuredModelRequest
 from careerops.observability import current_trace_id
@@ -169,10 +168,6 @@ class CapabilityResolver(Protocol):
     def decide(self, capability: Any) -> Any: ...
 
 
-class RateLimiter(Protocol):
-    def check(self, action: AuthAction, subject_hash: str, *, now: datetime) -> bool: ...
-
-
 class SmartIntakeService:
     """Orchestrates the preview/apply lifecycle with no persistent form writes."""
 
@@ -240,7 +235,7 @@ class SmartIntakeService:
                 return _preview_result(existing)
         try:
             allowed = self._rate_limiter.check(
-                AuthAction.SMART_INTAKE,
+                RateLimitAction.SMART_INTAKE,
                 hash_subject(str(candidate_id)),
                 now=datetime.now(UTC),
             )

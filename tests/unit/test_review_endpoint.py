@@ -33,13 +33,10 @@ from careerops.api.app import create_app
 from careerops.api.routes.review import install_review_endpoint
 from careerops.application.audit import AuditActorType
 from careerops.application.side_effect_kernel import SideEffectKernel
-from careerops.auth.contracts import (
-    AuthAction,
-    AuthRateLimiter,
-)
 from careerops.config import RuntimeEnvironment, Settings
 from careerops.domain.side_effects import ApprovalDecision
 from careerops.infrastructure.database.side_effect_memory import InMemorySideEffectStore
+from careerops.infrastructure.rate_limit import RateLimitAction, RateLimiter
 from careerops.integrations.fake_side_effect_provider import FakeSideEffectProvider
 from careerops.model_gateway.base import DisabledModelAdapter
 from careerops.orchestration import (
@@ -65,9 +62,9 @@ REVIEWER_ACTOR = "local-reviewer"
 class AllowAllRateLimiter:
     def __init__(self) -> None:
         self.calls = 0
-        self.seen_actions: list[AuthAction] = []
+        self.seen_actions: list[RateLimitAction] = []
 
-    def check(self, action: AuthAction, subject_hash: str, *, now: datetime) -> bool:
+    def check(self, action: RateLimitAction, subject_hash: str, *, now: datetime) -> bool:
         del subject_hash, now
         self.calls += 1
         self.seen_actions.append(action)
@@ -75,7 +72,7 @@ class AllowAllRateLimiter:
 
 
 class DenyAllRateLimiter:
-    def check(self, action: AuthAction, subject_hash: str, *, now: datetime) -> bool:
+    def check(self, action: RateLimitAction, subject_hash: str, *, now: datetime) -> bool:
         del action, subject_hash, now
         return False
 
@@ -162,7 +159,7 @@ def _make_client(
     kernel: SideEffectKernel,
     review_mapping: InMemoryReviewMappingStore,
     *,
-    rate_limiter: AuthRateLimiter | None = None,
+    rate_limiter: RateLimiter | None = None,
 ) -> TestClient:
     app = FastAPI()
     install_review_endpoint(
@@ -208,7 +205,7 @@ class TestRateLimit:
 
         _review_post(client, ids["approval_id"], {"action": "approve"})
 
-        assert limiter.seen_actions == [AuthAction.REVIEW]  # type: ignore[attr-defined]
+        assert limiter.seen_actions == [RateLimitAction.REVIEW]  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------

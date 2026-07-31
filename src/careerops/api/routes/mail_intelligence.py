@@ -14,9 +14,9 @@ Routes:
 - GET  /api/v1/candidates/{candidate_id}/mail/proposals/{proposal_id}
         — proposal detail (ownership)
 - POST /api/v1/candidates/{candidate_id}/mail/proposals/{proposal_id}/accept
-        — accept (ownership, CSRF via require_api_auth, legal transition, rate limit)
+        — accept (ownership, legal transition, rate limit)
 - POST /api/v1/candidates/{candidate_id}/mail/proposals/{proposal_id}/reject
-        — reject (ownership, CSRF, idempotent, rate limit)
+        — reject (ownership, idempotent, rate limit)
 
 Iron rules honored:
 - Additive (Iron Rule 8): new paths only; no existing route touched.

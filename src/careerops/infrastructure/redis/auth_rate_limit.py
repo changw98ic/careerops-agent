@@ -5,8 +5,7 @@ from typing import Protocol
 
 from redis.exceptions import RedisError
 
-from careerops.auth.contracts import AuthAction
-from careerops.auth.rate_limit import limit_for
+from careerops.infrastructure.rate_limit import RateLimitAction, limit_for
 
 _LUA_FIXED_WINDOW = """
 local count = redis.call('INCR', KEYS[1])
@@ -27,8 +26,10 @@ class RedisEvalClient(Protocol):
 class RedisAuthRateLimiter:
     """Shared Redis fixed-window limiter.
 
-    Keys contain only the auth action plus a caller-supplied one-way subject hash.
-    Any Redis or protocol failure is treated as deny-by-default.
+    Keys contain only the action plus a caller-supplied one-way subject hash.
+    Any Redis or protocol failure is treated as deny-by-default. The default
+    key prefix predates the auth-rm migration and is kept so existing keys
+    keep counting.
     """
 
     def __init__(
@@ -40,7 +41,7 @@ class RedisAuthRateLimiter:
         self._redis = redis
         self._key_prefix = key_prefix
 
-    def check(self, action: AuthAction, subject_hash: str, *, now: datetime) -> bool:
+    def check(self, action: RateLimitAction, subject_hash: str, *, now: datetime) -> bool:
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("rate-limit time must be timezone-aware")
         if len(subject_hash) != 64:

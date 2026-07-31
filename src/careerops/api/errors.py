@@ -51,18 +51,6 @@ class UnauthorizedError(CareerOpsHTTPException):
         super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
 
 
-class CSRFRejectedError(CareerOpsHTTPException):
-    error_code = ErrorCode.CSRF_REJECTED
-    message_default = "CSRF token rejected"
-
-    @classmethod
-    def _status_code(cls) -> int:
-        return HTTPStatus.FORBIDDEN
-
-    def __init__(self, message: str = "", **kwargs: object) -> None:
-        super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
-
-
 class InvalidCredentialsError(CareerOpsHTTPException):
     error_code = ErrorCode.INVALID_CREDENTIALS
     message_default = "Invalid credentials"

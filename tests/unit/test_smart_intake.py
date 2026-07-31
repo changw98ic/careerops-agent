@@ -54,8 +54,8 @@ from careerops.application.smart_intake import (
     _user_prompt,
     _value_allowed,
 )
-from careerops.auth.contracts import AuthAction
 from careerops.infrastructure import smart_intake_retention as retention_module
+from careerops.infrastructure.rate_limit import RateLimitAction
 
 CANDIDATE = UUID("00000000-0000-0000-0000-000000000001")
 INPUT = "上海 Backend Engineer Python"
@@ -359,7 +359,7 @@ def test_disabled_service_claims_finalizes_and_reuses_without_recharging(monkeyp
     class Limiter:
         calls = 0
 
-        def check(self, action: AuthAction, subject_hash: str, *, now: datetime) -> bool:
+        def check(self, action: RateLimitAction, subject_hash: str, *, now: datetime) -> bool:
             del action, subject_hash, now
             self.calls += 1
             return True

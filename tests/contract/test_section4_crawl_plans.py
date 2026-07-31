@@ -19,7 +19,6 @@ contract (status codes, error envelopes, server-side ownership).
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime
 from typing import Any, cast
 from uuid import UUID, uuid4
 
@@ -148,36 +147,10 @@ def _make_api_client(
     if run_service is not None:
         app.state.crawl_run_service = run_service
     if candidate_id is not None:
-        from careerops.auth.contracts import AuthenticatedPrincipal
-
-        class _StubAuth:
-            def authenticate(self, token: str, *, now: datetime) -> AuthenticatedPrincipal:
-                return AuthenticatedPrincipal(
-                    user_id=candidate_id,
-                    username="test-user",
-                    session_id=uuid4(),
-                    csrf_token_hash="test-hash",
-                    absolute_expires_at=now,
-                    candidate_id=candidate_id,
-                )
-
-            def validate_csrf(self, principal: AuthenticatedPrincipal, token: str) -> None:
-                return None
-
-        app.state.auth_service = _StubAuth()
-        app.state.web_settings = object()
         # Wire the capability resolver so the CRAWL_PLAN_MANAGEMENT gate
         # passes (released by default) and routes reach the repo check.
         app.state.capability_resolver = SettingsCapabilityResolver(settings)
-    # Build the TestClient and, when auth is configured, set the session cookie
-    # so ``require_api_auth`` can resolve the principal.  The CSRF header is
-    # sent on mutating requests (POST/PATCH/DELETE) so the stub validator
-    # passes through.
     client = cast("httpx2.Client", TestClient(app))
-    if candidate_id is not None:
-        client.cookies.set("careerops_session", "test-token")
-        # Monkey-patch the default headers for CSRF on mutating requests.
-        client.headers["X-CSRF-Token"] = "test-csrf"
     return client
 
 
@@ -1106,7 +1079,7 @@ class TestOwnershipScoping:
         the repository lookup — both are ``DEPENDENCY_NOT_READY``.
         """
         owner = uuid4()
-        # Wire auth + capability resolver but NOT the crawl source service.
+        # Wire the capability resolver but NOT the crawl source service.
         client = _make_api_client(candidate_id=owner)
         # Also wire the capability resolver so the route reaches the repo
         # check rather than failing at the capability gate.

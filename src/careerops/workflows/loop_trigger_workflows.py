@@ -34,10 +34,15 @@ _MAIL_SYNC_TIMEOUT = timedelta(seconds=120)
 
 @workflow.defn
 class OutboxDrainWorkflow:
-    """Fire ``drain_outbox`` on a schedule to re-deliver pending outbox events."""
+    """Fire ``drain_outbox`` on a schedule to re-deliver pending outbox events.
+
+    ``arg`` is the schedule input Temporal always passes to a scheduled
+    workflow's ``run``; this trigger has no input, so it is accepted and
+    ignored (passing ``arg=None`` from the bootstrap).
+    """
 
     @workflow.run
-    async def run(self) -> dict[str, int]:
+    async def run(self, arg: object = None) -> dict[str, int]:
         from careerops.infrastructure.temporal.activities import OUTBOX_DRAIN_ACTIVITY
 
         return await workflow.execute_activity(
@@ -48,10 +53,13 @@ class OutboxDrainWorkflow:
 
 @workflow.defn
 class ApprovalSweepWorkflow:
-    """Fire ``sweep_expired_approvals`` on a schedule (expire stale approvals)."""
+    """Fire ``sweep_expired_approvals`` on a schedule (expire stale approvals).
+
+    See ``OutboxDrainWorkflow``: ``arg`` is the ignored schedule input.
+    """
 
     @workflow.run
-    async def run(self) -> int:
+    async def run(self, arg: object = None) -> int:
         from careerops.infrastructure.temporal.activities import APPROVAL_SWEEPER_ACTIVITY
 
         return await workflow.execute_activity(

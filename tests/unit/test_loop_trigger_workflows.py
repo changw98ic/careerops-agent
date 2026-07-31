@@ -24,6 +24,29 @@ def test_trigger_workflows_are_temporal_defs() -> None:
         assert hasattr(cls, "__temporal_workflow_definition"), cls.__name__
 
 
+def test_trigger_workflows_accept_the_schedule_arg() -> None:
+    """A Temporal Schedule always passes its ``arg`` to ``run``.
+
+    Found in live verification: arg-less ``run(self)`` workflows TypeError when
+    the schedule passes ``arg=None``. Every trigger workflow's ``run`` must
+    therefore accept at least one parameter (the schedule input).
+    """
+    import inspect
+
+    from careerops.workflows.loop_trigger_workflows import (
+        ApprovalSweepWorkflow,
+        MailSyncTriggerWorkflow,
+        OutboxDrainWorkflow,
+    )
+
+    for cls in (OutboxDrainWorkflow, ApprovalSweepWorkflow, MailSyncTriggerWorkflow):
+        run = cls.run
+        # @workflow.run may wrap the method; follow __wrapped__ if present.
+        target = getattr(run, "__wrapped__", run)
+        params = [p for p in inspect.signature(target).parameters if p != "self"]
+        assert params, f"{cls.__name__}.run must accept the schedule arg (got none)"
+
+
 def test_build_worker_registers_trigger_workflows(monkeypatch) -> None:
     import careerops.infrastructure.temporal.worker as worker_mod
 

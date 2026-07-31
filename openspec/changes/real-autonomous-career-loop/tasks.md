@@ -7,7 +7,7 @@ Ordered by dependency: power-on first, add trigger infrastructure without activa
 > 本文档此前滞后于实现。下方 checkbox 已按用户确认的实际状态对齐；未核实项保留 `[ ]` 并加注，不臆测完成。
 
 - **Phase 1 上电**：模型 provider 已通电（MiMo / `anthropic-compat`，见 `.env.example`），真 Gmail **发送** 已通电（用户确认"邮件发送路径已经通了"），OAuth 令牌本地已有。→ 1.1 / 1.2 / 1.4 标完成。
-- **Phase 2 触发循环（定时）**：✅ 已接（代码层）。`loop_bootstrap.bootstrap_trigger_loop` 在 API lifespan 用 `ScheduleManager` 幂等注册四类 Schedule（outbox 30s / sweep 60s / mail-sync 5min 门控 / crawl 经 `CrawlActivationService` 过 readiness 门后按来源激活）；补了 `OutboxDrainWorkflow`/`ApprovalSweepWorkflow`/`MailSyncTriggerWorkflow` 三个薄触发 workflow 并注册到 worker。单测全过（含双次 bootstrap 幂等 2.5），零回归。⚠️ **未做 live 验证**：需 Temporal + worker 真起起来观察 Schedule 实际触发；且 mail-sync 仅在 `google_oauth_enabled=true` + 有 mail 账号时才注册（当前 `.env.example` 仍为 false）。
+- **Phase 2 触发循环（定时）**：✅ 已接 + ✅ live 验证通过（2026-07-31 compose）。`loop_bootstrap.bootstrap_trigger_loop` 在 API lifespan 用 `ScheduleManager` 幂等注册四类 Schedule（outbox 30s / sweep 60s / mail-sync 5min 门控 / crawl 经 `CrawlActivationService` 过 readiness 门后按来源激活）；补了三个薄触发 workflow 并注册到 worker。compose 实跑：schedule 自动注册、按 30s/60s 节奏触发、worker 正常执行（`ApprovalSweepWorkflow` 跑到 Completed、零接线报错）；mail-sync/crawl 按门控正确跳过。**live 验证顺带抓出 3 个真实 bug**：① trigger workflow 不接收 schedule arg（已修）② workflow 沙箱禁止 import activities 模块（已修）③ runtime DB role 对 `outbox_events` 表无权限（既有、Phase 2 才暴露，记为 issue careerops-z7x，待加 migration 修）。
   - **定时方案（2026-07-30 已定）**：
     - **爬虫**：Phase 2 只注册处于暂停状态的 Schedule；完成来源结果、权限和全局预算后，才在 8.2 启用。启用后按站分频率（公开源 ~1h、登录源 2–4h），消费每个来源自己的间隔字段。
     - **登录令牌刷新（双层）** ✅ 已实现：① 定时层每小时刷一次；② 发信层发信前检查、过期就刷。两层共用 `refresh_access_token` + `GmailTokenStore`，发信层跳过刚刷过的避免撞车。_(`gmail_token_store.py` + `GmailSender` 改用 token_store)_

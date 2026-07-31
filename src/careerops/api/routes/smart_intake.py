@@ -18,7 +18,7 @@ from pydantic import (
     model_validator,
 )
 
-from careerops.api.auth_dependency import require_api_auth, require_candidate_id
+from careerops.api.auth_dependency import require_api_auth
 from careerops.api.errors import (
     CSRFRejectedError,
     DependencyNotReadyError,
@@ -34,7 +34,9 @@ from careerops.auth.contracts import AuthenticatedPrincipal
 from careerops.orchestration.capability_resolver import CapabilityKind
 from careerops.web.security import OriginHostValidator, RequestOriginRejected
 
-router = APIRouter(prefix="/api/v1/smart-intake", tags=["smart-intake"])
+router = APIRouter(
+    prefix="/api/v1/candidates/{candidate_id}/smart-intake", tags=["smart-intake"]
+)
 
 
 def _empty_uuid_list() -> list[UUID]:
@@ -175,7 +177,7 @@ class SmartIntakeApplyRequest(BaseModel):
 async def get_capability(
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> SmartIntakeCapabilityResponse:
     del candidate_id
     _validate_host(request)
@@ -196,7 +198,7 @@ async def create_preview(
     body: SmartIntakePreviewRequest,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     principal: Annotated[AuthenticatedPrincipal | None, Depends(require_api_auth)],
 ) -> SmartIntakePreviewResponse:
     _authorize(request, candidate_id, consume_rate_limit=True)
@@ -238,7 +240,7 @@ async def get_preview(
     preview_id: UUID,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> SmartIntakePreviewResponse:
     # GET does not need an Origin header, but a configured console still gets a
     # strict Host check. Cross-candidate access is resolved by the service.
@@ -254,7 +256,7 @@ async def apply_preview(
     body: SmartIntakeApplyRequest,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     principal: Annotated[AuthenticatedPrincipal | None, Depends(require_api_auth)],
 ) -> SmartIntakePreviewResponse:
     _authorize(request, candidate_id, consume_rate_limit=False)

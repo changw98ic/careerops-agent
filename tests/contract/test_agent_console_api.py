@@ -97,14 +97,14 @@ def _clear_idempotency() -> Generator[None, None, None]:
 
 
 # ---------------------------------------------------------------------------
-# 1. GET /api/v1/agent-console/actions -- action queue
+# 1. GET /api/v1/candidates/{candidate_id}/agent-console/actions -- action queue
 # ---------------------------------------------------------------------------
 
 
 class TestActionQueue:
     def test_list_actions_returns_200_with_no_store(self) -> None:
         client = _make_client()
-        response = client.get("/api/v1/agent-console/actions")
+        response = client.get(f"/api/v1/candidates/{CANDIDATE_ID}/agent-console/actions")
 
         assert response.status_code == 200
         assert response.headers["cache-control"] == "no-store"
@@ -120,25 +120,35 @@ class TestActionQueue:
     def test_list_actions_hard_caps_limit_at_3(self) -> None:
         client = _make_client()
         # The contract enforces limit <= 3 via Query(ge=1, le=3); limit=50 -> 422
-        response = client.get("/api/v1/agent-console/actions?limit=50")
+        response = client.get(f"/api/v1/candidates/{CANDIDATE_ID}/agent-console/actions?limit=50")
         assert response.status_code == 422
         # Valid limit within bounds works
-        response = client.get("/api/v1/agent-console/actions?limit=3")
+        response = client.get(f"/api/v1/candidates/{CANDIDATE_ID}/agent-console/actions?limit=3")
         assert response.status_code == 200
 
     def test_list_actions_rejects_unauthenticated(self) -> None:
-        """Without auth override, should fail with 401/403."""
+        """Without a session cookie the router-level auth gate returns 401."""
         settings = Settings.model_validate({"environment": RuntimeEnvironment.TEST})
         app = create_app(settings, readiness_probe=_FixedReadinessProbe())
-        # No dependency override -> auth_service is None -> require_api_auth
-        # returns None -> require_candidate_id raises CandidateProfileRequiredError (403)
+
+        class _StubAuth:
+            def authenticate(self, token: str, *, now: datetime) -> AuthenticatedPrincipal:
+                raise ValueError("no session")
+
+            def validate_csrf(self, principal: AuthenticatedPrincipal, token: str) -> None:
+                return None
+
+        # With auth configured, candidate_id is path-supplied and the
+        # require_api_auth gate at the router mount rejects the request.
+        app.state.auth_service = _StubAuth()
+        app.state.web_settings = object()
         client = cast("httpx2.Client", TestClient(app))
-        response = client.get("/api/v1/agent-console/actions")
-        assert response.status_code in (401, 403)
+        response = client.get(f"/api/v1/candidates/{CANDIDATE_ID}/agent-console/actions")
+        assert response.status_code == 401
 
 
 # ---------------------------------------------------------------------------
-# 2. POST /api/v1/agent-console/actions/{action_key}/accept
+# 2. POST /api/v1/candidates/{candidate_id}/agent-console/actions/{action_key}/accept
 # ---------------------------------------------------------------------------
 
 
@@ -146,7 +156,7 @@ class TestAcceptAction:
     def test_accept_returns_404_for_unknown_action(self) -> None:
         client = _make_client()
         response = client.post(
-            "/api/v1/agent-console/actions/unknown-action/accept",
+            f"/api/v1/candidates/{CANDIDATE_ID}/agent-console/actions/unknown-action/accept",
             json={"expected_queue_version": 1, "client_event_id": str(uuid4())},
             headers=_mutation_headers(),
         )
@@ -155,7 +165,7 @@ class TestAcceptAction:
     def test_accept_requires_idempotency_key(self) -> None:
         client = _make_client()
         response = client.post(
-            "/api/v1/agent-console/actions/test-action/accept",
+            f"/api/v1/candidates/{CANDIDATE_ID}/agent-console/actions/test-action/accept",
             json={"expected_queue_version": 1, "client_event_id": str(uuid4())},
             headers={
                 "X-CSRF-Token": "test-csrf-token",
@@ -168,7 +178,7 @@ class TestAcceptAction:
     def test_accept_rejects_invalid_idempotency_key(self) -> None:
         client = _make_client()
         response = client.post(
-            "/api/v1/agent-console/actions/test-action/accept",
+            f"/api/v1/candidates/{CANDIDATE_ID}/agent-console/actions/test-action/accept",
             json={"expected_queue_version": 1, "client_event_id": str(uuid4())},
             headers=_mutation_headers(idempotency_key="invalid key with spaces!"),
         )
@@ -177,7 +187,7 @@ class TestAcceptAction:
     def test_accept_sets_no_store_on_success(self) -> None:
         client = _make_client()
         response = client.post(
-            "/api/v1/agent-console/actions/test-action/accept",
+            f"/api/v1/candidates/{CANDIDATE_ID}/agent-console/actions/test-action/accept",
             json={"expected_queue_version": 1, "client_event_id": str(uuid4())},
             headers=_mutation_headers(),
         )
@@ -196,14 +206,14 @@ class TestAcceptAction:
         body2 = {"operation": "resume_review", "job_version": 2}
 
         first = client.post(
-            "/api/v1/agent-console/contexts",
+            f"/api/v1/candidates/{CANDIDATE_ID}/agent-console/contexts",
             json=body1,
             headers=_mutation_headers(idempotency_key=key),
         )
         assert first.status_code == 201
 
         second = client.post(
-            "/api/v1/agent-console/contexts",
+            f"/api/v1/candidates/{CANDIDATE_ID}/agent-console/contexts",
             json=body2,
             headers=_mutation_headers(idempotency_key=key),
         )
@@ -214,7 +224,7 @@ class TestAcceptAction:
 
 
 # ---------------------------------------------------------------------------
-# 3. POST /api/v1/agent-console/actions/{action_key}/snooze
+# 3. POST /api/v1/candidates/{candidate_id}/agent-console/actions/{action_key}/snooze
 # ---------------------------------------------------------------------------
 
 
@@ -222,7 +232,7 @@ class TestSnoozeAction:
     def test_snooze_returns_404_for_unknown_action(self) -> None:
         client = _make_client()
         response = client.post(
-            "/api/v1/agent-console/actions/unknown-action/snooze",
+            f"/api/v1/candidates/{CANDIDATE_ID}/agent-console/actions/unknown-action/snooze",
             json={
                 "expected_queue_version": 1,
                 "until": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
@@ -234,7 +244,7 @@ class TestSnoozeAction:
 
 
 # ---------------------------------------------------------------------------
-# 4. POST /api/v1/agent-console/actions/{action_key}/dismiss
+# 4. POST /api/v1/candidates/{candidate_id}/agent-console/actions/{action_key}/dismiss
 # ---------------------------------------------------------------------------
 
 
@@ -242,7 +252,7 @@ class TestDismissAction:
     def test_dismiss_returns_404_for_unknown_action(self) -> None:
         client = _make_client()
         response = client.post(
-            "/api/v1/agent-console/actions/unknown-action/dismiss",
+            f"/api/v1/candidates/{CANDIDATE_ID}/agent-console/actions/unknown-action/dismiss",
             json={
                 "expected_queue_version": 1,
                 "reason_code": "NOT_RELEVANT",
@@ -254,7 +264,7 @@ class TestDismissAction:
 
 
 # ---------------------------------------------------------------------------
-# 5. POST /api/v1/agent-console/actions/{action_key}/complete
+# 5. POST /api/v1/candidates/{candidate_id}/agent-console/actions/{action_key}/complete
 # ---------------------------------------------------------------------------
 
 
@@ -262,7 +272,7 @@ class TestCompleteAction:
     def test_complete_returns_404_for_unknown_action(self) -> None:
         client = _make_client()
         response = client.post(
-            "/api/v1/agent-console/actions/unknown-action/complete",
+            f"/api/v1/candidates/{CANDIDATE_ID}/agent-console/actions/unknown-action/complete",
             json={"expected_queue_version": 1, "client_event_id": str(uuid4())},
             headers=_mutation_headers(),
         )
@@ -270,7 +280,7 @@ class TestCompleteAction:
 
 
 # ---------------------------------------------------------------------------
-# 6. POST /api/v1/agent-console/contexts
+# 6. POST /api/v1/candidates/{candidate_id}/agent-console/contexts
 # ---------------------------------------------------------------------------
 
 
@@ -278,7 +288,7 @@ class TestCreateContext:
     def test_create_context_returns_201(self) -> None:
         client = _make_client()
         response = client.post(
-            "/api/v1/agent-console/contexts",
+            f"/api/v1/candidates/{CANDIDATE_ID}/agent-console/contexts",
             json={
                 "operation": "resume_review",
                 "job_id": str(uuid4()),
@@ -305,10 +315,10 @@ class TestCreateContext:
         }
         headers = _mutation_headers(idempotency_key="ctx-replay-01")
 
-        first = client.post("/api/v1/agent-console/contexts", json=body, headers=headers)
+        first = client.post(f"/api/v1/candidates/{CANDIDATE_ID}/agent-console/contexts", json=body, headers=headers)
         assert first.status_code == 201
 
-        second = client.post("/api/v1/agent-console/contexts", json=body, headers=headers)
+        second = client.post(f"/api/v1/candidates/{CANDIDATE_ID}/agent-console/contexts", json=body, headers=headers)
         assert second.status_code == 201
         assert second.headers.get("idempotency-replayed") == "true"
 
@@ -319,14 +329,14 @@ class TestCreateContext:
         body2 = {"operation": "resume_review", "job_version": 2}
 
         first = client.post(
-            "/api/v1/agent-console/contexts",
+            f"/api/v1/candidates/{CANDIDATE_ID}/agent-console/contexts",
             json=body1,
             headers=_mutation_headers(idempotency_key=key),
         )
         assert first.status_code == 201
 
         response = client.post(
-            "/api/v1/agent-console/contexts",
+            f"/api/v1/candidates/{CANDIDATE_ID}/agent-console/contexts",
             json=body2,
             headers=_mutation_headers(idempotency_key=key),
         )
@@ -336,39 +346,39 @@ class TestCreateContext:
 
 
 # ---------------------------------------------------------------------------
-# 7. GET /api/v1/agent-console/contexts/{context_id}
+# 7. GET /api/v1/candidates/{candidate_id}/agent-console/contexts/{context_id}
 # ---------------------------------------------------------------------------
 
 
 class TestGetContext:
     def test_get_context_returns_404_for_unknown(self) -> None:
         client = _make_client()
-        response = client.get(f"/api/v1/agent-console/contexts/{uuid4()}")
+        response = client.get(f"/api/v1/candidates/{CANDIDATE_ID}/agent-console/contexts/{uuid4()}")
         assert response.status_code == 404
 
     def test_get_context_sets_no_store(self) -> None:
         client = _make_client()
         # First create a context
         create_response = client.post(
-            "/api/v1/agent-console/contexts",
+            f"/api/v1/candidates/{CANDIDATE_ID}/agent-console/contexts",
             json={"operation": "resume_review"},
             headers=_mutation_headers(idempotency_key="ctx-get-01"),
         )
         if create_response.status_code == 201:
             ctx_id = create_response.json()["context_id"]
-            response = client.get(f"/api/v1/agent-console/contexts/{ctx_id}")
+            response = client.get(f"/api/v1/candidates/{CANDIDATE_ID}/agent-console/contexts/{ctx_id}")
             assert response.headers["cache-control"] == "no-store"
 
 
 # ---------------------------------------------------------------------------
-# 8. GET /api/v1/capabilities/agent
+# 8. GET /api/v1/candidates/{candidate_id}/capabilities/agent
 # ---------------------------------------------------------------------------
 
 
 class TestAgentCapability:
     def test_capability_returns_200(self) -> None:
         client = _make_client()
-        response = client.get("/api/v1/capabilities/agent?operation=resume_review")
+        response = client.get(f"/api/v1/candidates/{CANDIDATE_ID}/capabilities/agent?operation=resume_review")
         assert response.status_code == 200
         assert response.headers["cache-control"] == "no-store"
         body = response.json()
@@ -379,12 +389,12 @@ class TestAgentCapability:
 
     def test_capability_rejects_invalid_operation(self) -> None:
         client = _make_client()
-        response = client.get("/api/v1/capabilities/agent?operation=invalid_op")
+        response = client.get(f"/api/v1/candidates/{CANDIDATE_ID}/capabilities/agent?operation=invalid_op")
         assert response.status_code == 422
 
 
 # ---------------------------------------------------------------------------
-# 9. POST /api/v1/agent-console/preflight
+# 9. POST /api/v1/candidates/{candidate_id}/agent-console/preflight
 # ---------------------------------------------------------------------------
 
 
@@ -393,14 +403,14 @@ class TestPreflight:
         client = _make_client()
         # Create a context first
         ctx_response = client.post(
-            "/api/v1/agent-console/contexts",
+            f"/api/v1/candidates/{CANDIDATE_ID}/agent-console/contexts",
             json={"operation": "resume_review"},
             headers=_mutation_headers(idempotency_key="pflt-ctx-01"),
         )
         ctx_id = ctx_response.json().get("context_id", str(uuid4()))
 
         response = client.post(
-            "/api/v1/agent-console/preflight",
+            f"/api/v1/candidates/{CANDIDATE_ID}/agent-console/preflight",
             json={"context_id": ctx_id, "operation": "resume_review"},
             headers=_mutation_headers(idempotency_key="pflt-01"),
         )
@@ -421,7 +431,7 @@ class TestAgentRuns:
         """Without RuntimeResources wired, agent start returns 503."""
         client = _make_client()
         response = client.post(
-            "/api/v1/agents/resume-review",
+            f"/api/v1/candidates/{CANDIDATE_ID}/agents/resume-review",
             json={
                 "resume_version_id": str(uuid4()),
                 "canonical_job_id": str(uuid4()),
@@ -435,7 +445,7 @@ class TestAgentRuns:
         """Without RuntimeResources wired, agent start returns 503."""
         client = _make_client()
         response = client.post(
-            "/api/v1/agents/interview-preparation",
+            f"/api/v1/candidates/{CANDIDATE_ID}/agents/interview-preparation",
             json={
                 "resume_version_id": str(uuid4()),
                 "canonical_job_id": str(uuid4()),
@@ -446,7 +456,7 @@ class TestAgentRuns:
 
     def test_list_runs_returns_200_or_503(self) -> None:
         client = _make_client()
-        response = client.get("/api/v1/agents/runs")
+        response = client.get(f"/api/v1/candidates/{CANDIDATE_ID}/agents/runs")
         # Without runtime wired, may return 503
         assert response.status_code in (200, 503)
         if response.status_code == 200:
@@ -456,12 +466,12 @@ class TestAgentRuns:
 
     def test_get_run_returns_404_or_503(self) -> None:
         client = _make_client()
-        response = client.get(f"/api/v1/agents/runs/{uuid4()}")
+        response = client.get(f"/api/v1/candidates/{CANDIDATE_ID}/agents/runs/{uuid4()}")
         assert response.status_code in (404, 503)
 
     def test_list_run_reviews_returns_404_or_503(self) -> None:
         client = _make_client()
-        response = client.get(f"/api/v1/agents/runs/{uuid4()}/reviews")
+        response = client.get(f"/api/v1/candidates/{CANDIDATE_ID}/agents/runs/{uuid4()}/reviews")
         assert response.status_code in (404, 503)
 
 
@@ -534,7 +544,7 @@ class TestErrorEnvelope:
         """StrictContract rejects unknown fields with 422."""
         client = _make_client()
         response = client.post(
-            "/api/v1/agent-console/contexts",
+            f"/api/v1/candidates/{CANDIDATE_ID}/agent-console/contexts",
             json={
                 "operation": "resume_review",
                 "unknown_field": "should_be_rejected",
@@ -556,7 +566,7 @@ class TestCSRFValidation:
         # This test documents the contract behavior.
         client = _make_client()
         response = client.post(
-            "/api/v1/agent-console/contexts",
+            f"/api/v1/candidates/{CANDIDATE_ID}/agent-console/contexts",
             json={"operation": "resume_review"},
             headers={
                 "Idempotency-Key": "csrf-test-01",
@@ -578,13 +588,13 @@ class TestSmartIntakeEndpoints:
     def test_smart_intake_capability_returns_200_or_503(self) -> None:
         """Smart intake capability may return 503 when service is not wired."""
         client = _make_client()
-        response = client.get("/api/v1/smart-intake/capability")
+        response = client.get(f"/api/v1/candidates/{CANDIDATE_ID}/smart-intake/capability")
         assert response.status_code in (200, 503)
 
     def test_smart_intake_previews_returns_200_or_405(self) -> None:
         """Smart intake previews may return 405 if method not allowed."""
         client = _make_client()
-        response = client.get("/api/v1/smart-intake/previews")
+        response = client.get(f"/api/v1/candidates/{CANDIDATE_ID}/smart-intake/previews")
         assert response.status_code in (200, 405, 503)
 
 
@@ -611,7 +621,7 @@ class TestIdempotencyKeyValidation:
     def test_idempotency_key_format(self, key: str, valid: bool) -> None:
         client = _make_client()
         response = client.post(
-            "/api/v1/agent-console/contexts",
+            f"/api/v1/candidates/{CANDIDATE_ID}/agent-console/contexts",
             json={"operation": "resume_review"},
             headers={
                 "Idempotency-Key": key,
@@ -638,25 +648,25 @@ class TestOpenAPIRouteSet:
         paths = set(response.json()["paths"].keys())
 
         required_routes = [
-            "/api/v1/agent-console/actions",
-            "/api/v1/agent-console/actions/{action_key}/accept",
-            "/api/v1/agent-console/actions/{action_key}/snooze",
-            "/api/v1/agent-console/actions/{action_key}/dismiss",
-            "/api/v1/agent-console/actions/{action_key}/complete",
-            "/api/v1/agent-console/contexts",
-            "/api/v1/agent-console/contexts/{context_id}",
-            "/api/v1/capabilities/agent",
-            "/api/v1/agent-console/preflight",
-            "/api/v1/agents/resume-review",
-            "/api/v1/agents/interview-preparation",
-            "/api/v1/agents/runs",
-            "/api/v1/agents/runs/{run_id}",
-            "/api/v1/agents/runs/{run_id}/review",
-            "/api/v1/agents/runs/{run_id}/reviews",
-            "/api/v1/smart-intake/capability",
-            "/api/v1/smart-intake/previews",
-            "/api/v1/smart-intake/previews/{preview_id}",
-            "/api/v1/smart-intake/previews/{preview_id}/apply",
+            "/api/v1/candidates/{candidate_id}/agent-console/actions",
+            "/api/v1/candidates/{candidate_id}/agent-console/actions/{action_key}/accept",
+            "/api/v1/candidates/{candidate_id}/agent-console/actions/{action_key}/snooze",
+            "/api/v1/candidates/{candidate_id}/agent-console/actions/{action_key}/dismiss",
+            "/api/v1/candidates/{candidate_id}/agent-console/actions/{action_key}/complete",
+            "/api/v1/candidates/{candidate_id}/agent-console/contexts",
+            "/api/v1/candidates/{candidate_id}/agent-console/contexts/{context_id}",
+            "/api/v1/candidates/{candidate_id}/capabilities/agent",
+            "/api/v1/candidates/{candidate_id}/agent-console/preflight",
+            "/api/v1/candidates/{candidate_id}/agents/resume-review",
+            "/api/v1/candidates/{candidate_id}/agents/interview-preparation",
+            "/api/v1/candidates/{candidate_id}/agents/runs",
+            "/api/v1/candidates/{candidate_id}/agents/runs/{run_id}",
+            "/api/v1/candidates/{candidate_id}/agents/runs/{run_id}/review",
+            "/api/v1/candidates/{candidate_id}/agents/runs/{run_id}/reviews",
+            "/api/v1/candidates/{candidate_id}/smart-intake/capability",
+            "/api/v1/candidates/{candidate_id}/smart-intake/previews",
+            "/api/v1/candidates/{candidate_id}/smart-intake/previews/{preview_id}",
+            "/api/v1/candidates/{candidate_id}/smart-intake/previews/{preview_id}/apply",
         ]
 
         for route in required_routes:

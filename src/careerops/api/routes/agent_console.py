@@ -4,8 +4,11 @@ Implements the endpoints frozen by
 ``openspec/changes/agent-first-console-experience/docs/agent-console/api-contract.md``
 sections 3 and 3.1.
 
+Routes are per-candidate (``/api/v1/candidates/{candidate_id}/...``); the
+``candidate_id`` path parameter is used for ownership scoping.
+
 Every mutation requires:
-- candidate-scoped auth (via ``require_candidate_id``),
+- candidate-scoped auth (via ``require_api_auth`` at the router mount),
 - CSRF + Origin validation (via ``_validate_mutation_origin``),
 - ``Idempotency-Key`` header.
 
@@ -23,7 +26,7 @@ from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Header, Query, Request, Response
+from fastapi import APIRouter, Header, Query, Request, Response
 from pydantic import JsonValue
 
 from careerops.agent_console.action_projection import (
@@ -48,7 +51,6 @@ from careerops.agent_console.contracts import (
     PreflightRequest,
     SnoozeAction,
 )
-from careerops.api.auth_dependency import require_candidate_id
 from careerops.api.errors import (
     CareerOpsHTTPException,
     CSRFRejectedError,
@@ -58,7 +60,7 @@ from careerops.application.audit import AuditActorType, AuditEventDraft
 from careerops.observability import current_trace_id
 from careerops.web.security import OriginHostValidator, RequestOriginRejected
 
-router = APIRouter(tags=["agent-console"])
+router = APIRouter(prefix="/api/v1/candidates/{candidate_id}", tags=["agent-console"])
 _log = logging.getLogger("careerops.api.agent_console")
 
 # ---------------------------------------------------------------------------
@@ -274,15 +276,15 @@ class _IdempotencyConflict(CareerOpsHTTPException):
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/v1/agent-console/actions")
+@router.get("/agent-console/actions")
 async def list_actions(
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     cursor: str | None = Query(default=None),
     limit: int = Query(default=3, ge=1, le=3),
 ) -> ActionPage:
-    """GET /api/v1/agent-console/actions -- action queue (hard cap limit=3)."""
+    """GET .../agent-console/actions -- action queue (hard cap limit=3)."""
     _validate_host(request)
     # Enforce hard cap of 3 per contract.
     effective_limit = min(limit, 3)
@@ -304,16 +306,16 @@ async def list_actions(
     )
 
 
-@router.post("/api/v1/agent-console/actions/{action_key}/accept")
+@router.post("/agent-console/actions/{action_key}/accept")
 async def accept_action(
     action_key: str,
     body: AcceptAction,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> ActionReceipt:
-    """POST /api/v1/agent-console/actions/{action_key}/accept."""
+    """POST .../agent-console/actions/{action_key}/accept."""
     _validate_mutation_origin(request)
     _validate_idempotency_key(idempotency_key)
     body_hash = _compute_body_hash(body)
@@ -360,16 +362,16 @@ async def accept_action(
     return receipt
 
 
-@router.post("/api/v1/agent-console/actions/{action_key}/snooze")
+@router.post("/agent-console/actions/{action_key}/snooze")
 async def snooze_action(
     action_key: str,
     body: SnoozeAction,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> ActionReceipt:
-    """POST /api/v1/agent-console/actions/{action_key}/snooze."""
+    """POST .../agent-console/actions/{action_key}/snooze."""
     _validate_mutation_origin(request)
     _validate_idempotency_key(idempotency_key)
     body_hash = _compute_body_hash(body)
@@ -416,16 +418,16 @@ async def snooze_action(
     return receipt
 
 
-@router.post("/api/v1/agent-console/actions/{action_key}/dismiss")
+@router.post("/agent-console/actions/{action_key}/dismiss")
 async def dismiss_action(
     action_key: str,
     body: DismissAction,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> ActionReceipt:
-    """POST /api/v1/agent-console/actions/{action_key}/dismiss."""
+    """POST .../agent-console/actions/{action_key}/dismiss."""
     _validate_mutation_origin(request)
     _validate_idempotency_key(idempotency_key)
     body_hash = _compute_body_hash(body)
@@ -472,16 +474,16 @@ async def dismiss_action(
     return receipt
 
 
-@router.post("/api/v1/agent-console/actions/{action_key}/complete")
+@router.post("/agent-console/actions/{action_key}/complete")
 async def complete_action(
     action_key: str,
     body: CompleteAction,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> ActionReceipt:
-    """POST /api/v1/agent-console/actions/{action_key}/complete."""
+    """POST .../agent-console/actions/{action_key}/complete."""
     _validate_mutation_origin(request)
     _validate_idempotency_key(idempotency_key)
     body_hash = _compute_body_hash(body)
@@ -528,15 +530,15 @@ async def complete_action(
     return receipt
 
 
-@router.post("/api/v1/agent-console/contexts", status_code=201)
+@router.post("/agent-console/contexts", status_code=201)
 async def create_context(
     body: CreateContext,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> Context:
-    """POST /api/v1/agent-console/contexts -- create context (201)."""
+    """POST .../agent-console/contexts -- create context (201)."""
     _validate_mutation_origin(request)
     _validate_idempotency_key(idempotency_key)
     body_hash = _compute_body_hash(body)
@@ -563,14 +565,14 @@ async def create_context(
     return context
 
 
-@router.get("/api/v1/agent-console/contexts/{context_id}")
+@router.get("/agent-console/contexts/{context_id}")
 async def get_context(
     context_id: UUID,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> Context:
-    """GET /api/v1/agent-console/contexts/{context_id} -- read context."""
+    """GET .../agent-console/contexts/{context_id} -- read context."""
     _validate_host(request)
     ctx_svc = _get_context_service(request)
     context = ctx_svc.get(candidate_id, context_id)
@@ -579,14 +581,14 @@ async def get_context(
     return context
 
 
-@router.get("/api/v1/capabilities/agent")
+@router.get("/capabilities/agent")
 async def get_agent_capability(
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     operation: Annotated[ModelOperation, Query(...)],
 ) -> Capability:
-    """GET /api/v1/capabilities/agent?operation= -- capability resolution."""
+    """GET .../capabilities/agent?operation= -- capability resolution."""
     _validate_host(request)
     pflt_svc = _get_preflight_service(request)
     capability = pflt_svc.resolve_capability(candidate_id, operation)
@@ -595,15 +597,15 @@ async def get_agent_capability(
     return capability
 
 
-@router.post("/api/v1/agent-console/preflight")
+@router.post("/agent-console/preflight")
 async def create_preflight(
     body: PreflightRequest,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> Preflight:
-    """POST /api/v1/agent-console/preflight -- model preflight."""
+    """POST .../agent-console/preflight -- model preflight."""
     _validate_mutation_origin(request)
     _validate_idempotency_key(idempotency_key)
     body_hash = _compute_body_hash(body)

@@ -6,20 +6,18 @@
 
 from __future__ import annotations
 
-from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
-from careerops.api.auth_dependency import require_candidate_id
 from careerops.api.capability_dependency import require_repository
 from careerops.application.agent_services import (
     AgentStartInput,
 )
 from careerops.domain.agent_runs import AgentCapability, AgentReviewDecision, AgentRun
 
-router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
+router = APIRouter(prefix="/api/v1/candidates/{candidate_id}/agents", tags=["agents"])
 
 
 class AgentStartRequest(BaseModel):
@@ -82,7 +80,7 @@ def _start_input(body: AgentStartRequest) -> AgentStartInput:
 @router.post("/resume-review")
 def start_resume_review(
     body: AgentStartRequest,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     request: Request,
 ) -> AgentRunResponse:
     service = require_repository(request, "resume_review_service")
@@ -93,7 +91,7 @@ def start_resume_review(
 @router.post("/interview-preparation")
 def start_interview_preparation(
     body: AgentStartRequest,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     request: Request,
 ) -> AgentRunResponse:
     service = require_repository(request, "interview_preparation_service")
@@ -104,7 +102,7 @@ def start_interview_preparation(
 @router.get("/runs")
 def list_agent_runs(
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     capability: AgentCapability | None = None,
     limit: int = 50,
 ) -> AgentRunListResponse:
@@ -117,7 +115,7 @@ def list_agent_runs(
 def get_agent_run(
     run_id: UUID,
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> AgentRunResponse:
     runtime = require_repository(request, "agent_runtime")
     return _to_response(runtime.get(candidate_id, run_id))  # type: ignore[attr-defined]
@@ -128,7 +126,7 @@ def review_agent_run(
     run_id: UUID,
     body: AgentReviewRequest,
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> AgentRunResponse:
     runtime = require_repository(request, "agent_runtime")
     run = runtime.review(  # type: ignore[attr-defined]
@@ -146,7 +144,7 @@ def review_agent_run(
 def list_agent_reviews(
     run_id: UUID,
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> dict[str, object]:
     runtime = require_repository(request, "agent_runtime")
     reviews = runtime.reviews(candidate_id, run_id)  # type: ignore[attr-defined]

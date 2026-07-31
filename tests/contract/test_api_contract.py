@@ -292,28 +292,31 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
         "/api/v1/candidates/{candidate_id}/reply/drafts/{draft_id}/send",
         "/api/v1/candidates/{candidate_id}/reply/drafts/{draft_id}/send-status",
         "/api/v1/candidates/{candidate_id}/reply/follow-up-rules",
-        # Review-only LLM agent runs (resume review / interview preparation).
-        "/api/v1/agents/resume-review",
-        "/api/v1/agents/interview-preparation",
-        "/api/v1/agents/runs",
-        "/api/v1/agents/runs/{run_id}",
-        "/api/v1/agents/runs/{run_id}/review",
-        "/api/v1/agents/runs/{run_id}/reviews",
-        # Review-only smart-intake previews + draft decisions.
-        "/api/v1/smart-intake/capability",
-        "/api/v1/smart-intake/previews",
-        "/api/v1/smart-intake/previews/{preview_id}",
-        "/api/v1/smart-intake/previews/{preview_id}/apply",
-        # Agent-console orchestration + preflight.
-        "/api/v1/agent-console/actions",
-        "/api/v1/agent-console/actions/{action_key}/accept",
-        "/api/v1/agent-console/actions/{action_key}/snooze",
-        "/api/v1/agent-console/actions/{action_key}/dismiss",
-        "/api/v1/agent-console/actions/{action_key}/complete",
-        "/api/v1/agent-console/contexts",
-        "/api/v1/agent-console/contexts/{context_id}",
-        "/api/v1/agent-console/preflight",
-        "/api/v1/capabilities/agent",
+        # Review-only LLM agent runs (per-candidate; auth-rm path-param
+        # migration: agent_runs router).
+        "/api/v1/candidates/{candidate_id}/agents/resume-review",
+        "/api/v1/candidates/{candidate_id}/agents/interview-preparation",
+        "/api/v1/candidates/{candidate_id}/agents/runs",
+        "/api/v1/candidates/{candidate_id}/agents/runs/{run_id}",
+        "/api/v1/candidates/{candidate_id}/agents/runs/{run_id}/review",
+        "/api/v1/candidates/{candidate_id}/agents/runs/{run_id}/reviews",
+        # Review-only smart-intake previews + draft decisions (per-candidate;
+        # auth-rm path-param migration).
+        "/api/v1/candidates/{candidate_id}/smart-intake/capability",
+        "/api/v1/candidates/{candidate_id}/smart-intake/previews",
+        "/api/v1/candidates/{candidate_id}/smart-intake/previews/{preview_id}",
+        "/api/v1/candidates/{candidate_id}/smart-intake/previews/{preview_id}/apply",
+        # Agent-console orchestration + preflight (per-candidate;
+        # auth-rm path-param migration).
+        "/api/v1/candidates/{candidate_id}/agent-console/actions",
+        "/api/v1/candidates/{candidate_id}/agent-console/actions/{action_key}/accept",
+        "/api/v1/candidates/{candidate_id}/agent-console/actions/{action_key}/snooze",
+        "/api/v1/candidates/{candidate_id}/agent-console/actions/{action_key}/dismiss",
+        "/api/v1/candidates/{candidate_id}/agent-console/actions/{action_key}/complete",
+        "/api/v1/candidates/{candidate_id}/agent-console/contexts",
+        "/api/v1/candidates/{candidate_id}/agent-console/contexts/{context_id}",
+        "/api/v1/candidates/{candidate_id}/agent-console/preflight",
+        "/api/v1/candidates/{candidate_id}/capabilities/agent",
         # Notification outlet (per-candidate SSE stream + recovery;
         # auth-rm path-param migration).
         "/api/v1/candidates/{candidate_id}/notifications",

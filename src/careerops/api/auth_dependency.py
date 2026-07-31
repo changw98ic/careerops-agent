@@ -37,6 +37,7 @@ from careerops.api.errors import (
     CandidateProfileRequiredError,
     CSRFRejectedError,
     DependencyNotReadyError,
+    NotFoundError,
     UnauthorizedError,
 )
 from careerops.auth.contracts import AuthenticatedPrincipal, AuthError
@@ -144,6 +145,28 @@ async def require_candidate_id(
     if principal is None or principal.candidate_id is None:
         raise CandidateProfileRequiredError()
     return principal.candidate_id
+
+
+async def path_candidate_id(candidate_id: UUID, request: Request) -> UUID:
+    """Resolve ``candidate_id`` from the request PATH and validate existence.
+
+    Path-param replacement for :func:`require_candidate_id` in the post-auth
+    console: identity is supplied by the URL
+    (``/api/v1/candidates/{candidate_id}/...``) rather than the authenticated
+    session. Existence is verified through
+    ``request.app.state.candidate_service.get(...)`` (wired by ``create_app``).
+
+    Raises:
+        DependencyNotReadyError (503): ``candidate_service`` is not present on
+            ``app.state`` (misconfigured runtime).
+        NotFoundError (404): no candidate exists for the supplied id.
+    """
+    svc = getattr(request.app.state, "candidate_service", None)
+    if svc is None:
+        raise DependencyNotReadyError("candidate_service is not configured")
+    if svc.get(candidate_id) is None:
+        raise NotFoundError(f"candidate {candidate_id} not found")
+    return candidate_id
 
 
 def reject_candidate_substitution(*, provided: object, resolved: UUID) -> None:

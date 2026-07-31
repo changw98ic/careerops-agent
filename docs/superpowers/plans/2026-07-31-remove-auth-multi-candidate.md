@@ -334,12 +334,25 @@ async def get_profile(candidate_id: UUID, ...):   # 来自路径；如需存在�
 - [ ] **Step 4:** `pytest tests/unit -q` → 修掉因删依赖导致的 import 错误。
 - [ ] **Step 5:** commit `refactor(auth-rm): drop session/csrf auth dependencies`。
 
-### Task 10: 删 auth 模块 + 路由
-- [ ] 删 `src/careerops/auth/`、`src/careerops/infrastructure/auth.py`、`src/careerops/web/api_auth.py`、`src/careerops/cli/auth.py`；删 `app.py` 里 `/api/v1/auth/*` 路由注册 + `RedisAuthRateLimiter`（auth 用途）。
-- [ ] `pytest tests/unit -q` → 修 import。
-- [ ] commit `refactor(auth-rm): delete auth subsystem`。
+### Task 10: review 端点适配（先去 auth 依赖，再删模块）
 
-### Task 11: drop auth 数据表迁移
+> **pre-flight 顺序修正**：review 端点依赖 `careerops.auth.contracts.AuthenticatedPrincipal` 与 `ReviewAuthService.authenticate`。必须**先**去掉这些依赖（本 task），**再**删 auth 模块（Task 11），否则 import 断裂。所以本 task 排在删模块之前。
+
+- [ ] 改 `api/routes/review.py` / `orchestration/review.py`：去掉 `ReviewAuthService.authenticate` + `validate_csrf` 调用 + 对 `AuthenticatedPrincipal` 的 import；审批者 actor 用固定 `local-reviewer`；审计写入时 `actor_type=USER`、actor=`local-reviewer`。保留 A/B 兜底的人审动作。
+- [ ] 改对应 review 测试（去 session/CSRF fixture）。
+- [ ] `pytest tests/unit -q` 通过。
+- [ ] commit `refactor(auth-rm): review endpoint trusts loopback, local-reviewer actor`。
+
+### Task 11: 删 auth 模块 + 路由 + auth 测试（合并）
+
+> review 已不再依赖 auth（Task 10），现在可以删整个 auth 子系统。模块和它的测试必须**同时**删——模块删了，6 个 auth 测试必然 import 失败。
+
+- [ ] 删 `src/careerops/auth/`、`src/careerops/infrastructure/auth.py`、`src/careerops/web/api_auth.py`、`src/careerops/cli/auth.py`；删 `app.py` 里 `/api/v1/auth/*` 路由注册 + `RedisAuthRateLimiter`（auth 用途）。
+- [ ] 同时删 auth 测试：`tests/unit/test_api_auth.py`、`test_api_auth_bootstrap.py`、`test_api_auth_csrf.py`、`test_api_auth_login.py`、`test_api_auth_logout.py`、`test_api_auth_session.py`。
+- [ ] `pytest tests/unit -q` 全绿（无残留 import）。
+- [ ] commit `refactor(auth-rm): delete auth subsystem + tests`。
+
+### Task 12: drop auth 数据表迁移
 
 **Files:** Create `migrations/versions/0039_drop_auth_tables.py`
 
@@ -371,21 +384,11 @@ def downgrade() -> None:
 - [ ] **Step 3:** 在 compose 跑迁移验证（`docker compose run --rm migration`）。
 - [ ] commit `feat(auth-rm): drop auth tables (0039)`。
 
-### Task 12: review 端点适配
-- [ ] 改 `api/routes/review.py` / `orchestration/review.py`：去 `ReviewAuthService.authenticate` + `validate_csrf` 调用，审批者 actor 用固定 `local-reviewer`；审计写入时 `actor_type=USER`、actor=`local-reviewer`。保留 A/B 兜底的人审动作。
-- [ ] 改对应 review 测试（去 session/CSRF fixture）。
-- [ ] commit `refactor(auth-rm): review endpoint trusts loopback, local-reviewer actor`。
-
-### Task 13: 删 auth 测试
-- [ ] 删 `tests/unit/test_api_auth.py`、`test_api_auth_bootstrap.py`、`test_api_auth_csrf.py`、`test_api_auth_login.py`、`test_api_auth_logout.py`、`test_api_auth_session.py`。
-- [ ] `pytest tests/unit -q` 全绿。
-- [ ] commit `test(auth-rm): delete console-auth test suite`。
-
 ---
 
 ## 阶段 4 — 后台 worker 多 candidate 化
 
-### Task 14: loop_bootstrap 遍历所有 candidate
+### Task 13: loop_bootstrap 遍历所有 candidate
 
 **Files:** Modify `src/careerops/application/loop_bootstrap.py`; Test `tests/unit/test_loop_bootstrap.py`
 
@@ -401,15 +404,15 @@ def downgrade() -> None:
 
 ## 阶段 5 — 前端
 
-### Task 15: 删登录前端
+### Task 14: 删登录前端
 
 **Files:** Delete `frontend/src/views/Login.vue`、`Bootstrap.vue`；Modify `frontend/src/router.js`（删登录守卫 + /login、/bootstrap 路由）、`frontend/src/api/client.js`（删 CSRF token 逻辑）、`frontend/src/stores/session.js`（删 login/bootstrap/preauth/logout，或整个删）；`frontend/tests/session.test.js`
 
-- [ ] 删文件 + 改 router/client。session store 改为只暴露"当前 candidate"（见 Task 16）或删除。
+- [ ] 删文件 + 改 router/client。session store 改为只暴露"当前 candidate"（见 Task 15）或删除。
 - [ ] `npm -C frontend run test` + `npm -C frontend run build` 通过。
 - [ ] commit `refactor(auth-rm): drop login UI + CSRF`.
 
-### Task 16: candidate selector + API client 路径化
+### Task 15: candidate selector + API client 路径化
 
 **Files:** Create `frontend/src/stores/candidate.js`、`frontend/src/components/CandidateSelector.vue`; Modify `frontend/src/api/client.js`（每个 per-candidate 方法拼 `candidates/${cid}/...`）、`frontend/src/App.vue`（挂 selector）
 

@@ -4,11 +4,12 @@ import asyncio
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from typing import cast
 
 from temporalio.client import Client
 from temporalio.worker import Worker
 
-from careerops.adapters.http_fetcher import fetch
+from careerops.adapters.http_fetcher import fetch, fetch_public_ats
 from careerops.infrastructure.temporal.activities import (
     ApprovalSweeperActivities,
     OutboxDrainActivities,
@@ -31,6 +32,11 @@ from careerops.workflows.m1_workflows import (
     CompanyDiscoveryWorkflow,
     CrawlJobSourceWorkflow,
     RawDocumentPurgeWorkflow,
+)
+from careerops.workflows.loop_trigger_workflows import (
+    ApprovalSweepWorkflow,
+    MailSyncTriggerWorkflow,
+    OutboxDrainWorkflow,
 )
 from careerops.workflows.s5_workflows import CrawlRunWorkflow, CrawlScheduledWorkflow
 from careerops.workflows.smoke import RecoverableSmokeWorkflow
@@ -109,6 +115,9 @@ def build_worker(
         RawDocumentPurgeWorkflow,
         CrawlRunWorkflow,
         CrawlScheduledWorkflow,
+        OutboxDrainWorkflow,
+        ApprovalSweepWorkflow,
+        MailSyncTriggerWorkflow,
     ]
     # Explicit callable type prevents pyright from inferring a broken union of
     # incompatible activity signatures (the @activity.defn decorators produce
@@ -223,6 +232,8 @@ def main() -> None:
     from careerops.infrastructure.database.engine import create_database_engine
     from careerops.infrastructure.database.outbox import PostgresOutboxStore
     from careerops.infrastructure.database.postgres_crawl_repo import (
+        PostgresCrawlAttemptRepository,
+        PostgresCrawlPermissionRepository,
         PostgresCrawlPlanRepository,
         PostgresCrawlRunRepository,
         PostgresCrawlSourceRepository,
@@ -265,17 +276,102 @@ def main() -> None:
     crawl_sink = build_real_crawl_sink(
         engine,
         fetcher=fetch,
+        public_ats_fetcher=fetch_public_ats,
         model_client=model_client,
     )
     run_repo = PostgresCrawlRunRepository(engine)
     plan_repo = PostgresCrawlPlanRepository(engine)
     source_repo = PostgresCrawlSourceRepository(engine)
+    attempt_repo = PostgresCrawlAttemptRepository(engine)
+    permission_repo = PostgresCrawlPermissionRepository(engine)
+
+    from careerops.application.bounded_tier2 import (
+        BoundedTier2Orchestrator,
+        RepositoryPermissionChecker,
+        Tier2Agent,
+    )
+    from careerops.application.crawl_permission_service import (
+        CrawlPermissionService,
+    )
+    from careerops.application.source_queue import SourceQueueService
+    from careerops.infrastructure.database.agent_console_repo import (
+        AgentActionRepository,
+    )
+    from careerops.infrastructure.database.audit import PostgresAuditWriterEngine
+    from careerops.infrastructure.database.permission_attention import (
+        PostgresPermissionAttentionSink,
+        PostgresPermissionAuditSink,
+    )
+    from careerops.infrastructure.database.postgres_notification_repo import (
+        PostgresNotificationRepository,
+    )
+    from careerops.infrastructure.database.postgres_tier2_budget import (
+        PostgresTier2Budget,
+    )
+
+    tier2_budget = PostgresTier2Budget(engine)
+    action_repo = AgentActionRepository(engine)
+    notification_repo = PostgresNotificationRepository(engine)
+    permission_service = CrawlPermissionService(
+        permission_repo,
+        source_repo,
+        audit_sink=PostgresPermissionAuditSink(PostgresAuditWriterEngine(engine)),
+        attention_sink=PostgresPermissionAttentionSink(
+            action_repo,
+            notification_repo,
+        ),
+    )
+    source_queue = SourceQueueService(source_repo, attempt_repo)
+    tier2 = BoundedTier2Orchestrator(
+        sink=crawl_sink,
+        budget=tier2_budget,
+        permission_checker=RepositoryPermissionChecker(permission_repo),
+        permission_repo=permission_repo,
+        agent=cast("Tier2Agent", crawl_sink.tier2_agent),
+    )
+
+    from careerops.application.crawl_downstream import CrawlDownstreamService
+    from careerops.application.inbox_service import InboxProjectionService
+    from careerops.application.matching import MatchOrchestrator
+    from careerops.infrastructure.database.postgres_evidence_repo import (
+        PostgresEvidenceRepository,
+    )
+    from careerops.infrastructure.database.postgres_inbox_repo import (
+        PostgresInboxRepository,
+    )
+    from careerops.infrastructure.database.postgres_matching_repo import (
+        PostgresMatchingReadRepository,
+    )
+    from careerops.infrastructure.database.postgres_profile_repo import (
+        PostgresProfileRepository,
+    )
+    from careerops.orchestration.capability_resolver import SettingsCapabilityResolver
+
+    matching_repo = PostgresMatchingReadRepository(engine)
+    inbox_repo = PostgresInboxRepository(engine)
+    matcher = MatchOrchestrator(
+        data_repository=matching_repo,
+        result_repository=matching_repo,
+    )
+    inbox_service = InboxProjectionService(
+        inbox_repo=inbox_repo,
+        profile_repo=PostgresProfileRepository(engine),
+        evidence_repo=PostgresEvidenceRepository(engine),
+        job_data_repo=matching_repo,
+        capability_resolver=SettingsCapabilityResolver(settings),
+        model_client=model_client,
+    )
+    downstream = CrawlDownstreamService(matcher, inbox_service, matching_repo)
 
     executor = CrawlExecutionService(
         run_repository=run_repo,
         plan_repository=plan_repo,
         source_repository=source_repo,
         sink=crawl_sink,
+        source_queue=source_queue,
+        permission_service=permission_service,
+        tier2=tier2,
+        downstream_projector=downstream,
     )
     run_creator = CrawlRunService(
         run_repository=run_repo,
@@ -328,13 +424,20 @@ def main() -> None:
         gmail_token_refresh=token_refresh_bundle,
     )
 
-    asyncio.run(
-        run_worker(
-            TemporalWorkerSettings.from_environment(),
-            m1_activities=m1_activities,
-            crawl_sink=crawl_sink,
+    try:
+        asyncio.run(
+            run_worker(
+                TemporalWorkerSettings.from_environment(),
+                m1_activities=m1_activities,
+                crawl_sink=crawl_sink,
+            )
         )
-    )
+    finally:
+        tier2_agent = crawl_sink.tier2_agent
+        close_agent = getattr(tier2_agent, "close", None)
+        if callable(close_agent):
+            close_agent()
+        engine.dispose()
 
 
 if __name__ == "__main__":

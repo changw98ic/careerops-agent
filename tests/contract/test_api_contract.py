@@ -154,21 +154,24 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
 
     assert response.status_code == 200
     assert response.json()["info"]["title"] == "CareerOps API"
-    # Declared route set covers health + jobs + matching + applications + auth
-    # (SPA session flow: preauth/session/me/login/bootstrap/logout) + email
-    # drafting (email-draft/send-email) added by the e2e-career-application-loop
-    # change, plus the Section-3 additive profile/resumes/evidence routers.
+    # Declared route set covers health + global catalog (jobs/companies) +
+    # applications + auth (SPA session flow) + the per-candidate path-scoped
+    # routers (profile/evidence/crawl surface — auth-rm migration) + the
+    # remaining session-scoped routers (resumes, agent-console, mail, …).
     # ErrorResponse business codes are validated separately by the Phase 0
     # contract freeze tests.
     assert set(response.json()["paths"]) == {
+        # Auth + console identity (SPA session flow).
         "/api/v1/auth/login",
         "/api/v1/auth/logout",
         "/api/v1/auth/preauth",
         "/api/v1/auth/bootstrap",
         "/api/v1/auth/session",
         "/api/v1/me",
+        # Health.
         "/api/v1/health/live",
         "/api/v1/health/ready",
+        # Global catalog: companies / contacts / jobs.
         "/api/v1/companies",
         "/api/v1/companies/{company_id}/contacts",
         "/api/v1/contacts",
@@ -176,57 +179,59 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
         "/api/v1/jobs/{job_id}",
         "/api/v1/jobs/{job_id}/remote-eligibility",
         "/api/v1/jobs/{job_id}/compensation",
+        # Candidates (global list/create + per-candidate path-scoped routers
+        # added by the auth-rm migration: profile, evidence, crawl surface).
         "/api/v1/candidates",
+        "/api/v1/candidates/{candidate_id}",
+        "/api/v1/candidates/{candidate_id}/profile",
+        "/api/v1/candidates/{candidate_id}/profile/versions",
+        "/api/v1/candidates/{candidate_id}/profile/versions/{version_id}",
+        "/api/v1/candidates/{candidate_id}/profile/versions/{version_id}/activate",
         "/api/v1/candidates/{candidate_id}/evidence",
-        "/api/v1/evidence/import",
+        "/api/v1/candidates/{candidate_id}/evidence/{evidence_id}",
+        "/api/v1/candidates/{candidate_id}/evidence/{evidence_id}/confirm",
+        "/api/v1/candidates/{candidate_id}/evidence/{evidence_id}/reject",
+        # Per-candidate crawl routers (crawl-plan-management spec).
+        "/api/v1/candidates/{candidate_id}/crawl-sources",
+        "/api/v1/candidates/{candidate_id}/crawl-sources/{source_id}",
+        "/api/v1/candidates/{candidate_id}/crawl-sources/{source_id}/pause",
+        "/api/v1/candidates/{candidate_id}/crawl-sources/{source_id}/resume",
+        "/api/v1/candidates/{candidate_id}/crawl-sources/{source_id}/permissions",
+        "/api/v1/candidates/{candidate_id}/crawl-plans",
+        "/api/v1/candidates/{candidate_id}/crawl-plans/versions",
+        "/api/v1/candidates/{candidate_id}/crawl-plans/versions/{version_id}",
+        "/api/v1/candidates/{candidate_id}/crawl-plans/versions/{version_id}/activate",
+        "/api/v1/candidates/{candidate_id}/crawl-plans/pause",
+        "/api/v1/candidates/{candidate_id}/crawl-plans/resume",
+        "/api/v1/candidates/{candidate_id}/crawl-plans/run-now",
+        "/api/v1/candidates/{candidate_id}/crawl-plans/readiness",
+        "/api/v1/candidates/{candidate_id}/crawl-plans/empty-state-cta",
+        "/api/v1/candidates/{candidate_id}/crawl-plans/scope-preview",
+        "/api/v1/candidates/{candidate_id}/crawl-runs",
+        "/api/v1/candidates/{candidate_id}/crawl-runs/{run_id}",
+        "/api/v1/candidates/{candidate_id}/crawl-permissions",
+        "/api/v1/candidates/{candidate_id}/crawl-permissions/{permission_id}",
+        "/api/v1/candidates/{candidate_id}/crawl-permissions/{permission_id}/grant",
+        "/api/v1/candidates/{candidate_id}/crawl-permissions/{permission_id}/deny",
+        "/api/v1/candidates/{candidate_id}/crawl-permissions/{permission_id}/revoke",
+        "/api/v1/candidates/{candidate_id}/crawl-permissions/{permission_id}/open-login",
+        # Matching + inbox projection.
         "/api/v1/matches",
         "/api/v1/matches/run",
-        "/api/v1/applications",
-        "/api/v1/applications/{application_id}/transition",
-        "/api/v1/applications/{application_id}/submit",
-        "/api/v1/applications/{application_id}/events",
-        "/api/v1/applications/{application_id}/email-draft",
-        "/api/v1/applications/{application_id}/send-email",
-        "/api/v1/resume-versions",
-        "/api/v1/application-packages",
-        "/api/v1/follow-ups",
-        # Section-3 additive routers (career-profile-and-resume spec).
-        "/api/v1/profile",
-        "/api/v1/profile/versions",
-        "/api/v1/profile/versions/{version_id}",
-        "/api/v1/profile/versions/{version_id}/activate",
-        "/api/v1/resumes",
-        "/api/v1/resumes/eligible",
-        "/api/v1/resumes/{version_id}",
-        "/api/v1/resumes/{version_id}/confirm",
-        "/api/v1/resumes/{version_id}/evidence",
-        "/api/v1/evidence",
-        "/api/v1/evidence/{evidence_id}",
-        "/api/v1/evidence/{evidence_id}/confirm",
-        "/api/v1/evidence/{evidence_id}/reject",
-        # Section-4 additive routers (crawl-plan-management spec).
-        "/api/v1/crawl-sources",
-        "/api/v1/crawl-sources/{source_id}",
-        "/api/v1/crawl-sources/{source_id}/pause",
-        "/api/v1/crawl-sources/{source_id}/resume",
-        "/api/v1/crawl-plans",
-        "/api/v1/crawl-plans/versions",
-        "/api/v1/crawl-plans/versions/{version_id}",
-        "/api/v1/crawl-plans/versions/{version_id}/activate",
-        "/api/v1/crawl-plans/pause",
-        "/api/v1/crawl-plans/resume",
-        "/api/v1/crawl-plans/run-now",
-        "/api/v1/crawl-runs",
-        "/api/v1/crawl-runs/{run_id}",
-        # Section-6 additive routers (inbox projection spec).
         "/api/v1/inbox",
         "/api/v1/inbox/{job_id}",
         "/api/v1/inbox/{job_id}/excluded-reasons",
         "/api/v1/inbox/{job_id}/favorite",
         "/api/v1/inbox/{job_id}/ignore",
         "/api/v1/inbox/{job_id}/snooze",
-        # Section-7 application-workspace router (application-workspace spec).
+        # Applications + workspace sub-routes.
+        "/api/v1/applications",
         "/api/v1/applications/{application_id}",
+        "/api/v1/applications/{application_id}/transition",
+        "/api/v1/applications/{application_id}/submit",
+        "/api/v1/applications/{application_id}/events",
+        "/api/v1/applications/{application_id}/email-draft",
+        "/api/v1/applications/{application_id}/send-email",
         "/api/v1/applications/{application_id}/prepare",
         "/api/v1/applications/{application_id}/channels",
         "/api/v1/applications/{application_id}/channel",
@@ -234,22 +239,32 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
         "/api/v1/applications/{application_id}/timeline",
         "/api/v1/applications/{application_id}/confirm-external-submission",
         "/api/v1/applications/{application_id}/state",
-        # Section-8 job-specific package routes (career-profile-and-resume spec).
         "/api/v1/applications/{application_id}/packages",
         "/api/v1/applications/{application_id}/packages/latest",
         "/api/v1/applications/{application_id}/packages/{version_id}/approve",
         "/api/v1/applications/{application_id}/packages/{version_id}/edits",
-        # Section-9 trusted-contact + submission-preview routes
-        # (email-application-delivery spec).
         "/api/v1/applications/{application_id}/recruiting-contacts",
         "/api/v1/applications/{application_id}/submission-preview",
-        # Section-10 system-managed-send routes (email-application-delivery spec).
         "/api/v1/applications/{application_id}/system-send",
         "/api/v1/applications/{application_id}/system-send/{intent_id}",
         "/api/v1/applications/{application_id}/system-send/{intent_id}/reconcile",
-        # Section-11 Gmail read/sync routes (recruiting-email-intelligence spec):
-        # account status/revoke, sync-now, sync history, threads/messages, and
-        # unresolved-link queue + confirmation.
+        "/api/v1/applications/{application_id}/follow-ups",
+        "/api/v1/application-packages",
+        "/api/v1/resume-versions",
+        "/api/v1/follow-ups",
+        "/api/v1/follow-ups/{reminder_id}/snooze",
+        "/api/v1/follow-ups/{reminder_id}/reschedule",
+        "/api/v1/follow-ups/{reminder_id}/cancel",
+        "/api/v1/follow-ups/{reminder_id}/complete",
+        # Resumes (global resume-version router; still session-scoped) + bulk
+        # evidence import.
+        "/api/v1/resumes",
+        "/api/v1/resumes/eligible",
+        "/api/v1/resumes/{version_id}",
+        "/api/v1/resumes/{version_id}/confirm",
+        "/api/v1/resumes/{version_id}/evidence",
+        "/api/v1/evidence/import",
+        # Recruiting-email intelligence (Gmail sync + proposals).
         "/api/v1/mail/account",
         "/api/v1/mail/account/revoke",
         "/api/v1/mail/sync-now",
@@ -258,19 +273,12 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
         "/api/v1/mail/threads/{thread_id}/messages",
         "/api/v1/mail/unresolved-links",
         "/api/v1/mail/unresolved-links/{link_id}/confirm",
-        # Section-12 mail-intelligence routes (recruiting-email-intelligence
-        # spec): extract/propose, list, detail, accept, reject. Proposals are
-        # review-only; state changes only through USER acceptance.
         "/api/v1/mail/messages/{message_id}/proposal",
         "/api/v1/mail/proposals",
         "/api/v1/mail/proposals/{proposal_id}",
         "/api/v1/mail/proposals/{proposal_id}/accept",
         "/api/v1/mail/proposals/{proposal_id}/reject",
-        # Section-13 reply-draft + follow-up routes (reply-draft-and-follow-up
-        # spec): draft list/detail/create/edit/approve/reject/send + follow-up
-        # schedule/snooze/reschedule/cancel/complete. Drafts are review-only;
-        # only an approved low-risk reply may be sent via the reused Section 10
-        # chain. High-risk categories permanently denied system send.
+        # Reply drafts + follow-up rules.
         "/api/v1/reply/drafts",
         "/api/v1/reply/drafts/{draft_id}",
         "/api/v1/reply/drafts/{draft_id}/edit",
@@ -279,24 +287,19 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
         "/api/v1/reply/drafts/{draft_id}/send",
         "/api/v1/reply/drafts/{draft_id}/send-status",
         "/api/v1/reply/follow-up-rules",
-        "/api/v1/applications/{application_id}/follow-ups",
-        "/api/v1/follow-ups/{reminder_id}/snooze",
-        "/api/v1/follow-ups/{reminder_id}/reschedule",
-        "/api/v1/follow-ups/{reminder_id}/cancel",
-        "/api/v1/follow-ups/{reminder_id}/complete",
-        # Review-only LLM Agent runs (resume review / interview preparation).
+        # Review-only LLM agent runs (resume review / interview preparation).
         "/api/v1/agents/resume-review",
         "/api/v1/agents/interview-preparation",
         "/api/v1/agents/runs",
         "/api/v1/agents/runs/{run_id}",
         "/api/v1/agents/runs/{run_id}/review",
         "/api/v1/agents/runs/{run_id}/reviews",
-        # Review-only smart form intake previews and draft decisions.
+        # Review-only smart-intake previews + draft decisions.
         "/api/v1/smart-intake/capability",
         "/api/v1/smart-intake/previews",
         "/api/v1/smart-intake/previews/{preview_id}",
         "/api/v1/smart-intake/previews/{preview_id}/apply",
-        # Agent-console orchestration and preflight routes.
+        # Agent-console orchestration + preflight.
         "/api/v1/agent-console/actions",
         "/api/v1/agent-console/actions/{action_key}/accept",
         "/api/v1/agent-console/actions/{action_key}/snooze",
@@ -306,19 +309,7 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
         "/api/v1/agent-console/contexts/{context_id}",
         "/api/v1/agent-console/preflight",
         "/api/v1/capabilities/agent",
-        # Crawl-plan readiness and scope preview routes.
-        "/api/v1/crawl-plans/readiness",
-        "/api/v1/crawl-plans/empty-state-cta",
-        "/api/v1/crawl-plans/scope-preview",
-        # Phase 6.3: source-specific crawl-permission routes.
-        "/api/v1/crawl-permissions",
-        "/api/v1/crawl-permissions/{permission_id}",
-        "/api/v1/crawl-permissions/{permission_id}/grant",
-        "/api/v1/crawl-permissions/{permission_id}/deny",
-        "/api/v1/crawl-permissions/{permission_id}/revoke",
-        "/api/v1/crawl-permissions/{permission_id}/open-login",
-        "/api/v1/crawl-sources/{source_id}/permissions",
-        # Phase 9: notification routes (SSE stream + recovery).
+        # Notification outlet (SSE stream + recovery).
         "/api/v1/notifications",
         "/api/v1/notifications/stream",
     }

@@ -26,3 +26,5 @@ def test_create_and_list():
     assert c.display_name == "Alice"
     assert svc.list_all() == [c]
     assert svc.get(c.id) is c
+    assert svc.get(uuid4()) is None
+    assert svc.list_all(limit=0) == []

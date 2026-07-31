@@ -17,7 +17,9 @@ class PostgresCandidateRepository:
         with self._engine.begin() as conn:
             rows = (
                 conn.execute(
-                    sa.select(candidates).order_by(candidates.c.created_at).limit(limit)
+                    sa.select(candidates)
+                    .order_by(candidates.c.created_at.desc(), candidates.c.id.desc())
+                    .limit(limit)
                 )
                 .mappings()
                 .all()
@@ -27,7 +29,10 @@ class PostgresCandidateRepository:
     def create(self, c: Candidate) -> Candidate:
         with self._engine.begin() as conn:
             conn.execute(candidates.insert().values(id=c.id, display_name=c.display_name))
-        return self.get(c.id)
+        stored = self.get(c.id)
+        if stored is None:  # pragma: no cover - database invariant
+            raise RuntimeError("candidate was not persisted")
+        return stored
 
     def get(self, cid: UUID) -> Candidate | None:
         with self._engine.begin() as conn:

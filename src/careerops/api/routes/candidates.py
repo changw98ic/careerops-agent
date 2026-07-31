@@ -8,9 +8,14 @@ runtime that has not wired the service fails closed rather than silently
 returning empty results.
 
 Endpoints:
-- ``GET    /api/v1/candidates``          — list candidates (default limit 50)
 - ``POST   /api/v1/candidates``          — create a candidate (body ``{display_name}``)
 - ``GET    /api/v1/candidates/{id}``     — fetch one candidate by id (404 if missing)
+
+The list endpoint (``GET /api/v1/candidates``) is intentionally NOT defined
+here: ``src/careerops/api/routes/matching.py`` already exposes it (backed by
+``matching_read_repo.list_candidates``) and defining a second ``list_candidates``
+handler collides on FastAPI operation_id. List stays in matching.py; this
+module owns only the create + detail increments.
 """
 
 from __future__ import annotations
@@ -32,25 +37,12 @@ class CandidateResponse(BaseModel):
     display_name: str
 
 
-class CandidateListResponse(BaseModel):
-    items: list[CandidateResponse]
-
-
 def _service(request: Request):
     """Resolve ``app.state.candidate_service`` or fail closed with 503."""
     svc = getattr(request.app.state, "candidate_service", None)
     if svc is None:
         raise HTTPException(status_code=503, detail="candidate service not ready")
     return svc
-
-
-@router.get("", response_model=CandidateListResponse)
-async def list_candidates(service=Depends(_service)) -> CandidateListResponse:
-    items = [
-        CandidateResponse(id=str(c.id), display_name=c.display_name)
-        for c in service.list_all()
-    ]
-    return CandidateListResponse(items=items)
 
 
 @router.post("", response_model=CandidateResponse, status_code=201)

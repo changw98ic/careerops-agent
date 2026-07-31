@@ -6,6 +6,12 @@ mounting ONLY the candidates router so they exercise the route logic and the
 ``app.state`` contract directly, without dragging in the full ``create_app``
 graph (which carries unrelated RuntimeResources wiring).
 
+This module owns only the ``POST /api/v1/candidates`` (create) and
+``GET /api/v1/candidates/{id}`` (detail) endpoints. The list endpoint
+(``GET /api/v1/candidates``) lives in ``src/careerops/api/routes/matching.py``
+and is therefore NOT mounted here — mounting it twice collides on FastAPI
+operation_id. List behaviour is covered by ``tests/contract/test_m2_api_contract.py``.
+
 The end-to-end wiring (``create_app`` setting ``app.state.candidate_service``
 and calling ``app.include_router(candidates.router)``) is verified by
 inspection in ``src/careerops/api/app.py`` inside the ``RuntimeResources``
@@ -28,7 +34,8 @@ class _InMemoryCandidateRepo:
     """In-memory stand-in for ``PostgresCandidateRepository``.
 
     Implements the ``CandidateRepository`` Protocol: ``list_all`` / ``create``
-    (accepts a ``Candidate``) / ``get``.
+    (accepts a ``Candidate``) / ``get``. Only ``create`` and ``get`` are
+    exercised by these tests (list is served by matching.py).
     """
 
     def __init__(self) -> None:
@@ -56,13 +63,8 @@ def _make_client_with_service() -> tuple[TestClient, _InMemoryCandidateRepo]:
     return TestClient(app), repo
 
 
-def test_list_initially_empty_then_create_get_round_trip():
+def test_create_then_get_round_trip():
     client, _ = _make_client_with_service()
-
-    # Initially empty list.
-    r = client.get("/api/v1/candidates")
-    assert r.status_code == 200
-    assert r.json() == {"items": []}
 
     # Create.
     r = client.post("/api/v1/candidates", json={"display_name": "Alice"})
@@ -73,15 +75,7 @@ def test_list_initially_empty_then_create_get_round_trip():
     # IDs are returned as strings on the wire (UUID → str).
     assert isinstance(cid, str)
 
-    # List reflects the new row.
-    r = client.get("/api/v1/candidates")
-    assert r.status_code == 200
-    items = r.json()["items"]
-    assert len(items) == 1
-    assert items[0]["id"] == cid
-    assert items[0]["display_name"] == "Alice"
-
-    # Detail lookup by id.
+    # Detail lookup by id round-trips the created row.
     r = client.get(f"/api/v1/candidates/{cid}")
     assert r.status_code == 200
     assert r.json()["id"] == cid
@@ -105,17 +99,39 @@ def test_create_validation_errors_return_422():
 
 
 def test_missing_service_returns_503():
-    """When app.state.candidate_service is absent, every endpoint surfaces 503."""
+    """When app.state.candidate_service is absent, create + detail surface 503."""
     app = FastAPI()
     app.include_router(candidates_router)
     # Deliberately do NOT inject candidate_service.
     client = TestClient(app)
-    assert client.get("/api/v1/candidates").status_code == 503
     assert (
         client.post("/api/v1/candidates", json={"display_name": "x"}).status_code
         == 503
     )
     assert client.get(f"/api/v1/candidates/{uuid4()}").status_code == 503
+
+
+def test_candidates_router_has_no_list_endpoint():
+    """Guard against re-introducing a duplicate list_candidates operation.
+
+    ``GET /api/v1/candidates`` is owned by ``matching.py``; defining a second
+    one here collides on FastAPI operation_id and breaks the OpenAPI contract
+    (see task-2-report.md fix log). This test fails fast if the route is
+    added back without renaming the operation.
+    """
+    from careerops.api.routes.candidates import router as candidates_router
+
+    # No route whose path is "" (the prefix-only list route). The only routes
+    # on this router should be POST "" and GET "/{candidate_id}".
+    list_routes = [
+        route for route in candidates_router.routes
+        if getattr(route, "path", None) == "/api/v1/candidates"
+        and getattr(route, "methods", set()) == {"GET"}
+    ]
+    assert list_routes == [], (
+        "candidates.py must not define GET /api/v1/candidates — "
+        "matching.py already owns that operation (Duplicate operation_id)."
+    )
 
 
 def test_candidates_router_wiring_in_create_app():

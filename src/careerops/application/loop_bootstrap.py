@@ -5,16 +5,20 @@ the autonomous loop:
 
 - ``outbox-drain``   -- re-deliver pending outbox events (always; internal).
 - ``approval-sweep`` -- expire stale human-review approvals (always; internal).
-- ``mail-sync``      -- incremental inbound Gmail pull (only when
-  ``google_oauth_enabled`` is on AND a mail account exists).
+- ``mail-sync:<candidate_id>`` -- incremental inbound Gmail pull, one schedule
+  per connected mail account (only when ``google_oauth_enabled`` is on AND
+  connected accounts exist).
 - per-source crawl   -- via ``CrawlActivationService`` (only when the crawl
-  readiness gate passes): registers each eligible source's schedule and
-  resumes it, bounded by the Tier 2 budget and per-source eligibility.
+  readiness gate passes): for EVERY candidate, registers each eligible
+  source's schedule and resumes it, bounded by the Tier 2 budget and
+  per-source eligibility.  Each candidate id doubles as that candidate's
+  crawl owner id.
 
 Everything is idempotent (``ScheduleManager.ensure_schedule`` reconciles), so
 calling this on every API restart converges without duplicate side effects.
-Owner/account identity is resolved defensively from existing data (crawl plan
-owner / mail account); it does NOT depend on the console-login layer.
+Candidate/account identity is resolved defensively from existing data (the
+``candidates`` and ``email_accounts`` tables); it does NOT depend on the
+console-login layer.
 
 Fail-closed: a missing dependency or failed gate skips that one schedule and
 logs the reason; the call never raises (the API must still serve).
@@ -30,7 +34,7 @@ from uuid import UUID
 import sqlalchemy as sa
 
 from careerops.application.crawl_readiness import check_crawl_readiness
-from careerops.infrastructure.database.schema import crawl_plan_versions, email_accounts
+from careerops.infrastructure.database.schema import candidates, email_accounts
 
 _log = logging.getLogger(__name__)
 
@@ -61,26 +65,36 @@ class BootstrapReport:
         )
 
 
-def _resolve_owner_id(engine) -> UUID | None:
-    """Return the single crawl owner, or None if there is not exactly one."""
+def _list_all_candidates(engine) -> list[UUID]:
+    """Return the id of every candidate row (each id is a crawl owner).
+
+    The ``candidates`` table is the source of truth for the candidate set;
+    crawl plans / mail accounts are scoped per candidate and need not exist.
+    """
     with engine.begin() as conn:
         rows = conn.execute(
-            sa.select(crawl_plan_versions.c.owner_id).distinct().limit(2)
+            sa.select(candidates.c.id).order_by(candidates.c.id)
         ).all()
-    if len(rows) != 1:
-        return None
-    return UUID(str(rows[0][0]))
+    return [UUID(str(row[0])) for row in rows]
 
 
-def _resolve_mail_account(engine) -> tuple[UUID, UUID] | None:
-    """Return ``(candidate_id, account_id)`` for the single mail account."""
+def _list_connected_mail_accounts(engine) -> list[tuple[UUID, UUID]]:
+    """Return ``(candidate_id, account_id)`` for every connected account.
+
+    Only ``connection_state = 'connected'`` accounts are usable by the
+    mail-sync worker (anything else raises ``AccountNotConnectedError``), so
+    fail-closed: register a schedule only for accounts that can sync.
+    """
     with engine.begin() as conn:
         rows = conn.execute(
-            sa.select(email_accounts.c.candidate_id, email_accounts.c.id).limit(2)
+            sa.select(email_accounts.c.candidate_id, email_accounts.c.id)
+            .where(
+                email_accounts.c.candidate_id.isnot(None),
+                email_accounts.c.connection_state == "connected",
+            )
+            .order_by(email_accounts.c.candidate_id, email_accounts.c.id)
         ).all()
-    if len(rows) != 1:
-        return None
-    return UUID(str(rows[0][0])), UUID(str(rows[0][1]))
+    return [(UUID(str(row[0])), UUID(str(row[1]))) for row in rows]
 
 
 async def bootstrap_trigger_loop(
@@ -130,22 +144,24 @@ async def bootstrap_trigger_loop(
     report.sweep_registered = True
 
     # --- mail sync: gated on oauth flag + a connected account existing ---
+    # One schedule per connected account, keyed by the owning candidate
+    # (dedicated-account model: at most one account per candidate).
     if getattr(settings, "google_oauth_enabled", False):
-        account = _resolve_mail_account(runtime.database)
-        if account is not None:
-            candidate_id, account_id = account
-            await schedule_manager.ensure_schedule(
-                schedule_id="mail-sync",
-                workflow=MailSyncTriggerWorkflow,
-                arg=MailSyncFetchInput(
-                    candidate_id=str(candidate_id),
-                    account_id=str(account_id),
-                    start_history_id="",
-                ),
-                interval=MAIL_SYNC_INTERVAL,
-                task_queue=MAIN_TASK_QUEUE,
-                note="incremental inbound mail sync",
-            )
+        accounts = _list_connected_mail_accounts(runtime.database)
+        if accounts:
+            for candidate_id, account_id in accounts:
+                await schedule_manager.ensure_schedule(
+                    schedule_id=f"mail-sync:{candidate_id}",
+                    workflow=MailSyncTriggerWorkflow,
+                    arg=MailSyncFetchInput(
+                        candidate_id=str(candidate_id),
+                        account_id=str(account_id),
+                        start_history_id="",
+                    ),
+                    interval=MAIL_SYNC_INTERVAL,
+                    task_queue=MAIN_TASK_QUEUE,
+                    note="incremental inbound mail sync",
+                )
             report.mail_registered = True
         else:
             report.skipped.append("mail-sync: no mail account configured")
@@ -158,12 +174,14 @@ async def bootstrap_trigger_loop(
         _log.info("trigger-loop bootstrap: %s", report)
         return report
 
-    owner_id = _resolve_owner_id(runtime.database)
-    if owner_id is None:
-        report.skipped.append("crawl: no single owner resolved (0 or >1)")
+    candidate_ids = _list_all_candidates(runtime.database)
+    if not candidate_ids:
+        report.skipped.append("crawl: no candidates")
         _log.info("trigger-loop bootstrap: %s", report)
         return report
 
+    # Readiness gate is global (migrations, crawler, permissions, budgets) --
+    # compute once and reuse for every candidate.
     readiness = check_crawl_readiness(
         runtime.database,
         budget_max_concurrent_slots=runtime.tier2_budget.max_concurrent_slots,
@@ -175,11 +193,16 @@ async def bootstrap_trigger_loop(
         _log.info("trigger-loop bootstrap: %s", report)
         return report
 
-    sources = runtime.source_queue_service.select_sources(owner_id)
-    result = await crawl_activation_service.activate_crawl_schedules(
-        readiness, owner_id, sources
-    )
-    report.crawl_schedules_considered = result.sources_considered
-    report.crawl_activated = result.schedules_activated
+    sources_considered = 0
+    schedules_activated = 0
+    for candidate_id in candidate_ids:
+        sources = runtime.source_queue_service.select_sources(candidate_id)
+        result = await crawl_activation_service.activate_crawl_schedules(
+            readiness, candidate_id, sources
+        )
+        sources_considered += result.sources_considered
+        schedules_activated += result.schedules_activated
+    report.crawl_schedules_considered = sources_considered
+    report.crawl_activated = schedules_activated
     _log.info("trigger-loop bootstrap: %s", report)
     return report

@@ -2,8 +2,9 @@
 
 The bootstrap is pure orchestration over an injected ``ScheduleManager`` and
 ``CrawlActivationService``; these tests fake both and assert the gate logic:
-outbox+sweep always register, mail is gated on oauth+account, crawl is gated on
-a resolved owner + the readiness gate.
+outbox+sweep always register, mail is gated on oauth+connected accounts (one
+``mail-sync:<candidate_id>`` schedule per connected account), crawl is gated
+on the readiness gate and iterates EVERY candidate.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from dataclasses import dataclass
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 from uuid import UUID
 
 import pytest
@@ -23,9 +24,10 @@ from careerops.application.loop_bootstrap import (
     bootstrap_trigger_loop,
 )
 
-_OWNER = UUID("11111111-1111-1111-1111-111111111111")
 _CANDIDATE = UUID("22222222-2222-2222-2222-222222222222")
+_CANDIDATE2 = UUID("44444444-4444-4444-4444-444444444444")
 _ACCOUNT = UUID("33333333-3333-3333-3333-333333333333")
+_ACCOUNT2 = UUID("55555555-5555-5555-5555-555555555555")
 
 
 @dataclass
@@ -54,7 +56,7 @@ class _FakeScheduleManager:
         return True
 
 
-def _fake_engine(*, plan_rows, mail_rows) -> MagicMock:
+def _fake_engine(*, candidate_rows, mail_rows) -> MagicMock:
     """Engine whose .begin() yields a conn branching on the queried table."""
 
     class _Result:
@@ -64,8 +66,8 @@ def _fake_engine(*, plan_rows, mail_rows) -> MagicMock:
     class _Conn:
         def execute(self, stmt):
             text = str(stmt)
-            if "crawl_plan_versions" in text:
-                return _Result(plan_rows)
+            if "candidates" in text:
+                return _Result(candidate_rows)
             if "email_accounts" in text:
                 return _Result(mail_rows)
             return _Result([])
@@ -82,9 +84,9 @@ def _fake_engine(*, plan_rows, mail_rows) -> MagicMock:
     return _Engine()
 
 
-def _runtime(*, plan_rows=(), mail_rows=(), crawl=False) -> tuple[MagicMock, _FakeActivationService | None]:
+def _runtime(*, candidate_rows=(), mail_rows=(), crawl=False) -> tuple[MagicMock, _FakeActivationService | None]:
     runtime = MagicMock()
-    runtime.database = _fake_engine(plan_rows=plan_rows, mail_rows=mail_rows)
+    runtime.database = _fake_engine(candidate_rows=candidate_rows, mail_rows=mail_rows)
     runtime.tier2_budget.max_concurrent_slots = 3
     runtime.tier2_budget.daily_action_budget = 500
     runtime.crawl_permission_repo = object() if crawl else None
@@ -97,6 +99,10 @@ def _ids(mgr: _FakeScheduleManager) -> list[str]:
     return [c["schedule_id"] for c in mgr.calls]
 
 
+def _mail_schedules(mgr: _FakeScheduleManager) -> dict[str, dict]:
+    return {c["schedule_id"]: c for c in mgr.calls if c["schedule_id"].startswith("mail-sync")}
+
+
 def test_outbox_and_sweep_always_registered_and_mail_off_when_oauth_disabled():
     runtime, _ = _runtime()
     mgr = _FakeScheduleManager()
@@ -105,7 +111,7 @@ def test_outbox_and_sweep_always_registered_and_mail_off_when_oauth_disabled():
     ids = _ids(mgr)
     assert "outbox-drain" in ids
     assert "approval-sweep" in ids
-    assert "mail-sync" not in ids
+    assert not any(i.startswith("mail-sync") for i in ids)
     assert report.outbox_registered and report.sweep_registered
     assert not report.mail_registered
 
@@ -121,18 +127,32 @@ def test_intervals_match_plan_defaults():
     assert by_id["approval-sweep"]["interval"] == APPROVAL_SWEEP_INTERVAL
 
 
-def test_mail_registered_when_oauth_and_single_account_present():
-    runtime, _ = _runtime(mail_rows=[(str(_CANDIDATE), str(_ACCOUNT))])
+def test_mail_sync_schedule_per_candidate():
+    # Two candidates, each with one connected account -> one mail-sync
+    # schedule per candidate, each carrying that candidate's own account.
+    runtime, _ = _runtime(
+        mail_rows=[
+            (str(_CANDIDATE), str(_ACCOUNT)),
+            (str(_CANDIDATE2), str(_ACCOUNT2)),
+        ]
+    )
     mgr = _FakeScheduleManager()
     asyncio.run(
         bootstrap_trigger_loop(MagicMock(google_oauth_enabled=True), runtime, schedule_manager=mgr)
     )
-    by_id = {c["schedule_id"]: c for c in mgr.calls}
-    assert "mail-sync" in by_id
-    assert by_id["mail-sync"]["interval"] == MAIL_SYNC_INTERVAL
-    arg = by_id["mail-sync"]["arg"]
-    assert arg.candidate_id == str(_CANDIDATE)
-    assert arg.account_id == str(_ACCOUNT)
+    schedules = _mail_schedules(mgr)
+    assert set(schedules) == {f"mail-sync:{_CANDIDATE}", f"mail-sync:{_CANDIDATE2}"}
+    for schedule_id, spec in schedules.items():
+        assert spec["interval"] == MAIL_SYNC_INTERVAL
+        assert spec["arg"].candidate_id == str(schedule_id.removeprefix("mail-sync:"))
+    args_by_candidate = {
+        str(cid): schedules[f"mail-sync:{cid}"]["arg"].account_id
+        for cid in (_CANDIDATE, _CANDIDATE2)
+    }
+    assert args_by_candidate == {
+        str(_CANDIDATE): str(_ACCOUNT),
+        str(_CANDIDATE2): str(_ACCOUNT2),
+    }
 
 
 def test_mail_skipped_when_no_account():
@@ -141,13 +161,13 @@ def test_mail_skipped_when_no_account():
     report = asyncio.run(
         bootstrap_trigger_loop(MagicMock(google_oauth_enabled=True), runtime, schedule_manager=mgr)
     )
-    assert "mail-sync" not in _ids(mgr)
+    assert not _mail_schedules(mgr)
     assert not report.mail_registered
     assert any("no mail account" in s for s in report.skipped)
 
 
 def test_crawl_skipped_when_no_activation_service():
-    runtime, _ = _runtime(plan_rows=[(str(_OWNER),)], crawl=False)
+    runtime, _ = _runtime(crawl=False)
     mgr = _FakeScheduleManager()
     report = asyncio.run(
         bootstrap_trigger_loop(MagicMock(google_oauth_enabled=False), runtime, schedule_manager=mgr)
@@ -155,14 +175,16 @@ def test_crawl_skipped_when_no_activation_service():
     assert any("activation service not provided" in s for s in report.skipped)
 
 
-def test_crawl_activates_when_owner_resolved_and_ready(monkeypatch):
+def test_crawl_activated_for_each_candidate(monkeypatch):
     from careerops.application.crawl_readiness import CrawlReadiness
 
     monkeypatch.setattr(
         "careerops.application.loop_bootstrap.check_crawl_readiness",
         lambda *a, **k: CrawlReadiness(ready=True),
     )
-    runtime, activation = _runtime(plan_rows=[(str(_OWNER),)], crawl=True)
+    runtime, activation = _runtime(
+        candidate_rows=[(str(_CANDIDATE),), (str(_CANDIDATE2),)], crawl=True
+    )
     mgr = _FakeScheduleManager()
     report = asyncio.run(
         bootstrap_trigger_loop(
@@ -172,18 +194,22 @@ def test_crawl_activates_when_owner_resolved_and_ready(monkeypatch):
             crawl_activation_service=activation,
         )
     )
-    assert activation.calls and activation.calls[0][0] is True  # readiness.ready
-    assert activation.calls[0][1] == _OWNER
-    runtime.source_queue_service.select_sources.assert_called_once_with(_OWNER)
-    assert report.crawl_schedules_considered == 2
-    assert report.crawl_activated == 2
+    # One activation pass per candidate, in candidate order, all ready.
+    assert [c[1] for c in activation.calls] == [_CANDIDATE, _CANDIDATE2]
+    assert all(c[0] is True for c in activation.calls)  # readiness.ready
+    # Each candidate's sources selected with that candidate id as owner.
+    assert runtime.source_queue_service.select_sources.call_args_list == [
+        call(_CANDIDATE),
+        call(_CANDIDATE2),
+    ]
+    # Two sources per candidate -> 4 considered / 4 activated.
+    assert report.crawl_schedules_considered == 4
+    assert report.crawl_activated == 4
 
 
-def test_crawl_skipped_when_multiple_owners():
-    # Two distinct owners -> cannot resolve the single user -> crawl skipped.
-    runtime, activation = _runtime(
-        plan_rows=[(str(_OWNER),), (str(_CANDIDATE),)], crawl=True
-    )
+def test_crawl_skipped_when_no_candidates():
+    # No candidates -> nothing to activate; crawl skipped fail-closed.
+    runtime, activation = _runtime(crawl=True)
     mgr = _FakeScheduleManager()
     report = asyncio.run(
         bootstrap_trigger_loop(
@@ -194,4 +220,4 @@ def test_crawl_skipped_when_multiple_owners():
         )
     )
     assert activation.calls == []
-    assert any("no single owner" in s for s in report.skipped)
+    assert any("no candidates" in s for s in report.skipped)

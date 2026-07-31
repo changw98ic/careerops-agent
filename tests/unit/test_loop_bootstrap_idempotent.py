@@ -72,7 +72,7 @@ def _runtime_with(engine_rows) -> MagicMock:
 
 def test_double_bootstrap_converges_without_duplicates() -> None:
     # No mail account, no crawl activation -> only outbox + sweep register.
-    runtime = _runtime_with({"crawl_plan_versions": [], "email_accounts": []})
+    runtime = _runtime_with({"candidates": [], "email_accounts": []})
     mgr = _RecordingManager()
     settings = MagicMock(google_oauth_enabled=False)
 
@@ -86,7 +86,7 @@ def test_double_bootstrap_converges_without_duplicates() -> None:
 
 
 def test_reconciled_spec_is_identical_across_restarts() -> None:
-    runtime = _runtime_with({"crawl_plan_versions": [], "email_accounts": []})
+    runtime = _runtime_with({"candidates": [], "email_accounts": []})
     mgr = _RecordingManager()
     settings = MagicMock(google_oauth_enabled=False)
 
@@ -101,10 +101,12 @@ def test_reconciled_spec_is_identical_across_restarts() -> None:
 
 
 def test_mail_schedule_stable_across_restarts_when_account_present() -> None:
-    candidate = "22222222222222222222222222222222"
-    account = "33333333333333333333333333333333"
+    # UUIDs come back from the driver as uuid.UUID; the schedule id uses the
+    # canonical dashed form (not the raw 32-hex rendering).
+    candidate = "22222222-2222-2222-2222-222222222222"
+    account = "33333333-3333-3333-3333-333333333333"
     runtime = _runtime_with(
-        {"crawl_plan_versions": [], "email_accounts": [(candidate, account)]}
+        {"candidates": [], "email_accounts": [(candidate, account)]}
     )
     mgr = _RecordingManager()
     settings = MagicMock(google_oauth_enabled=True)
@@ -112,8 +114,9 @@ def test_mail_schedule_stable_across_restarts_when_account_present() -> None:
     asyncio.run(bootstrap_trigger_loop(settings, runtime, schedule_manager=mgr))
     asyncio.run(bootstrap_trigger_loop(settings, runtime, schedule_manager=mgr))
 
-    assert "mail-sync" in mgr.seen
+    mail_schedule_id = f"mail-sync:{candidate}"
+    assert mail_schedule_id in mgr.seen
     # All three (outbox + sweep + mail) created once, then reconciled on pass 2.
     assert mgr.created == 3
     assert mgr.updated == 3
-    assert mgr.last_spec["mail-sync"]["interval"] == MAIL_SYNC_INTERVAL
+    assert mgr.last_spec[mail_schedule_id]["interval"] == MAIL_SYNC_INTERVAL

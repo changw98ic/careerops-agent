@@ -7,21 +7,21 @@ and ONLY acceptance — through the existing USER-sourced transition service —
 may change application state (Iron Rule 2).
 
 Routes:
-- POST /api/v1/mail/messages/{message_id}/proposal
+- POST /api/v1/candidates/{candidate_id}/mail/messages/{message_id}/proposal
         — extract + propose (idempotent)
-- GET  /api/v1/mail/proposals
+- GET  /api/v1/candidates/{candidate_id}/mail/proposals
         — list proposals for the candidate (cursor pagination, no-store)
-- GET  /api/v1/mail/proposals/{proposal_id}
+- GET  /api/v1/candidates/{candidate_id}/mail/proposals/{proposal_id}
         — proposal detail (ownership)
-- POST /api/v1/mail/proposals/{proposal_id}/accept
+- POST /api/v1/candidates/{candidate_id}/mail/proposals/{proposal_id}/accept
         — accept (ownership, CSRF via require_api_auth, legal transition, rate limit)
-- POST /api/v1/mail/proposals/{proposal_id}/reject
+- POST /api/v1/candidates/{candidate_id}/mail/proposals/{proposal_id}/reject
         — reject (ownership, CSRF, idempotent, rate limit)
 
 Iron rules honored:
 - Additive (Iron Rule 8): new paths only; no existing route touched.
-- Server-side ownership (Iron Rule 2 + 6): candidate resolved via
-  ``require_candidate_id``; not-owned -> 404 (no existence leak).
+- Path-supplied ownership (Iron Rule 2 + 6): candidate_id comes from the
+  request path; not-owned -> 404 (no existence leak).
 - Dependency-not-ready (Iron Rule 3/6): missing service -> 503.
 - Default-deny (Iron Rule 7): the router is gated on the released-by-default
   CRAWL_PLAN_MANAGEMENT capability (mail intelligence is downstream of crawl
@@ -38,13 +38,11 @@ from __future__ import annotations
 
 import time
 from datetime import UTC, datetime
-from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
-from careerops.api.auth_dependency import require_candidate_id
 from careerops.api.capability_dependency import require_capability, require_repository
 from careerops.application.mail_intelligence_service import (
     MailIntelligenceService,
@@ -62,7 +60,7 @@ from careerops.domain.mail_intelligence import (
 from careerops.orchestration.capability_resolver import CapabilityKind
 
 router = APIRouter(
-    prefix="/api/v1",
+    prefix="/api/v1/candidates/{candidate_id}",
     tags=["mail-intelligence"],
     # Mail intelligence is downstream of crawl-plan provenance and performs NO
     # external writes (live Gmail sync is Section 11, gated on the denied
@@ -309,7 +307,7 @@ def create_proposal(
     message_id: str,
     body: ProposalCreateRequest | None,
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> ProposalResponse:
     """Extract a message and create/reuse a proposal (task 12.5).
 
@@ -335,7 +333,7 @@ def create_proposal(
 def list_proposals(
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     state: str | None = Query(None, pattern="^(pending|accepted|rejected|superseded)$"),
     cursor: str | None = None,
     limit: int = Query(50, ge=1, le=200),
@@ -361,7 +359,7 @@ def list_proposals(
 def get_proposal(
     proposal_id: str,
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> ProposalResponse:
     """Return a proposal detail (ownership-scoped)."""
     service = _service(request)
@@ -377,7 +375,7 @@ def accept_proposal(
     proposal_id: str,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> ProposalDecisionResponse:
     """Accept a proposal (task 12.6 + 12.7).
 
@@ -406,7 +404,7 @@ def reject_proposal(
     proposal_id: str,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> ProposalDecisionResponse:
     """Reject a proposal (task 12.6).
 

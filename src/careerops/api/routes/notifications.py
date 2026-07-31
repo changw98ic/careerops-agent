@@ -1,8 +1,9 @@
 """Notification API routes (Phase 9.1-9.2).
 
-Provides:
-- ``GET /api/v1/notifications/stream`` — SSE endpoint (cookie auth, no CSRF).
-- ``GET /api/v1/notifications`` — recovery endpoint for missed events.
+Provides per-candidate notification endpoints under
+``/api/v1/candidates/{candidate_id}/notifications``:
+- ``GET .../notifications/stream`` — SSE endpoint (cookie auth, no CSRF).
+- ``GET .../notifications`` — recovery endpoint for missed events.
 """
 
 from __future__ import annotations
@@ -10,30 +11,31 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
-from careerops.api.auth_dependency import require_candidate_id
-
-router = APIRouter(tags=["notifications"])
+router = APIRouter(
+    prefix="/api/v1/candidates/{candidate_id}/notifications",
+    tags=["notifications"],
+)
 _log = logging.getLogger("careerops.api.notifications")
 
 _HEARTBEAT_INTERVAL = 15  # seconds
 
 
-@router.get("/api/v1/notifications/stream")
+@router.get("/stream")
 async def stream_notifications(
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> StreamingResponse:
     """SSE endpoint for real-time notifications.
 
-    Uses cookie-based auth (``require_web_auth`` via ``require_candidate_id``).
+    Uses cookie-based auth (``require_api_auth`` at the app-level mount).
     EventSource in the browser sends cookies automatically; no CSRF header
-    is needed for this GET-only endpoint.
+    is needed for this GET-only endpoint. ``candidate_id`` comes from the
+    request path.
     """
     notification_service = getattr(request.app.state, "notification_service", None)
     if notification_service is None:
@@ -85,10 +87,10 @@ async def stream_notifications(
     )
 
 
-@router.get("/api/v1/notifications")
+@router.get("")
 async def list_pending_notifications(
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> dict[str, object]:
     """Recovery endpoint: return undelivered notifications.
 

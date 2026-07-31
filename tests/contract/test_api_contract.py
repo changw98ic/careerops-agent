@@ -215,15 +215,17 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
         "/api/v1/candidates/{candidate_id}/crawl-permissions/{permission_id}/deny",
         "/api/v1/candidates/{candidate_id}/crawl-permissions/{permission_id}/revoke",
         "/api/v1/candidates/{candidate_id}/crawl-permissions/{permission_id}/open-login",
-        # Matching + inbox projection.
+        # Matching (global list + global/job-scoped match + compensation
+        # routes; the per-candidate evidence route is already path-scoped).
         "/api/v1/matches",
         "/api/v1/matches/run",
-        "/api/v1/inbox",
-        "/api/v1/inbox/{job_id}",
-        "/api/v1/inbox/{job_id}/excluded-reasons",
-        "/api/v1/inbox/{job_id}/favorite",
-        "/api/v1/inbox/{job_id}/ignore",
-        "/api/v1/inbox/{job_id}/snooze",
+        # Per-candidate inbox projection (auth-rm path-param migration).
+        "/api/v1/candidates/{candidate_id}/inbox",
+        "/api/v1/candidates/{candidate_id}/inbox/{job_id}",
+        "/api/v1/candidates/{candidate_id}/inbox/{job_id}/excluded-reasons",
+        "/api/v1/candidates/{candidate_id}/inbox/{job_id}/favorite",
+        "/api/v1/candidates/{candidate_id}/inbox/{job_id}/ignore",
+        "/api/v1/candidates/{candidate_id}/inbox/{job_id}/snooze",
         # Per-candidate applications + workspace sub-routes (auth-rm path-param
         # migration: applications, application_workspace, email_payloads,
         # system_send, reply_drafts routers).
@@ -266,20 +268,21 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
         "/api/v1/resumes/{version_id}/confirm",
         "/api/v1/resumes/{version_id}/evidence",
         "/api/v1/evidence/import",
-        # Recruiting-email intelligence (Gmail sync + proposals).
-        "/api/v1/mail/account",
-        "/api/v1/mail/account/revoke",
-        "/api/v1/mail/sync-now",
-        "/api/v1/mail/sync-history",
-        "/api/v1/mail/threads",
-        "/api/v1/mail/threads/{thread_id}/messages",
-        "/api/v1/mail/unresolved-links",
-        "/api/v1/mail/unresolved-links/{link_id}/confirm",
-        "/api/v1/mail/messages/{message_id}/proposal",
-        "/api/v1/mail/proposals",
-        "/api/v1/mail/proposals/{proposal_id}",
-        "/api/v1/mail/proposals/{proposal_id}/accept",
-        "/api/v1/mail/proposals/{proposal_id}/reject",
+        # Recruiting-email intelligence (per-candidate Gmail sync + proposals;
+        # auth-rm path-param migration).
+        "/api/v1/candidates/{candidate_id}/mail/account",
+        "/api/v1/candidates/{candidate_id}/mail/account/revoke",
+        "/api/v1/candidates/{candidate_id}/mail/sync-now",
+        "/api/v1/candidates/{candidate_id}/mail/sync-history",
+        "/api/v1/candidates/{candidate_id}/mail/threads",
+        "/api/v1/candidates/{candidate_id}/mail/threads/{thread_id}/messages",
+        "/api/v1/candidates/{candidate_id}/mail/unresolved-links",
+        "/api/v1/candidates/{candidate_id}/mail/unresolved-links/{link_id}/confirm",
+        "/api/v1/candidates/{candidate_id}/mail/messages/{message_id}/proposal",
+        "/api/v1/candidates/{candidate_id}/mail/proposals",
+        "/api/v1/candidates/{candidate_id}/mail/proposals/{proposal_id}",
+        "/api/v1/candidates/{candidate_id}/mail/proposals/{proposal_id}/accept",
+        "/api/v1/candidates/{candidate_id}/mail/proposals/{proposal_id}/reject",
         # Per-candidate reply drafts + follow-up rules (reply_drafts router).
         "/api/v1/candidates/{candidate_id}/reply/drafts",
         "/api/v1/candidates/{candidate_id}/reply/drafts/{draft_id}",
@@ -311,9 +314,10 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
         "/api/v1/agent-console/contexts/{context_id}",
         "/api/v1/agent-console/preflight",
         "/api/v1/capabilities/agent",
-        # Notification outlet (SSE stream + recovery).
-        "/api/v1/notifications",
-        "/api/v1/notifications/stream",
+        # Notification outlet (per-candidate SSE stream + recovery;
+        # auth-rm path-param migration).
+        "/api/v1/candidates/{candidate_id}/notifications",
+        "/api/v1/candidates/{candidate_id}/notifications/stream",
     }
 
 

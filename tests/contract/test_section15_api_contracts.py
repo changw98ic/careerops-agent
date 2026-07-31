@@ -176,17 +176,17 @@ class TestApplicationWorkspaceOwnership:
 class TestMailIntelligenceRoutes:
     def test_proposals_list_requires_auth(self) -> None:
         client = _make_client()
-        resp = client.get("/api/v1/mail/proposals")
+        resp = client.get(f"/api/v1/candidates/{uuid4()}/mail/proposals")
         assert resp.status_code in (401, 403, 503)
 
     def test_proposal_detail_returns_404_for_unknown(self) -> None:
         client = _make_client()
-        resp = client.get(f"/api/v1/mail/proposals/{uuid4()}")
+        resp = client.get(f"/api/v1/candidates/{uuid4()}/mail/proposals/{uuid4()}")
         assert resp.status_code in (404, 503)
 
     def test_accept_proposal_requires_auth(self) -> None:
         client = _make_client()
-        resp = client.post(f"/api/v1/mail/proposals/{uuid4()}/accept")
+        resp = client.post(f"/api/v1/candidates/{uuid4()}/mail/proposals/{uuid4()}/accept")
         assert resp.status_code in (401, 403, 503)
 
 
@@ -271,7 +271,7 @@ class TestOpenAPISchema:
             "/api/v1/candidates/{candidate_id}/applications/{application_id}/system-send" in paths
         )
         # Section 12 routes
-        assert "/api/v1/mail/proposals" in paths
+        assert "/api/v1/candidates/{candidate_id}/mail/proposals" in paths
         # Section 13 routes
         assert "/api/v1/candidates/{candidate_id}/reply/drafts" in paths
         assert (

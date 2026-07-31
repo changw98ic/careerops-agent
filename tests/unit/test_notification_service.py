@@ -231,8 +231,9 @@ class TestNotificationRoutes:
 
         app = create_app()
         client = TestClient(app, raise_server_exceptions=False)
-        # No session cookie -> 401 (auth is required).
-        resp = client.get("/api/v1/notifications")
+        # No session cookie -> 401 (auth is required). candidate_id is now part
+        # of the path (per-candidate path-param migration).
+        resp = client.get(f"/api/v1/candidates/{uuid4()}/notifications")
         assert resp.status_code == 401
 
     def test_stream_endpoint_is_auth_gated(self) -> None:
@@ -241,7 +242,7 @@ class TestNotificationRoutes:
 
         app = create_app()
         client = TestClient(app, raise_server_exceptions=False)
-        resp = client.get("/api/v1/notifications/stream")
+        resp = client.get(f"/api/v1/candidates/{uuid4()}/notifications/stream")
         assert resp.status_code == 401
 
     def test_notification_service_wired_on_app_state(self) -> None:

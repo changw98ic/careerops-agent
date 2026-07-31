@@ -7,19 +7,19 @@ provider is NEVER called from the request path — ``sync-now`` records a
 durable sync run that a worker later drives; the route returns ``pending``.
 
 Routes:
-- GET   /api/v1/mail/account                       — connection status (11.7)
-- POST  /api/v1/mail/account/revoke                — revoke the account (11.2)
-- POST  /api/v1/mail/sync-now                      — record a sync run (11.3)
-- GET   /api/v1/mail/sync-history                  — cursor-paginated runs (11.10)
-- GET   /api/v1/mail/threads                       — thread summaries (11.7)
-- GET   /api/v1/mail/threads/{thread_id}/messages  — cursor-paginated messages
-- GET   /api/v1/mail/unresolved-links              — association queue (11.6)
-- POST  /api/v1/mail/unresolved-links/{link_id}/confirm — user resolution (11.6)
+- GET   /api/v1/candidates/{candidate_id}/mail/account                       — connection status (11.7)
+- POST  /api/v1/candidates/{candidate_id}/mail/account/revoke                — revoke the account (11.2)
+- POST  /api/v1/candidates/{candidate_id}/mail/sync-now                      — record a sync run (11.3)
+- GET   /api/v1/candidates/{candidate_id}/mail/sync-history                  — cursor-paginated runs (11.10)
+- GET   /api/v1/candidates/{candidate_id}/mail/threads                       — thread summaries (11.7)
+- GET   /api/v1/candidates/{candidate_id}/mail/threads/{thread_id}/messages  — cursor-paginated messages
+- GET   /api/v1/candidates/{candidate_id}/mail/unresolved-links              — association queue (11.6)
+- POST  /api/v1/candidates/{candidate_id}/mail/unresolved-links/{link_id}/confirm — user resolution (11.6)
 
 Iron rules honored:
 - Additive (Iron Rule 8): new paths only; no existing route touched.
-- Server-side ownership (Iron Rule 2 + 6): candidate resolved via
-  ``require_candidate_id``; not-owned -> 404 (no existence leak).
+- Path-supplied ownership (Iron Rule 2 + 6): candidate_id comes from the
+  request path; not-owned -> 404 (no existence leak).
 - Dependency-not-ready (Iron Rule 3/6): missing service -> 503.
 - Default-deny (Iron Rule 7): every route is gated on the GMAIL_READ
   capability, which stays DENIED at the contract layer until a separate
@@ -37,13 +37,11 @@ Iron rules honored:
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
-from careerops.api.auth_dependency import require_candidate_id
 from careerops.api.capability_dependency import require_capability, require_repository
 from careerops.application.mail_sync_service import (
     AccountNotConnectedError,
@@ -57,7 +55,7 @@ from careerops.application.mail_sync_service import (
 from careerops.orchestration.capability_resolver import CapabilityKind
 
 router = APIRouter(
-    prefix="/api/v1/mail",
+    prefix="/api/v1/candidates/{candidate_id}/mail",
     tags=["mail-sync"],
     # Iron Rule 7: GMAIL_READ stays DENIED at the contract layer. Every
     # Section-11 route is default-denied until a separate qualification change
@@ -157,7 +155,7 @@ def _translate(exc: Exception) -> HTTPException:
 def get_account_status(
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> AccountStatusResponse:
     """Return the dedicated recruiting-account connection status (11.1/11.7).
 
@@ -196,7 +194,7 @@ def get_account_status(
 def revoke_account(
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> RevokeResponse:
     """Revoke the candidate's recruiting account (task 11.2).
 
@@ -227,7 +225,7 @@ def revoke_account(
 def sync_now(
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     direction: str = Query("incremental", pattern="^(full|incremental|backfill)$"),
 ) -> SyncNowResponse:
     """Record a durable sync run (task 11.3). Returns ``pending`` immediately.
@@ -263,7 +261,7 @@ def sync_now(
 def list_sync_history(
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     cursor: str | None = None,
     limit: int = Query(_DEFAULT_LIMIT, ge=1, le=_MAX_LIMIT),
 ) -> dict[str, object]:
@@ -288,7 +286,7 @@ def list_sync_history(
 def list_threads(
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     cursor: str | None = None,
     limit: int = Query(_DEFAULT_LIMIT, ge=1, le=_MAX_LIMIT),
 ) -> dict[str, object]:
@@ -314,7 +312,7 @@ def list_thread_messages(
     thread_id: str,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     cursor: str | None = None,
     limit: int = Query(_DEFAULT_LIMIT, ge=1, le=_MAX_LIMIT),
 ) -> dict[str, object]:
@@ -336,7 +334,7 @@ def list_thread_messages(
 def list_unresolved_links(
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     cursor: str | None = None,
     limit: int = Query(_DEFAULT_LIMIT, ge=1, le=_MAX_LIMIT),
 ) -> dict[str, object]:
@@ -356,7 +354,7 @@ def confirm_link(
     body: ConfirmLinkRequest,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> ConfirmLinkResponse:
     """Record the user's resolution of an unresolved thread link (task 11.6).
 

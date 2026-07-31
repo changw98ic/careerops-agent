@@ -641,13 +641,15 @@ def create_app(
     app.include_router(crawl_plans_router, dependencies=[Depends(require_api_auth)])
     app.include_router(crawl_runs_router, dependencies=[Depends(require_api_auth)])
     app.include_router(crawl_permissions_router, dependencies=[Depends(require_api_auth)])
-    # Section-6 inbox router (tasks 6.7-6.8). Same auth guard; candidate
-    # ownership resolved server-side. Additive — no existing routes broken.
+    # Section-6 inbox router (tasks 6.7-6.8). Per-candidate path-param router
+    # (candidate_id in the path); same auth guard. Additive — no existing
+    # routes broken.
     app.include_router(inbox_router, dependencies=[Depends(require_api_auth)])
     app.include_router(agent_runs_router, dependencies=[Depends(require_api_auth)])
     app.include_router(agent_console_router, dependencies=[Depends(require_api_auth)])
-    # Phase 9: notification routes (SSE stream + recovery).  The SSE endpoint
-    # uses cookie auth without CSRF (GET-only, EventSource sends cookies).
+    # Phase 9: notification routes (SSE stream + recovery).  Per-candidate
+    # path-param router; the SSE endpoint uses cookie auth without CSRF
+    # (GET-only, EventSource sends cookies).
     app.include_router(notifications_router, dependencies=[Depends(require_api_auth)])
     # Section-7 application-workspace router (tasks 7.8). Additive paths only
     # (detail / prepare / channels / channel / package / timeline /
@@ -664,20 +666,20 @@ def create_app(
     # SYSTEM_MANAGED_SEND capability which stays DENIED at the contract layer.
     # Same auth guard; candidate ownership resolved server-side.
     app.include_router(system_send_router, dependencies=[Depends(require_api_auth)])
-    # Section-12 mail-intelligence router (tasks 12.5-12.6). Additive paths
-    # only (extract/proposal, list, get, accept, reject). Proposals are
-    # review-only; application state changes ONLY through the USER-sourced
-    # transition path on acceptance (Iron Rule 2). Same auth guard (CSRF on
-    # mutations); candidate ownership resolved server-side; responses carry
-    # Cache-Control: no-store.
+    # Section-12 mail-intelligence router (tasks 12.5-12.6). Per-candidate
+    # path-param router; additive paths only (extract/proposal, list, get,
+    # accept, reject). Proposals are review-only; application state changes
+    # ONLY through the USER-sourced transition path on acceptance (Iron Rule
+    # 2). Same auth guard (CSRF on mutations); candidate_id in the path;
+    # responses carry Cache-Control: no-store.
     app.include_router(mail_intelligence_router, dependencies=[Depends(require_api_auth)])
-    # Section-11 Gmail read-sync router (tasks 11.7, 11.10). Additive paths
-    # only (account status / sync-now / sync history / threads / messages /
-    # unresolved links / confirm link). Gated on the GMAIL_READ capability,
-    # which stays DENIED at the contract layer until a separate qualification
-    # change releases it (Iron Rule 7). Same auth guard (CSRF on mutations);
-    # candidate ownership resolved server-side; responses carry
-    # Cache-Control: no-store and bounded cursor pagination.
+    # Section-11 Gmail read-sync router (tasks 11.7, 11.10). Per-candidate
+    # path-param router; additive paths only (account status / sync-now /
+    # sync history / threads / messages / unresolved links / confirm link).
+    # Gated on the GMAIL_READ capability, which stays DENIED at the contract
+    # layer until a separate qualification change releases it (Iron Rule 7).
+    # Same auth guard (CSRF on mutations); candidate_id in the path;
+    # responses carry Cache-Control: no-store and bounded cursor pagination.
     app.include_router(mail_sync_router, dependencies=[Depends(require_api_auth)])
     # Section-13 reply-draft + follow-up router (tasks 13.7-13.8, 13.10).
     # Additive paths only (draft list/detail/create/edit/approve/reject/send +

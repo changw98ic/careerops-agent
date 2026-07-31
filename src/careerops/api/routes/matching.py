@@ -112,14 +112,19 @@ class MatchRequest(BaseModel):
 async def list_candidates(
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
     limit: int = Query(default=50, ge=1, le=200),
 ) -> CandidateListResponse:
+    """List all candidates (global selector source).
+
+    This is the global candidate list used by the frontend candidate selector.
+    It is deliberately NOT scoped to one candidate; post-auth-removal it no
+    longer resolves a candidate from the session.
+    """
     response.headers["Cache-Control"] = "no-store"
     repo = _get_matching_repository(request)
     if repo is None:
         return CandidateListResponse(items=[], total=0)
-    candidates = repo.list_candidates(limit=limit, candidate_id=candidate_id)
+    candidates = repo.list_candidates(limit=limit)
     items = [
         CandidateResponse(
             id=str(c["id"]),
@@ -137,17 +142,15 @@ async def list_candidates(
     summary="List candidate evidence",
 )
 async def list_candidate_evidence(
-    candidate_id: str,
+    candidate_id: UUID,
     request: Request,
     response: Response,
-    resolved_candidate_id: Annotated[UUID, Depends(require_candidate_id)],
 ) -> list[EvidenceItemResponse]:
     response.headers["Cache-Control"] = "no-store"
-    reject_candidate_substitution(provided=candidate_id, resolved=resolved_candidate_id)
     repo = _get_matching_repository(request)
     if repo is None:
         return []
-    items = repo.list_evidence(str(resolved_candidate_id))
+    items = repo.list_evidence(str(candidate_id))
     return [
         EvidenceItemResponse(
             id=str(e["id"]),

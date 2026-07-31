@@ -1,16 +1,17 @@
 """Inbox API routes (Section 6, tasks 6.7-6.8).
 
-Additive routes under /api/v1 for the job inbox projection:
-- GET  /api/v1/inbox                       — list inbox items (recommended/excluded/all)
-- GET  /api/v1/inbox/{job_id}              — job detail with evidence + filter reasons
-- POST /api/v1/inbox/{job_id}/favorite     — favorite a job (idempotent)
-- POST /api/v1/inbox/{job_id}/ignore       — ignore a job (idempotent)
-- POST /api/v1/inbox/{job_id}/snooze       — snooze until a future time
-- GET  /api/v1/inbox/{job_id}/excluded-reasons — blocking reasons with evidence refs
+Per-candidate routes under /api/v1/candidates/{candidate_id}/inbox for the job
+inbox projection:
+- GET  .../inbox                       — list inbox items (recommended/excluded/all)
+- GET  .../inbox/{job_id}              — job detail with evidence + filter reasons
+- POST .../inbox/{job_id}/favorite     — favorite a job (idempotent)
+- POST .../inbox/{job_id}/ignore       — ignore a job (idempotent)
+- POST .../inbox/{job_id}/snooze       — snooze until a future time
+- GET  .../inbox/{job_id}/excluded-reasons — blocking reasons with evidence refs
 
 Iron rules honored:
 - Additive API (Iron Rule 8): new routes, no existing routes broken.
-- Server-side ownership (Iron Rule 6): candidate resolved server-side.
+- Path-supplied ownership (Iron Rule 6): candidate_id comes from the path.
 - Dependency-not-ready (Iron Rule 6): missing repo -> 503.
 - Idempotent (Iron Rule 3): favorite/ignore are idempotent.
 - Default-deny (Iron Rule 7): CRAWL_PLAN_MANAGEMENT gate on every route.
@@ -24,13 +25,11 @@ Iron rules honored:
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from careerops.api.auth_dependency import require_candidate_id
 from careerops.api.capability_dependency import (
     require_capability,
     require_repository,
@@ -45,7 +44,7 @@ from careerops.domain.applications import ApplicationEventSource, ApplicationSta
 from careerops.orchestration.capability_resolver import CapabilityKind
 
 router = APIRouter(
-    prefix="/api/v1/inbox",
+    prefix="/api/v1/candidates/{candidate_id}/inbox",
     tags=["inbox"],
     # CRAWL_PLAN_MANAGEMENT gate on every route (Iron Rule 7).  The inbox
     # projection depends on crawl-plan provenance; the capability is released
@@ -135,7 +134,7 @@ def _get_inbox_repo(request: Request) -> object:
 @router.get("")
 def list_inbox(
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     tab: str = Query("recommended", pattern="^(recommended|excluded|all)$"),
     cursor: str | None = None,
     limit: int = Query(50, ge=1, le=200),
@@ -164,7 +163,7 @@ def list_inbox(
 def get_job_detail(
     job_id: str,
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> dict[str, object]:
     """Get job detail with evidence links, filter decision, requirement
     matches, application state, and snooze state."""
@@ -180,7 +179,7 @@ def get_job_detail(
 def get_excluded_reasons(
     job_id: str,
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> dict[str, object]:
     """Return blocking reasons with evidence refs for an excluded job.
 
@@ -199,7 +198,7 @@ def get_excluded_reasons(
 def favorite_job(
     job_id: str,
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> FavoriteIgnoreResponse:
     """Favorite a job (idempotent).
 
@@ -280,7 +279,7 @@ def favorite_job(
 def ignore_job(
     job_id: str,
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> FavoriteIgnoreResponse:
     """Ignore a job (idempotent).
 
@@ -369,7 +368,7 @@ def snooze_job(
     job_id: str,
     body: SnoozeRequest,
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> SnoozeResponse:
     """Snooze a job until a future time (idempotent).
 

@@ -47,6 +47,30 @@ def test_trigger_workflows_accept_the_schedule_arg() -> None:
         assert params, f"{cls.__name__}.run must accept the schedule arg (got none)"
 
 
+def test_trigger_workflow_module_does_not_import_activities() -> None:
+    """The workflow module must stay out of the heavy ``activities`` import graph.
+
+    Found in live verification: importing ``activities`` (top-level or lazily
+    inside ``run``) trips the Temporal workflow sandbox
+    (``RestrictedWorkflowAccessError`` on urllib) at execution time, and a
+    top-level import also cycles through the worker. The activity-name strings
+    are local constants instead.
+    """
+    import sys
+
+    # Ensure a clean import of the workflow module.
+    for mod in list(sys.modules):
+        if mod.startswith("careerops.workflows.loop_trigger_workflows"):
+            del sys.modules[mod]
+
+    import careerops.workflows.loop_trigger_workflows as ltw  # noqa: F401
+
+    assert "careerops.infrastructure.temporal.activities" not in sys.modules, (
+        "loop_trigger_workflows pulled in the activities module -- this breaks "
+        "the Temporal workflow sandbox at execution time"
+    )
+
+
 def test_build_worker_registers_trigger_workflows(monkeypatch) -> None:
     import careerops.infrastructure.temporal.worker as worker_mod
 

@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, Field
 
 from careerops.api.capability_dependency import require_repository
@@ -91,6 +91,7 @@ def _evidence_service(request: Request) -> EvidenceService:
 def list_evidence(
     candidate_id: UUID,
     service: Annotated[EvidenceService, Depends(_evidence_service)],
+    response: Response,
     status: Annotated[str | None, Query(description="Filter by confirmation status")] = None,
     limit: int = 200,
 ) -> EvidenceListResponse:
@@ -108,6 +109,7 @@ def list_evidence(
                 "expected one of: unconfirmed, confirmed, rejected"
             ) from None
     items = service.list_for_candidate(candidate_id, status=status_filter, limit=limit)
+    response.headers["Cache-Control"] = "no-store"
     return EvidenceListResponse(
         items=[_to_response(i) for i in items],
         total=len(items),
@@ -119,8 +121,10 @@ def get_evidence(
     evidence_id: UUID,
     candidate_id: UUID,
     service: Annotated[EvidenceService, Depends(_evidence_service)],
+    response: Response,
 ) -> EvidenceItemResponse:
     item = service.get(candidate_id, evidence_id)
+    response.headers["Cache-Control"] = "no-store"
     return _to_response(item)
 
 

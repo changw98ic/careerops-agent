@@ -34,6 +34,7 @@ from careerops.api.routes.notifications import router as notifications_router
 from careerops.api.routes.profile import router as profile_router
 from careerops.api.routes.reply_drafts import router as reply_drafts_router
 from careerops.api.routes.resumes import router as resumes_router
+from careerops.api.routes.review import install_review_endpoint
 from careerops.api.routes.smart_intake import router as smart_intake_router
 from careerops.api.routes.system_send import router as system_send_router
 from careerops.application.ports.readiness import ReadinessProbe
@@ -651,10 +652,27 @@ def create_app(
     # responses carry Cache-Control: no-store and bounded cursor pagination.
     app.include_router(reply_drafts_router)
 
-    # The review endpoint (plan v0.4 §2.7 / §3 Stage 3) is NOT mounted here
-    # anymore: it was the last consumer of the session/CSRF auth stack being
-    # removed (auth-rm Task 9). Task 10 re-adapts install_review_endpoint to
-    # the post-login world and re-mounts it.
+    # Review endpoint (plan v0.4 §2.7 / §3 Stage 3): the human fallback for
+    # A/B-escalated approvals. Mounted when the runtime actually compiled the
+    # graph, non-PRODUCTION only. The console login is gone (auth-rm Task 9),
+    # so the endpoint trusts the loopback reviewer: decisions are recorded with
+    # the fixed actor "local-reviewer" (actor_type=USER) under the per-actor
+    # Redis rate limit, and the kernel still enforces the approval owner
+    # binding at decision time.
+    if (
+        resolved.environment is not RuntimeEnvironment.PRODUCTION
+        and isinstance(probe, RuntimeResources)
+        and probe.career_graph is not None
+        and probe.review_mapping is not None
+        and probe.side_effect_kernel is not None
+    ):
+        install_review_endpoint(
+            app,
+            rate_limiter=RedisAuthRateLimiter(probe.redis_sync),
+            review_mapping=probe.review_mapping,
+            career_graph=probe.career_graph,
+            side_effect_kernel=probe.side_effect_kernel,
+        )
     # -----------------------------------------------------------------------
     # OpenAPI: declare standard error responses on every path
     # -----------------------------------------------------------------------

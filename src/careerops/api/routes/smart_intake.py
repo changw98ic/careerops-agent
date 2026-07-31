@@ -19,7 +19,6 @@ from pydantic import (
 )
 
 from careerops.api.errors import (
-    CSRFRejectedError,
     DependencyNotReadyError,
     SmartIntakeDisabledError,
 )
@@ -30,7 +29,6 @@ from careerops.application.smart_intake import (
     SmartPreviewResult,
 )
 from careerops.orchestration.capability_resolver import CapabilityKind
-from careerops.web.security import OriginHostValidator, RequestOriginRejected
 
 # Audit actor for the local single-user console (post login-removal). There is
 # no session principal; the smart-intake audit trail records this constant.
@@ -182,7 +180,6 @@ async def get_capability(
     candidate_id: UUID,
 ) -> SmartIntakeCapabilityResponse:
     del candidate_id
-    _validate_host(request)
     resolver = getattr(request.app.state, "capability_resolver", None)
     if resolver is None:
         raise DependencyNotReadyError("capability resolver is not wired")
@@ -243,9 +240,7 @@ async def get_preview(
     response: Response,
     candidate_id: UUID,
 ) -> SmartIntakePreviewResponse:
-    # GET does not need an Origin header, but a configured console still gets a
-    # strict Host check. Cross-candidate access is resolved by the service.
-    _validate_host(request)
+    # Cross-candidate access is resolved by the service.
     result = _service(request).get_preview(candidate_id, preview_id)
     response.headers["Cache-Control"] = "no-store"
     return _to_response(result)
@@ -290,7 +285,6 @@ def _service(request: Request) -> SmartIntakeService:
 
 
 def _authorize(request: Request, candidate_id: UUID, *, consume_rate_limit: bool) -> None:
-    _validate_mutation_origin(request)
     resolver = getattr(request.app.state, "capability_resolver", None)
     if resolver is None:
         raise DependencyNotReadyError("capability resolver is not wired")
@@ -301,26 +295,6 @@ def _authorize(request: Request, candidate_id: UUID, *, consume_rate_limit: bool
         limiter = getattr(request.app.state, "smart_intake_rate_limiter", None)
         if limiter is None:
             raise DependencyNotReadyError("smart intake rate limiter is not wired")
-
-
-def _validate_host(request: Request) -> None:
-    settings = getattr(request.app.state, "web_settings", None)
-    if settings is None:
-        return
-    try:
-        OriginHostValidator(settings).validate_host(request)
-    except RequestOriginRejected:
-        raise CSRFRejectedError() from None
-
-
-def _validate_mutation_origin(request: Request) -> None:
-    settings = getattr(request.app.state, "web_settings", None)
-    if settings is None:
-        return
-    try:
-        OriginHostValidator(settings).validate_mutation(request)
-    except RequestOriginRejected:
-        raise CSRFRejectedError() from None
 
 
 def _to_response(result: SmartPreviewResult) -> SmartIntakePreviewResponse:

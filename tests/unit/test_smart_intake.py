@@ -546,7 +546,6 @@ def test_api_gate_fails_closed_when_wiring_or_capability_is_missing() -> None:
             state=SimpleNamespace(
                 capability_resolver=Resolver(True),
                 smart_intake_rate_limiter=None,
-                web_settings=None,
             )
         )
     )
@@ -558,7 +557,6 @@ def test_api_gate_fails_closed_when_wiring_or_capability_is_missing() -> None:
             state=SimpleNamespace(
                 capability_resolver=Resolver(False),
                 smart_intake_rate_limiter=object(),
-                web_settings=None,
             )
         )
     )

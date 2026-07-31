@@ -1,16 +1,15 @@
-"""Review endpoint security + lifecycle tests (plan v0.4 §2.7 / §5 Stage 3).
+"""Review endpoint lifecycle tests (plan v0.4 §2.7 / §5 Stage 3).
 
-Verifies the full gate chain on ``POST /api/v1/review/{approval_id}``:
+Verifies the post-login ``POST /api/v1/review/{approval_id}`` behavior
+(auth-rm Task 10: the session/CSRF/origin gates are gone; the endpoint trusts
+the loopback reviewer):
 
-- unauthenticated -> 401
-- missing/wrong CSRF -> 403
-- wrong Origin -> 403
-- owner mismatch (``requested_for`` != authenticated user) -> 403
 - rate limited -> 429
 - duplicate decision (same action re-submitted) -> 200 cached
 - conflicting decision (different action on a completed approval) -> 409
+- approval records the fixed ``local-reviewer`` actor (actor_type=USER)
 - PRODUCTION does not mount the router -> 404
-- edit flow re-interrupts on a new approval
+- edit flow records a reject and does not send
 
 Also covers ``SettingsCapabilityResolver`` (the v1 production resolver): trusted
 facts are derived from settings + draft state, evidence stays non-empty, and the
@@ -18,13 +17,12 @@ resource id is deterministic.
 
 The graph is driven to ``review_gate`` with the production
 ``SettingsCapabilityResolver`` so the endpoint test exercises the real
-authorization chain end-to-end (capability -> policy -> approval -> interrupt ->
-resume -> send).
+authorization chain end-to-end (capability -> policy -> approval -> send).
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import FastAPI
@@ -33,13 +31,11 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from careerops.api.app import create_app
 from careerops.api.routes.review import install_review_endpoint
+from careerops.application.audit import AuditActorType
 from careerops.application.side_effect_kernel import SideEffectKernel
 from careerops.auth.contracts import (
     AuthAction,
-    AuthenticatedPrincipal,
     AuthRateLimiter,
-    CsrfRejected,
-    InvalidSession,
 )
 from careerops.config import RuntimeEnvironment, Settings
 from careerops.domain.side_effects import ApprovalDecision
@@ -54,44 +50,16 @@ from careerops.orchestration import (
     build_graph,
 )
 from careerops.orchestration.capability_resolver import SettingsCapabilityResolver
-from careerops.web import ConsoleWebSettings
 
 NOW = datetime(2026, 7, 24, 12, 0, 0, tzinfo=UTC)
 USER_ID = UUID("00000000-0000-0000-0000-000000000001")
-OTHER_USER_ID = UUID("00000000-0000-0000-0000-000000000002")
-SESSION_TOKEN = "authenticated-session"
-CSRF_TOKEN = "authenticated-csrf"
 THREAD_ID = "t-review-endpoint"
-WEB_SETTINGS = ConsoleWebSettings(
-    allowed_hosts=frozenset({"testserver"}),
-    allowed_origins=frozenset({"http://testserver"}),
-)
+REVIEWER_ACTOR = "local-reviewer"
 
 
 # ---------------------------------------------------------------------------
 # Inline fixtures (no conftest)
 # ---------------------------------------------------------------------------
-
-
-class StubAuthService:
-    """Authenticates exactly one principal; CSRF token is a known constant."""
-
-    def authenticate(self, session_token: str, *, now: datetime) -> AuthenticatedPrincipal:
-        del now
-        if session_token != SESSION_TOKEN:
-            raise InvalidSession("invalid session")
-        return AuthenticatedPrincipal(
-            user_id=USER_ID,
-            username="owner",
-            session_id=UUID("00000000-0000-0000-0000-000000000011"),
-            csrf_token_hash="not-exposed",
-            absolute_expires_at=NOW + timedelta(days=7),
-        )
-
-    def validate_csrf(self, principal: AuthenticatedPrincipal, csrf_token: str) -> None:
-        del principal
-        if csrf_token != CSRF_TOKEN:
-            raise CsrfRejected("bad csrf")
 
 
 class AllowAllRateLimiter:
@@ -195,108 +163,25 @@ def _make_client(
     review_mapping: InMemoryReviewMappingStore,
     *,
     rate_limiter: AuthRateLimiter | None = None,
-    auth_service: object | None = None,
 ) -> TestClient:
     app = FastAPI()
     install_review_endpoint(
         app,
-        auth_service=(auth_service or StubAuthService()),  # type: ignore[arg-type]
         rate_limiter=rate_limiter or AllowAllRateLimiter(),
         review_mapping=review_mapping,
         career_graph=graph,
         side_effect_kernel=kernel,
-        web_settings=WEB_SETTINGS,
         now_provider=lambda: NOW,
     )
     return TestClient(app, follow_redirects=False)
 
 
-def _auth_post(
+def _review_post(
     client: TestClient,
     approval_id: str,
     payload: dict[str, object],
-    *,
-    csrf: str = CSRF_TOKEN,
-    origin: str = "http://testserver",
-    session: str = SESSION_TOKEN,
 ) -> TestClient.post:  # type: ignore[name-defined]
-    return client.post(
-        f"/api/v1/review/{approval_id}",
-        json=payload,
-        cookies={"careerops_session": session},
-        headers={"X-CSRF-Token": csrf, "Origin": origin},
-    )
-
-
-# ---------------------------------------------------------------------------
-# Auth / CSRF / origin gates
-# ---------------------------------------------------------------------------
-
-
-class TestAuthenticationAndOrigin:
-    def test_unauthenticated_returns_401(self) -> None:
-        graph, kernel, mapping = _build_stack()
-        ids = _drive_to_review(graph, thread_id=THREAD_ID, requested_for=str(USER_ID))
-        client = _make_client(graph, kernel, mapping)
-
-        response = client.post(f"/api/v1/review/{ids['approval_id']}", json={"action": "approve"})
-
-        assert response.status_code == 401
-        assert response.json()["error"] == "authentication required"
-
-    def test_missing_csrf_returns_403(self) -> None:
-        graph, kernel, mapping = _build_stack()
-        ids = _drive_to_review(graph, thread_id=THREAD_ID, requested_for=str(USER_ID))
-        client = _make_client(graph, kernel, mapping)
-
-        response = client.post(
-            f"/api/v1/review/{ids['approval_id']}",
-            json={"action": "approve"},
-            cookies={"careerops_session": SESSION_TOKEN},
-            headers={"Origin": "http://testserver"},
-        )
-
-        assert response.status_code == 403
-        assert "csrf" in response.json()["error"]
-
-    def test_wrong_csrf_returns_403(self) -> None:
-        graph, kernel, mapping = _build_stack()
-        ids = _drive_to_review(graph, thread_id=THREAD_ID, requested_for=str(USER_ID))
-        client = _make_client(graph, kernel, mapping)
-
-        response = _auth_post(client, ids["approval_id"], {"action": "approve"}, csrf="bad-token")
-
-        assert response.status_code == 403
-
-    def test_wrong_origin_returns_403(self) -> None:
-        graph, kernel, mapping = _build_stack()
-        ids = _drive_to_review(graph, thread_id=THREAD_ID, requested_for=str(USER_ID))
-        client = _make_client(graph, kernel, mapping)
-
-        response = _auth_post(
-            client, ids["approval_id"], {"action": "approve"}, origin="https://evil.example"
-        )
-
-        assert response.status_code == 403
-        assert "origin" in response.json()["error"]
-
-
-# ---------------------------------------------------------------------------
-# Owner check
-# ---------------------------------------------------------------------------
-
-
-class TestOwnerCheck:
-    def test_owner_mismatch_returns_403(self) -> None:
-        graph, kernel, mapping = _build_stack()
-        # The thread belongs to OTHER_USER; the authenticated principal is USER.
-        ids = _drive_to_review(graph, thread_id=THREAD_ID, requested_for=str(OTHER_USER_ID))
-        client = _make_client(graph, kernel, mapping)
-
-        response = _auth_post(client, ids["approval_id"], {"action": "approve"})
-
-        assert response.status_code == 403
-        assert "different user" in response.json()["error"]
+    return client.post(f"/api/v1/review/{approval_id}", json=payload)
 
 
 # ---------------------------------------------------------------------------
@@ -310,24 +195,24 @@ class TestRateLimit:
         ids = _drive_to_review(graph, thread_id=THREAD_ID, requested_for=str(USER_ID))
         client = _make_client(graph, kernel, mapping, rate_limiter=DenyAllRateLimiter())
 
-        response = _auth_post(client, ids["approval_id"], {"action": "approve"})
+        response = _review_post(client, ids["approval_id"], {"action": "approve"})
 
         assert response.status_code == 429
         assert "rate limit" in response.json()["error"]
 
-    def test_rate_limiter_keys_on_review_action_and_user(self) -> None:
+    def test_rate_limiter_keys_on_review_action(self) -> None:
         graph, kernel, mapping = _build_stack()
         ids = _drive_to_review(graph, thread_id=THREAD_ID, requested_for=str(USER_ID))
         limiter = AllowAllRateLimiter()
         client = _make_client(graph, kernel, mapping, rate_limiter=limiter)
 
-        _auth_post(client, ids["approval_id"], {"action": "approve"})
+        _review_post(client, ids["approval_id"], {"action": "approve"})
 
         assert limiter.seen_actions == [AuthAction.REVIEW]  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------
-# Decision lifecycle: approve / duplicate / conflict
+# Decision lifecycle: approve / duplicate / conflict / audit actor
 # ---------------------------------------------------------------------------
 
 
@@ -337,7 +222,7 @@ class TestDecisionLifecycle:
         ids = _drive_to_review(graph, thread_id=THREAD_ID, requested_for=str(USER_ID))
         client = _make_client(graph, kernel, mapping)
 
-        response = _auth_post(client, ids["approval_id"], {"action": "approve"})
+        response = _review_post(client, ids["approval_id"], {"action": "approve"})
 
         assert response.status_code == 200
         body = response.json()
@@ -346,13 +231,32 @@ class TestDecisionLifecycle:
         assert body["approval_id"] == ids["approval_id"]
         assert body["receipt"]["final_state"] == "confirmed"
 
+    def test_approve_records_local_reviewer_actor(self) -> None:
+        """The loopback reviewer's approval is audited as USER/local-reviewer."""
+        graph, kernel, mapping = _build_stack()
+        ids = _drive_to_review(graph, thread_id=THREAD_ID, requested_for=str(USER_ID))
+        client = _make_client(graph, kernel, mapping)
+
+        response = _review_post(client, ids["approval_id"], {"action": "approve"})
+
+        assert response.status_code == 200
+        replay = kernel.replay(UUID(ids["intent_id"]))
+        approved = [
+            event
+            for event in replay.audit_events
+            if event.event_type == "side_effect_approved"
+        ]
+        assert len(approved) == 1
+        assert approved[0].actor_type is AuditActorType.USER
+        assert approved[0].actor_id == REVIEWER_ACTOR
+
     def test_duplicate_approve_returns_cached_200(self) -> None:
         graph, kernel, mapping = _build_stack()
         ids = _drive_to_review(graph, thread_id=THREAD_ID, requested_for=str(USER_ID))
         client = _make_client(graph, kernel, mapping)
 
-        first = _auth_post(client, ids["approval_id"], {"action": "approve"})
-        second = _auth_post(client, ids["approval_id"], {"action": "approve"})
+        first = _review_post(client, ids["approval_id"], {"action": "approve"})
+        second = _review_post(client, ids["approval_id"], {"action": "approve"})
 
         assert first.status_code == 200
         assert second.status_code == 200
@@ -364,8 +268,8 @@ class TestDecisionLifecycle:
         ids = _drive_to_review(graph, thread_id=THREAD_ID, requested_for=str(USER_ID))
         client = _make_client(graph, kernel, mapping)
 
-        approve = _auth_post(client, ids["approval_id"], {"action": "approve"})
-        reject = _auth_post(client, ids["approval_id"], {"action": "reject"})
+        approve = _review_post(client, ids["approval_id"], {"action": "approve"})
+        reject = _review_post(client, ids["approval_id"], {"action": "reject"})
 
         assert approve.status_code == 200
         assert reject.status_code == 409
@@ -378,8 +282,8 @@ class TestDecisionLifecycle:
         ids = _drive_to_review(graph, thread_id=THREAD_ID, requested_for=str(USER_ID))
         client = _make_client(graph, kernel, mapping)
 
-        first = _auth_post(client, ids["approval_id"], {"action": "reject"})
-        second = _auth_post(client, ids["approval_id"], {"action": "reject"})
+        first = _review_post(client, ids["approval_id"], {"action": "reject"})
+        second = _review_post(client, ids["approval_id"], {"action": "reject"})
 
         assert first.status_code == 200
         assert first.json()["decision"] == "rejected"
@@ -390,7 +294,7 @@ class TestDecisionLifecycle:
         graph, kernel, mapping = _build_stack()
         client = _make_client(graph, kernel, mapping)
 
-        response = _auth_post(client, "00000000-0000-0000-0000-000000000099", {"action": "approve"})
+        response = _review_post(client, "00000000-0000-0000-0000-000000000099", {"action": "approve"})
 
         assert response.status_code == 404
 
@@ -410,7 +314,7 @@ class TestEditFlow:
         drafts = graph.get_state(cfg).values.get("drafts")  # type: ignore[attr-defined]
         draft_id = drafts[0]["id"]  # type: ignore[index]
 
-        response = _auth_post(
+        response = _review_post(
             client,
             ids["approval_id"],
             {

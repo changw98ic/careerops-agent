@@ -7,10 +7,8 @@ sections 3 and 3.1.
 Routes are per-candidate (``/api/v1/candidates/{candidate_id}/...``); the
 ``candidate_id`` path parameter is used for ownership scoping.
 
-Every mutation requires:
-- candidate-scoped auth (via ``require_api_auth`` at the router mount),
-- CSRF + Origin validation (via ``_validate_mutation_origin``),
-- ``Idempotency-Key`` header.
+Every mutation requires an ``Idempotency-Key`` header (the session/CSRF
+auth layer was removed with the console login, auth-rm Task 9).
 
 Every response containing candidate content sets
 ``Cache-Control: no-store`` and ``Pragma: no-cache``.
@@ -53,12 +51,11 @@ from careerops.agent_console.contracts import (
 )
 from careerops.api.errors import (
     CareerOpsHTTPException,
-    CSRFRejectedError,
     NotFoundError,
 )
 from careerops.application.audit import AuditActorType, AuditEventDraft
+from careerops.config import Settings
 from careerops.observability import current_trace_id
-from careerops.web.security import OriginHostValidator, RequestOriginRejected
 
 router = APIRouter(prefix="/api/v1/candidates/{candidate_id}", tags=["agent-console"])
 _log = logging.getLogger("careerops.api.agent_console")
@@ -117,26 +114,6 @@ class _PrerequisiteBlocked(CareerOpsHTTPException):
         super().__init__(message=message or self.message_default, **kwargs)  # type: ignore[arg-type]
 
 
-def _validate_host(request: Request) -> None:
-    settings = getattr(request.app.state, "web_settings", None)
-    if settings is None:
-        return
-    try:
-        OriginHostValidator(settings).validate_host(request)
-    except RequestOriginRejected:
-        raise CSRFRejectedError() from None
-
-
-def _validate_mutation_origin(request: Request) -> None:
-    settings = getattr(request.app.state, "web_settings", None)
-    if settings is None:
-        return
-    try:
-        OriginHostValidator(settings).validate_mutation(request)
-    except RequestOriginRejected:
-        raise CSRFRejectedError() from None
-
-
 def _get_action_projection(request: Request) -> ActionProjectionBuilder:
     builder = getattr(request.app.state, "action_projection", None)
     if builder is None:
@@ -162,17 +139,24 @@ def _get_preflight_service(request: Request) -> PreflightService:
             ProviderPolicy,
         )
 
-        # Wire the CapabilityResolver when Settings are available.
+        # Wire the CapabilityResolver from the app Settings (create_app sets
+        # app.state.settings; the old web_settings is gone with the login
+        # removal). The resolver must never stay None: PreflightService
+        # otherwise defaults to ENABLED (fail-open). When no Settings are on
+        # the app, a default Settings still fails closed — model_provider
+        # defaults to "disabled", so CapabilityResolver resolves every
+        # operation to NOT_CONFIGURED.
         capability_svc_resolver = getattr(request.app.state, "capability_svc_resolver", None)
         if capability_svc_resolver is None:
-            settings = getattr(request.app.state, "web_settings", None)
+            settings = getattr(request.app.state, "settings", None)
             orch_resolver = getattr(request.app.state, "capability_resolver", None)
-            if settings is not None:
-                capability_svc_resolver = CapabilityResolver(
-                    settings,
-                    capability_resolver=orch_resolver,
-                )
-                request.app.state.capability_svc_resolver = capability_svc_resolver
+            if settings is None:
+                settings = Settings(_env_file=None)  # pyright: ignore[reportCallIssue]
+            capability_svc_resolver = CapabilityResolver(
+                settings,
+                capability_resolver=orch_resolver,
+            )
+            request.app.state.capability_svc_resolver = capability_svc_resolver
 
         # Wire the egress guard.
         egress_guard = getattr(request.app.state, "egress_guard", None)
@@ -285,7 +269,6 @@ async def list_actions(
     limit: int = Query(default=3, ge=1, le=3),
 ) -> ActionPage:
     """GET .../agent-console/actions -- action queue (hard cap limit=3)."""
-    _validate_host(request)
     # Enforce hard cap of 3 per contract.
     effective_limit = min(limit, 3)
     del effective_limit  # builder enforces internally
@@ -316,7 +299,6 @@ async def accept_action(
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> ActionReceipt:
     """POST .../agent-console/actions/{action_key}/accept."""
-    _validate_mutation_origin(request)
     _validate_idempotency_key(idempotency_key)
     body_hash = _compute_body_hash(body)
     cached = _check_idempotency(idempotency_key, body_hash)
@@ -372,7 +354,6 @@ async def snooze_action(
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> ActionReceipt:
     """POST .../agent-console/actions/{action_key}/snooze."""
-    _validate_mutation_origin(request)
     _validate_idempotency_key(idempotency_key)
     body_hash = _compute_body_hash(body)
     cached = _check_idempotency(idempotency_key, body_hash)
@@ -428,7 +409,6 @@ async def dismiss_action(
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> ActionReceipt:
     """POST .../agent-console/actions/{action_key}/dismiss."""
-    _validate_mutation_origin(request)
     _validate_idempotency_key(idempotency_key)
     body_hash = _compute_body_hash(body)
     cached = _check_idempotency(idempotency_key, body_hash)
@@ -484,7 +464,6 @@ async def complete_action(
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> ActionReceipt:
     """POST .../agent-console/actions/{action_key}/complete."""
-    _validate_mutation_origin(request)
     _validate_idempotency_key(idempotency_key)
     body_hash = _compute_body_hash(body)
     cached = _check_idempotency(idempotency_key, body_hash)
@@ -539,7 +518,6 @@ async def create_context(
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> Context:
     """POST .../agent-console/contexts -- create context (201)."""
-    _validate_mutation_origin(request)
     _validate_idempotency_key(idempotency_key)
     body_hash = _compute_body_hash(body)
     cached = _check_idempotency(idempotency_key, body_hash)
@@ -573,7 +551,6 @@ async def get_context(
     candidate_id: UUID,
 ) -> Context:
     """GET .../agent-console/contexts/{context_id} -- read context."""
-    _validate_host(request)
     ctx_svc = _get_context_service(request)
     context = ctx_svc.get(candidate_id, context_id)
     response.headers["Cache-Control"] = "no-store"
@@ -589,7 +566,6 @@ async def get_agent_capability(
     operation: Annotated[ModelOperation, Query(...)],
 ) -> Capability:
     """GET .../capabilities/agent?operation= -- capability resolution."""
-    _validate_host(request)
     pflt_svc = _get_preflight_service(request)
     capability = pflt_svc.resolve_capability(candidate_id, operation)
     response.headers["Cache-Control"] = "no-store"
@@ -606,7 +582,6 @@ async def create_preflight(
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> Preflight:
     """POST .../agent-console/preflight -- model preflight."""
-    _validate_mutation_origin(request)
     _validate_idempotency_key(idempotency_key)
     body_hash = _compute_body_hash(body)
     cached = _check_idempotency(idempotency_key, body_hash)

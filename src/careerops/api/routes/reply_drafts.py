@@ -1,30 +1,30 @@
 """Reply drafting + follow-up API routes (Section 13, tasks 13.7 / 13.10).
 
-Additive routes under /api/v1 that expose the reply-draft review surface and
-the follow-up reminder actions. A reply draft is created review-only; the user
-approves or rejects it, and ONLY an approved low-risk reply may be sent through
-the system-managed delivery chain (reused from Section 10). High-risk
-categories are permanently denied system send; auto-send is permanently denied
-for every reply (Iron Rule 2 / 7).
+Additive routes under /api/v1/candidates/{candidate_id} that expose the
+reply-draft review surface and the follow-up reminder actions. A reply draft is
+created review-only; the user approves or rejects it, and ONLY an approved
+low-risk reply may be sent through the system-managed delivery chain (reused
+from Section 10). High-risk categories are permanently denied system send;
+auto-send is permanently denied for every reply (Iron Rule 2 / 7).
 
 Routes:
 
-- POST /api/v1/reply/drafts                       — assemble context + create draft
-- GET  /api/v1/reply/drafts                       — list drafts (cursor, no-store)
-- GET  /api/v1/reply/drafts/{draft_id}            — draft detail (ownership)
-- POST /api/v1/reply/drafts/{draft_id}/edit       — body edit -> new version
-- POST /api/v1/reply/drafts/{draft_id}/approve    — approve (ownership, CSRF)
-- POST /api/v1/reply/drafts/{draft_id}/reject     — reject (ownership, idempotent)
-- POST /api/v1/reply/drafts/{draft_id}/send       — user-confirmed send (13.6)
-- GET  /api/v1/reply/drafts/{draft_id}/send-status— idempotent send status
-- POST /api/v1/applications/{app_id}/follow-ups   — schedule trigger-aware reminder
-- GET  /api/v1/applications/{app_id}/follow-ups   — list active reminder
-- POST /api/v1/follow-ups/{reminder_id}/{action}  — snooze/reschedule/cancel/complete
+- POST /api/v1/candidates/{candidate_id}/reply/drafts                       — assemble context + create draft
+- GET  /api/v1/candidates/{candidate_id}/reply/drafts                       — list drafts (cursor, no-store)
+- GET  /api/v1/candidates/{candidate_id}/reply/drafts/{draft_id}            — draft detail (ownership)
+- POST /api/v1/candidates/{candidate_id}/reply/drafts/{draft_id}/edit       — body edit -> new version
+- POST /api/v1/candidates/{candidate_id}/reply/drafts/{draft_id}/approve    — approve (ownership)
+- POST /api/v1/candidates/{candidate_id}/reply/drafts/{draft_id}/reject     — reject (ownership, idempotent)
+- POST /api/v1/candidates/{candidate_id}/reply/drafts/{draft_id}/send       — user-confirmed send (13.6)
+- GET  /api/v1/candidates/{candidate_id}/reply/drafts/{draft_id}/send-status— idempotent send status
+- POST /api/v1/candidates/{candidate_id}/applications/{app_id}/follow-ups   — schedule trigger-aware reminder
+- GET  /api/v1/candidates/{candidate_id}/applications/{app_id}/follow-ups   — list active reminder
+- POST /api/v1/candidates/{candidate_id}/follow-ups/{reminder_id}/{action}  — snooze/reschedule/cancel/complete
 
 Iron rules honored:
 - Additive (Iron Rule 8): new paths only; no existing route touched.
-- Server-side ownership (Iron Rule 2 + 6): candidate resolved via
-  ``require_candidate_id``; not-owned -> 404 (no existence leak).
+- Server-side ownership (Iron Rule 2 + 6): candidate supplied by the path;
+  not-owned -> 404 (no existence leak).
 - Dependency-not-ready (Iron Rule 3/6): missing service -> 503.
 - Default-deny (Iron Rule 7): the router is gated on the released-by-default
   CRAWL_PLAN_MANAGEMENT capability (reply work is downstream of crawl + mail
@@ -40,13 +40,11 @@ Iron rules honored:
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
-from careerops.api.auth_dependency import require_candidate_id
 from careerops.api.capability_dependency import require_capability, require_repository
 from careerops.application.reply_draft_service import (
     DuplicateFollowUpError,
@@ -73,7 +71,7 @@ from careerops.domain.reply_draft import (
 from careerops.orchestration.capability_resolver import CapabilityKind
 
 router = APIRouter(
-    prefix="/api/v1",
+    prefix="/api/v1/candidates/{candidate_id}",
     tags=["reply-draft-follow-up"],
     # Reply work is downstream of crawl + mail provenance and performs NO
     # external writes itself (the send delegates to the Section 10 chain).
@@ -405,7 +403,7 @@ def _send_outcome_to_response(draft_id: UUID, outcome: ReplySendOutcome) -> Send
 def list_drafts(
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     application_id: str | None = None,
     state: str | None = Query(
         None, pattern="^(draft|pending_review|approved|rejected|expired|superseded)$"
@@ -436,7 +434,7 @@ def list_drafts(
 def get_draft(
     draft_id: str,
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> DraftResponse:
     """Return a reply-draft detail (ownership-scoped)."""
     service = _draft_service(request)
@@ -452,7 +450,7 @@ def create_draft(
     body: DraftCreateRequest,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> DraftResponse:
     """Assemble the constrained context + create a DRAFT reply (tasks 13.3/13.4).
 
@@ -514,7 +512,7 @@ def edit_draft(
     body: DraftEditRequest,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> DraftResponse:
     """Apply a body/subject/claims edit as a NEW version (task 13.5).
 
@@ -553,7 +551,7 @@ def approve_draft(
     draft_id: str,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> DraftResponse:
     """Approve a reply draft after validating preconditions (task 13.5).
 
@@ -576,7 +574,7 @@ def reject_draft(
     draft_id: str,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> DraftResponse:
     """Reject a reply draft (task 13.5). Idempotent; no provider write."""
     service = _draft_service(request)
@@ -596,7 +594,7 @@ def send_draft(
     body: DraftSendRequest,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> SendStatusResponse:
     """Send an approved reply through Section 10's delivery chain (task 13.6).
 
@@ -622,7 +620,7 @@ def send_draft(
 def get_send_status(
     draft_id: str,
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> SendStatusResponse:
     """Idempotent read of the reply send phase (task 13.6 / 13.10)."""
     service = _draft_service(request)
@@ -640,7 +638,7 @@ def get_send_status(
 
 @router.get("/reply/follow-up-rules")
 def get_follow_up_rules(
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> FollowUpRulesResponse:
     """Return the active follow-up rule version + default waiting periods."""
     from careerops.domain.reply_draft import FOLLOW_UP_RULE_VERSION_S13
@@ -659,7 +657,7 @@ def list_follow_ups(
     application_id: str,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> FollowUpListResponse:
     """List follow-up reminders for the application (ownership-scoped)."""
     service = _follow_up_service(request)
@@ -680,7 +678,7 @@ def schedule_follow_up(
     body: FollowUpScheduleRequest,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> FollowUpResponse:
     """Schedule a trigger-aware follow-up reminder (tasks 13.1 / 13.2).
 
@@ -716,7 +714,7 @@ def snooze_follow_up(
     body: FollowUpSnoozeRequest,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> FollowUpResponse:
     """Snooze an active follow-up reminder (task 13.2)."""
     service = _follow_up_service(request)
@@ -741,7 +739,7 @@ def reschedule_follow_up(
     body: FollowUpRescheduleRequest,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> FollowUpResponse:
     """Reschedule an active/snoozed follow-up reminder (task 13.2)."""
     service = _follow_up_service(request)
@@ -766,7 +764,7 @@ def cancel_follow_up(
     body: FollowUpCancelRequest,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> FollowUpResponse:
     """Cancel an active/snoozed follow-up reminder (task 13.2)."""
     service = _follow_up_service(request)
@@ -790,7 +788,7 @@ def complete_follow_up(
     reminder_id: str,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> FollowUpResponse:
     """Mark an active/snoozed follow-up reminder completed (task 13.2)."""
     service = _follow_up_service(request)

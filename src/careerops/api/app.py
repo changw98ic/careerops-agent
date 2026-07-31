@@ -15,6 +15,7 @@ from careerops.api.middleware import RequestIdMiddleware
 from careerops.api.routes.agent_console import router as agent_console_router
 from careerops.api.routes.agent_runs import router as agent_runs_router
 from careerops.api.routes.application_workspace import router as application_workspace_router
+from careerops.api.routes.applications import contacts_router
 from careerops.api.routes.applications import router as applications_router
 from careerops.api.routes.candidates import router as candidates_router
 from careerops.api.routes.crawl_permissions import router as crawl_permissions_router
@@ -623,6 +624,8 @@ def create_app(
     app.include_router(jobs_router, dependencies=[Depends(require_api_auth)])
     app.include_router(matching_router, dependencies=[Depends(require_api_auth)])
     app.include_router(applications_router, dependencies=[Depends(require_api_auth)])
+    # Global recruiting-contact catalog (company-scoped, not per-candidate).
+    app.include_router(contacts_router, dependencies=[Depends(require_api_auth)])
     # Section-3 additive routers (profile / resumes / evidence). Same auth
     # guard as the existing v1 routers; candidate ownership is resolved
     # server-side inside each handler via ``require_candidate_id``.

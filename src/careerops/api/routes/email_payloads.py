@@ -1,18 +1,18 @@
 """Email payload API routes (Section 9, task 9.6).
 
-Additive routes under /api/v1 for the trusted-contact + initial-application-
-email-payload preview surface:
+Additive routes under /api/v1/candidates/{candidate_id} for the trusted-contact +
+initial-application-email-payload preview surface:
 
-- GET  /api/v1/applications/{application_id}/recruiting-contacts
+- GET  /api/v1/candidates/{candidate_id}/applications/{application_id}/recruiting-contacts
        — list trusted contact evidence for the application (9.1)
-- POST /api/v1/applications/{application_id}/submission-preview
+- POST /api/v1/candidates/{candidate_id}/applications/{application_id}/submission-preview
        — return the exact sendable representation + validation errors with
          NO provider side effects (9.6)
 
 Iron rules honored:
 - Additive API (Iron Rule 8): new paths only; no existing route broken.
-- Server-side ownership (Iron Rule 2 + 6): candidate resolved server-side via
-  ``require_candidate_id``; not-owned → 404 (no existence leak).
+- Server-side ownership (Iron Rule 2 + 6): candidate supplied by the path;
+  not-owned → 404 (no existence leak).
 - Dependency-not-ready (Iron Rule 3/6): missing service → 503.
 - Default-deny (Iron Rule 7): CRAWL_PLAN_MANAGEMENT gate; NO provider side
   effects (the preview performs no external write — that is Section 10).
@@ -28,13 +28,11 @@ Iron rules honored:
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from careerops.api.auth_dependency import require_candidate_id
 from careerops.api.capability_dependency import require_capability, require_repository
 from careerops.application.email_payload_service import (
     ApplicationNotOwnedError,
@@ -43,7 +41,7 @@ from careerops.application.email_payload_service import (
 from careerops.orchestration.capability_resolver import CapabilityKind
 
 router = APIRouter(
-    prefix="/api/v1",
+    prefix="/api/v1/candidates/{candidate_id}",
     tags=["email-payloads"],
     # The preview surface is downstream of crawl-plan provenance (same as the
     # workspace + inbox) and performs NO external writes; gate on the
@@ -173,7 +171,7 @@ def list_recruiting_contacts(
     application_id: str,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> RecruitingContactListResponse:
     """List trusted recruiting-contact evidence for the application (9.1).
 
@@ -216,7 +214,7 @@ def submission_preview(
     body: SubmissionPreviewRequest,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> SubmissionPreviewResponse:
     """Return the exact sendable representation + validation errors (9.6).
 

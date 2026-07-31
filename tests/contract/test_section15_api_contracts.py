@@ -79,7 +79,7 @@ class TestErrorStatusCodes:
 
     def test_invalid_uuid_returns_error(self) -> None:
         client = _make_client()
-        resp = client.get("/api/v1/applications/not-a-uuid")
+        resp = client.get(f"/api/v1/candidates/not-a-uuid/applications/{uuid4()}")
         # Should be 422 (validation), 404 (not found), or 503 (DI missing), never 500
         assert resp.status_code in (404, 422, 503)
 
@@ -141,30 +141,30 @@ class TestApplicationWorkspaceOwnership:
 
     def test_application_detail_returns_404_for_unknown_id(self) -> None:
         client = _make_client()
-        resp = client.get(f"/api/v1/applications/{uuid4()}")
+        resp = client.get(f"/api/v1/candidates/{uuid4()}/applications/{uuid4()}")
         # Without a wired application_workspace_service, returns 503 (DI).
         # With a wired service but missing app, returns 404.
         assert resp.status_code in (404, 503)
 
     def test_prepare_requires_auth(self) -> None:
         client = _make_client()
-        resp = client.post(f"/api/v1/applications/{uuid4()}/prepare")
+        resp = client.post(f"/api/v1/candidates/{uuid4()}/applications/{uuid4()}/prepare")
         # Without auth session, the route should fail (401 or 403 or 503).
         assert resp.status_code in (401, 403, 503)
 
     def test_channels_returns_404_for_unknown(self) -> None:
         client = _make_client()
-        resp = client.get(f"/api/v1/applications/{uuid4()}/channels")
+        resp = client.get(f"/api/v1/candidates/{uuid4()}/applications/{uuid4()}/channels")
         assert resp.status_code in (404, 503)
 
     def test_timeline_returns_404_for_unknown(self) -> None:
         client = _make_client()
-        resp = client.get(f"/api/v1/applications/{uuid4()}/timeline")
+        resp = client.get(f"/api/v1/candidates/{uuid4()}/applications/{uuid4()}/timeline")
         assert resp.status_code in (404, 503)
 
     def test_package_routes_require_ownership(self) -> None:
         client = _make_client()
-        resp = client.get(f"/api/v1/applications/{uuid4()}/packages")
+        resp = client.get(f"/api/v1/candidates/{uuid4()}/applications/{uuid4()}/packages")
         assert resp.status_code in (404, 503)
 
 
@@ -198,17 +198,17 @@ class TestMailIntelligenceRoutes:
 class TestReplyDraftRoutes:
     def test_drafts_list_requires_auth(self) -> None:
         client = _make_client()
-        resp = client.get("/api/v1/reply/drafts")
+        resp = client.get(f"/api/v1/candidates/{uuid4()}/reply/drafts")
         assert resp.status_code in (401, 403, 503)
 
     def test_draft_detail_returns_404_for_unknown(self) -> None:
         client = _make_client()
-        resp = client.get(f"/api/v1/reply/drafts/{uuid4()}")
+        resp = client.get(f"/api/v1/candidates/{uuid4()}/reply/drafts/{uuid4()}")
         assert resp.status_code in (404, 503)
 
     def test_approve_draft_requires_auth(self) -> None:
         client = _make_client()
-        resp = client.post(f"/api/v1/reply/drafts/{uuid4()}/approve")
+        resp = client.post(f"/api/v1/candidates/{uuid4()}/reply/drafts/{uuid4()}/approve")
         assert resp.status_code in (401, 403, 503)
 
 
@@ -221,12 +221,14 @@ class TestSystemSendRoutes:
     def test_system_send_requires_capability(self) -> None:
         """SYSTEM_MANAGED_SEND is denied by default; route should fail."""
         client = _make_client()
-        resp = client.post(f"/api/v1/applications/{uuid4()}/system-send")
+        resp = client.post(f"/api/v1/candidates/{uuid4()}/applications/{uuid4()}/system-send")
         assert resp.status_code in (401, 403, 503)
 
     def test_send_status_requires_auth(self) -> None:
         client = _make_client()
-        resp = client.get(f"/api/v1/applications/{uuid4()}/system-send/{uuid4()}")
+        resp = client.get(
+            f"/api/v1/candidates/{uuid4()}/applications/{uuid4()}/system-send/{uuid4()}"
+        )
         assert resp.status_code in (401, 403, 503)
 
 
@@ -238,12 +240,12 @@ class TestSystemSendRoutes:
 class TestFollowUpRoutes:
     def test_follow_ups_requires_auth(self) -> None:
         client = _make_client()
-        resp = client.get(f"/api/v1/applications/{uuid4()}/follow-ups")
+        resp = client.get(f"/api/v1/candidates/{uuid4()}/applications/{uuid4()}/follow-ups")
         assert resp.status_code in (401, 403, 503)
 
     def test_snooze_requires_auth(self) -> None:
         client = _make_client()
-        resp = client.post(f"/api/v1/follow-ups/{uuid4()}/snooze")
+        resp = client.post(f"/api/v1/candidates/{uuid4()}/follow-ups/{uuid4()}/snooze")
         assert resp.status_code in (401, 403, 503)
 
 
@@ -258,16 +260,20 @@ class TestOpenAPISchema:
         resp = client.get("/api/v1/openapi.json")
         assert resp.status_code == 200
         paths = set(resp.json()["paths"])
-        # Section 7 routes
-        assert "/api/v1/applications/{application_id}/prepare" in paths
-        assert "/api/v1/applications/{application_id}/channels" in paths
-        assert "/api/v1/applications/{application_id}/timeline" in paths
+        # Section 7 routes (per-candidate path-param form).
+        assert "/api/v1/candidates/{candidate_id}/applications/{application_id}/prepare" in paths
+        assert "/api/v1/candidates/{candidate_id}/applications/{application_id}/channels" in paths
+        assert "/api/v1/candidates/{candidate_id}/applications/{application_id}/timeline" in paths
         # Section 8 routes
-        assert "/api/v1/applications/{application_id}/packages" in paths
+        assert "/api/v1/candidates/{candidate_id}/applications/{application_id}/packages" in paths
         # Section 10 routes
-        assert "/api/v1/applications/{application_id}/system-send" in paths
+        assert (
+            "/api/v1/candidates/{candidate_id}/applications/{application_id}/system-send" in paths
+        )
         # Section 12 routes
         assert "/api/v1/mail/proposals" in paths
         # Section 13 routes
-        assert "/api/v1/reply/drafts" in paths
-        assert "/api/v1/applications/{application_id}/follow-ups" in paths
+        assert "/api/v1/candidates/{candidate_id}/reply/drafts" in paths
+        assert (
+            "/api/v1/candidates/{candidate_id}/applications/{application_id}/follow-ups" in paths
+        )

@@ -39,7 +39,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from careerops.api.auth_dependency import require_api_auth, require_candidate_id
+from careerops.api.auth_dependency import require_api_auth
 from careerops.api.errors import install_error_handlers
 from careerops.api.routes.system_send import router as system_send_router
 from careerops.application.side_effect_kernel import SideEffectKernel
@@ -726,7 +726,6 @@ def _build_route_app(
     *,
     service: SystemManagedSendService | None = None,
     resolver_on_state: object | None = None,
-    candidate_id: UUID | None = CANDIDATE,
 ) -> FastAPI:
     app = FastAPI()
     app.include_router(system_send_router)
@@ -736,16 +735,10 @@ def _build_route_app(
     # require_capability reads app.state.capability_resolver; absent -> 503.
     if resolver_on_state is not None:
         app.state.capability_resolver = resolver_on_state
+    # candidate_id is now supplied by the URL path (auth-rm migration); the
+    # principal override is retained only to satisfy require_api_auth at the
+    # app-level gate (the routes themselves no longer read it for ownership).
     app.dependency_overrides[require_api_auth] = lambda: _principal()
-
-    def _resolve() -> UUID:
-        if candidate_id is None:
-            from careerops.api.errors import CandidateProfileRequiredError
-
-            raise CandidateProfileRequiredError()
-        return candidate_id
-
-    app.dependency_overrides[require_candidate_id] = _resolve
     return app
 
 
@@ -755,7 +748,7 @@ class TestRoutesDefaultDenyAndOwnership:
         resolver = SettingsCapabilityResolver(Settings())
         app = _build_route_app(resolver_on_state=resolver)
         client = TestClient(app)
-        resp = client.post(f"/api/v1/applications/{uuid4()}/system-send", json={})
+        resp = client.post(f"/api/v1/candidates/{CANDIDATE}/applications/{uuid4()}/system-send", json={})
         assert resp.status_code == 403
 
     def test_route_dependency_not_ready_503_when_resolver_absent(self) -> None:
@@ -763,7 +756,7 @@ class TestRoutesDefaultDenyAndOwnership:
         # never a silent denial that hides the missing wiring.
         app = _build_route_app()
         client = TestClient(app)
-        resp = client.post(f"/api/v1/applications/{uuid4()}/system-send", json={})
+        resp = client.post(f"/api/v1/candidates/{CANDIDATE}/applications/{uuid4()}/system-send", json={})
         assert resp.status_code == 503
 
     def test_route_missing_service_is_503_when_capability_released(self) -> None:
@@ -778,7 +771,7 @@ class TestRoutesDefaultDenyAndOwnership:
             "package_version_id": str(uuid4()),
             "payload_hash": "x",
         }
-        resp = client.post(f"/api/v1/applications/{uuid4()}/system-send", json=body)
+        resp = client.post(f"/api/v1/candidates/{CANDIDATE}/applications/{uuid4()}/system-send", json=body)
         assert resp.status_code == 503
 
     def test_route_status_is_no_store(self) -> None:
@@ -788,7 +781,7 @@ class TestRoutesDefaultDenyAndOwnership:
         client = TestClient(
             _build_route_app(service=service, resolver_on_state=_ReleasingResolver())
         )
-        resp = client.get(f"/api/v1/applications/{app.id}/system-send/{intent_id}")
+        resp = client.get(f"/api/v1/candidates/{CANDIDATE}/applications/{app.id}/system-send/{intent_id}")
         assert resp.status_code == 200
         assert resp.headers["cache-control"] == "no-store"
         assert resp.json()["phase"] == "pending"
@@ -813,7 +806,7 @@ class TestRoutesDefaultDenyAndOwnership:
             "payload_hash": request.payload_hash,
             "evidence_ids": list(request.evidence_refs),
         }
-        resp = client.post(f"/api/v1/applications/{app.id}/system-send", json=body)
+        resp = client.post(f"/api/v1/candidates/{CANDIDATE}/applications/{app.id}/system-send", json=body)
         assert resp.status_code == 200
         intent_id = resp.json()["intent_id"]
         assert resp.json()["phase"] == "pending"
@@ -821,7 +814,7 @@ class TestRoutesDefaultDenyAndOwnership:
 
         # Drive the worker (isolated); route status then reflects sent.
         service.worker_step(UUID(intent_id), candidate_id=CANDIDATE, now=NOW)
-        status = client.get(f"/api/v1/applications/{app.id}/system-send/{intent_id}")
+        status = client.get(f"/api/v1/candidates/{CANDIDATE}/applications/{app.id}/system-send/{intent_id}")
         assert status.status_code == 200
         assert status.json()["phase"] == "sent"
 
@@ -840,5 +833,5 @@ class TestRoutesDefaultDenyAndOwnership:
             "package_version_id": str(uuid4()),
             "payload_hash": "x",
         }
-        resp = client.post(f"/api/v1/applications/{app.id}/system-send", json=body)
+        resp = client.post(f"/api/v1/candidates/{CANDIDATE}/applications/{app.id}/system-send", json=body)
         assert resp.status_code == 403

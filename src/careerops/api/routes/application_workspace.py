@@ -1,24 +1,24 @@
 """Application workspace API routes (Section 7, task 7.8).
 
-Additive routes under /api/v1 for the application workspace — the
-preparation/lifecycle surface defined by the application-workspace spec. All
-candidate ownership is resolved server-side via ``require_candidate_id``;
-client-supplied candidate ids are never honored.
+Additive routes under /api/v1/candidates/{candidate_id} for the application
+workspace — the preparation/lifecycle surface defined by the application-workspace
+spec. Candidate ownership is supplied by the path parameter; the handlers enforce
+ownership against that id (not-owned → 404, no existence leak).
 
 Routes:
-- GET   /api/v1/applications/{application_id}                       — detail
-- POST  /api/v1/applications/{application_id}/prepare                — FAVORITED → PREPARING
-- GET   /api/v1/applications/{application_id}/channels               — channel eligibility
-- POST  /api/v1/applications/{application_id}/channel                — select a channel
-- POST  /api/v1/applications/{application_id}/package                — bind approved package (7.5)
-- GET   /api/v1/applications/{application_id}/timeline               — append-only timeline
-- POST  /api/v1/applications/{application_id}/confirm-external-submission — external/manual (7.7)
-- POST  /api/v1/applications/{application_id}/state                  — guarded USER transition
+- GET   /api/v1/candidates/{candidate_id}/applications/{application_id}                       — detail
+- POST  /api/v1/candidates/{candidate_id}/applications/{application_id}/prepare                — FAVORITED → PREPARING
+- GET   /api/v1/candidates/{candidate_id}/applications/{application_id}/channels               — channel eligibility
+- POST  /api/v1/candidates/{candidate_id}/applications/{application_id}/channel                — select a channel
+- POST  /api/v1/candidates/{candidate_id}/applications/{application_id}/package                — bind approved package (7.5)
+- GET   /api/v1/candidates/{candidate_id}/applications/{application_id}/timeline               — append-only timeline
+- POST  /api/v1/candidates/{candidate_id}/applications/{application_id}/confirm-external-submission — external/manual (7.7)
+- POST  /api/v1/candidates/{candidate_id}/applications/{application_id}/state                  — guarded USER transition
 
 Iron rules honored:
 - Additive (Iron Rule 8): new paths only; the M3 /transition, /submit, /events
   routes are untouched.
-- Server-side ownership (Iron Rule 2 + 6): candidate resolved server-side;
+- Server-side ownership (Iron Rule 2 + 6): candidate supplied by the path;
   not-owned → 404 (no existence leak).
 - Dependency-not-ready (Iron Rule 3/6): missing service → 503.
 - Model cannot transition state (Iron Rule 2): every mutating route records a
@@ -32,13 +32,11 @@ Iron rules honored:
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from careerops.api.auth_dependency import require_candidate_id
 from careerops.api.capability_dependency import require_capability, require_repository
 from careerops.application.application_workspace import (
     ApplicationNotOwnedError,
@@ -65,7 +63,7 @@ from careerops.domain.applications import (
 from careerops.orchestration.capability_resolver import CapabilityKind
 
 router = APIRouter(
-    prefix="/api/v1",
+    prefix="/api/v1/candidates/{candidate_id}",
     tags=["application-workspace"],
     # The workspace is downstream of crawl-plan provenance (same as the inbox)
     # and performs no external writes; gate on the released-by-default
@@ -213,7 +211,7 @@ def _translate(exc: Exception) -> HTTPException:
 def get_application(
     application_id: str,
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> ApplicationDetailResponse:
     """Return the application detail (state, channel, binding, timestamps)."""
     service = _service(request)
@@ -230,7 +228,7 @@ def get_application(
 def prepare_application(
     application_id: str,
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> ApplicationDetailResponse:
     """Move the application from FAVORITED to PREPARING (user action)."""
     service = _service(request)
@@ -249,7 +247,7 @@ def prepare_application(
 def list_channels(
     application_id: str,
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> ChannelEligibilityResponse:
     """Return the channel-eligibility snapshot (why each channel is/isn't available)."""
     service = _service(request)
@@ -279,7 +277,7 @@ def select_channel(
     application_id: str,
     body: ChannelSelectRequest,
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> ApplicationDetailResponse:
     """Select a submission channel (blocks unavailable channels)."""
     service = _service(request)
@@ -304,7 +302,7 @@ def bind_package(
     application_id: str,
     body: PackageBindRequest,
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> ApplicationDetailResponse:
     """Bind an approved package version to the application (task 7.5).
 
@@ -335,7 +333,7 @@ def bind_package(
 def get_timeline(
     application_id: str,
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> TimelineResponse:
     """Return the chronological application timeline projection."""
     service = _service(request)
@@ -370,7 +368,7 @@ def confirm_external_submission(
     application_id: str,
     body: ConfirmExternalSubmissionRequest,
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> ApplicationDetailResponse:
     """Confirm an external-form / manual submission with evidence (task 7.7).
 
@@ -407,7 +405,7 @@ def change_state(
     application_id: str,
     body: StateChangeRequest,
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> ApplicationDetailResponse:
     """Apply a guarded USER state transition (ON_HOLD, WITHDRAWN, etc.).
 
@@ -602,7 +600,7 @@ def create_package_draft(
     application_id: str,
     body: PackageDraftRequest,
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> PackageVersionResponse:
     """Create a DRAFT package version bound to the exact inputs (task 8.2).
 
@@ -663,7 +661,7 @@ def create_package_draft(
 def list_packages(
     application_id: str,
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> PackageListResponse:
     """List package versions (newest first) for the application."""
     ws = _service(request)
@@ -678,7 +676,7 @@ def list_packages(
 def get_latest_package(
     application_id: str,
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> PackageVersionResponse:
     """Return the latest package version (404 if none)."""
     ws = _service(request)
@@ -695,7 +693,7 @@ def approve_package(
     application_id: str,
     version_id: str,
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> PackageVersionResponse:
     """Approve a package version after validating all preconditions (8.7).
 
@@ -739,7 +737,7 @@ def apply_package_edits(
     version_id: str,
     body: PackageEditRequest,
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> PackageVersionResponse:
     """Apply edits as a NEW package version (copy-on-write, task 8.5).
 

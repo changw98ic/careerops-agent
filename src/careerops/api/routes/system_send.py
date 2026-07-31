@@ -1,23 +1,23 @@
 """System-managed Gmail send API routes (Section 10, tasks 10.1-10.8, 10.11).
 
-Additive routes under /api/v1 that turn the CareerOps final-confirmation
-click into a durable send intent and expose the resulting send-progress /
+Additive routes under /api/v1/candidates/{candidate_id} that turn the CareerOps
+final-confirmation click into a durable send intent and expose the resulting send-progress /
 sent / failed / reconciliation-required state to the UI. The provider is
 NEVER called from the request path — confirmation returns ``pending`` and
 an isolated side-effect worker drives the provider call (task 10.4).
 
 Routes:
-- POST /api/v1/applications/{application_id}/system-send
+- POST /api/v1/candidates/{candidate_id}/applications/{application_id}/system-send
         — record the final confirmation (durable intent + outbox + pending)
-- GET  /api/v1/applications/{application_id}/system-send/{intent_id}
+- GET  /api/v1/candidates/{candidate_id}/applications/{application_id}/system-send/{intent_id}
         — idempotent status read (never displays queued as sent)
-- POST /api/v1/applications/{application_id}/system-send/{intent_id}/reconcile
+- POST /api/v1/candidates/{candidate_id}/applications/{application_id}/system-send/{intent_id}/reconcile
         — surface an ambiguous outcome as a reconciliation task (no retry)
 
 Iron rules honored:
 - Additive (Iron Rule 8): new paths only; no existing route touched.
-- Server-side ownership (Iron Rule 2 + 6): candidate resolved via
-  ``require_candidate_id``; not-owned -> 404 (no existence leak).
+- Server-side ownership (Iron Rule 2 + 6): candidate supplied by the path;
+  not-owned -> 404 (no existence leak).
 - Dependency-not-ready (Iron Rule 3/6): missing service/kernel -> 503.
 - Default-deny (Iron Rule 7): every route is gated on the
   ``SYSTEM_MANAGED_SEND`` capability, which stays DENIED at the contract
@@ -34,13 +34,11 @@ Iron rules honored:
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from careerops.api.auth_dependency import require_candidate_id
 from careerops.api.capability_dependency import require_capability, require_repository
 from careerops.application.system_managed_send import (
     SystemManagedSendService,
@@ -51,7 +49,7 @@ from careerops.domain.system_send import SystemSendPhase
 from careerops.orchestration.capability_resolver import CapabilityKind
 
 router = APIRouter(
-    prefix="/api/v1",
+    prefix="/api/v1/candidates/{candidate_id}",
     tags=["system-managed-send"],
     # Every system-managed-send path is default-denied at the contract layer:
     # SYSTEM_MANAGED_SEND stays DENIED until a separate qualification change
@@ -181,7 +179,7 @@ def confirm_system_send(
     body: SystemSendConfirmRequest,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> SystemSendStatusResponse:
     """Record the CareerOps final confirmation as a durable send intent.
 
@@ -209,7 +207,7 @@ def get_system_send_status(
     intent_id: str,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> SystemSendStatusResponse:
     """Return the durable send phase (never displays queued as sent).
 
@@ -239,7 +237,7 @@ def escalate_system_send_reconciliation(
     intent_id: str,
     request: Request,
     response: Response,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
 ) -> SystemSendStatusResponse:
     """Surface an ambiguous send as a user reconciliation task (no retry).
 

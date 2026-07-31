@@ -5,15 +5,17 @@
 from __future__ import annotations
 
 import contextlib
-from typing import Annotated, Any
+from typing import Any
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi import APIRouter, Query, Request, Response
 from pydantic import BaseModel, Field
 
-from careerops.api.auth_dependency import require_api_auth
-from careerops.auth.contracts import AuthenticatedPrincipal
-
-router = APIRouter(prefix="/api/v1", tags=["applications"])
+router = APIRouter(prefix="/api/v1/candidates/{candidate_id}", tags=["applications"])
+# Recruiting contacts are a GLOBAL catalog resource (not per-candidate): a
+# contact row is keyed by company, and the global-companies routes are exempt
+# from the candidate path-prefix by project constraint. These stay under /api/v1.
+contacts_router = APIRouter(prefix="/api/v1", tags=["contacts"])
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +202,7 @@ class FollowUpScheduleRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@router.get(
+@contacts_router.get(
     "/companies/{company_id}/contacts",
     response_model=ContactListResponse,
     summary="List recruiting contacts for a company",
@@ -234,7 +236,7 @@ async def list_contacts(
     return ContactListResponse(items=items, total=len(items))
 
 
-@router.post(
+@contacts_router.post(
     "/contacts",
     response_model=ContactResponse,
     status_code=201,
@@ -296,9 +298,9 @@ async def create_contact(
     summary="List applications",
 )
 async def list_applications(
+    candidate_id: UUID,
     request: Request,
     response: Response,
-    candidate_id: str | None = Query(default=None),
     state: str | None = Query(default=None),
     cursor: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
@@ -308,7 +310,7 @@ async def list_applications(
     if repo is None:
         return ApplicationListResponse(items=[], total=0)
     result = repo.list_applications(
-        candidate_id=candidate_id, state=state, cursor=cursor, limit=limit
+        candidate_id=str(candidate_id), state=state, cursor=cursor, limit=limit
     )
     items = [
         ApplicationResponse(
@@ -337,10 +339,10 @@ async def list_applications(
     summary="Create an application (idempotent)",
 )
 async def create_application(
+    candidate_id: UUID,
     body: ApplicationCreateRequest,
     request: Request,
     response: Response,
-    principal: Annotated[AuthenticatedPrincipal | None, Depends(require_api_auth)] = None,
 ) -> ApplicationResponse | dict[str, str]:
     response.headers["Cache-Control"] = "no-store"
     service = _get_application_service(request)
@@ -348,12 +350,6 @@ async def create_application(
         response.status_code = 503
         return {"error": "service_unavailable"}
 
-    # Resolve candidate_id from authenticated session.
-    if principal is None or not principal.candidate_id:
-        response.status_code = 409
-        return {"error": "CANDIDATE_PROFILE_REQUIRED"}
-
-    candidate_id = principal.candidate_id
     canonical_job_id = _parse_uuid(body.canonical_job_id)
 
     # Idempotency: return existing application if (candidate, job) already tracked.

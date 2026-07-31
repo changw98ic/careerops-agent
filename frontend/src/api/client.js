@@ -394,12 +394,20 @@ export const api = {
 
   // -- Agent console: shared context --
   createContext: (data) =>
-    request(cand('/agent-console/context'), { method: 'POST', body: data }),
+    request(cand('/agent-console/contexts'), { method: 'POST', body: data }),
   getContext: (contextId) =>
-    request(cand(`/agent-console/context/${contextId}`)),
+    request(cand(`/agent-console/contexts/${contextId}`)),
 
   // -- Agent console: capability and preflight --
-  getCapability: () => request(cand('/agent-console/capability')),
+  // `operation` is REQUIRED by the backend (Query(...) on ModelOperation —
+  // job_matching | resume_review | interview_preparation | smart_form_intake).
+  // Fail fast locally instead of emitting a request that 422s.
+  getCapability: (operation) => {
+    if (!operation) {
+      throw new Error('缺少 operation 参数（resume_review / interview_preparation 等）。')
+    }
+    return request(cand('/capabilities/agent?operation=' + encodeURIComponent(operation)))
+  },
   createPreflight: (data) =>
     request(cand('/agent-console/preflight'), { method: 'POST', body: data }),
 }

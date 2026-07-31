@@ -312,7 +312,13 @@ const canStartAgent = computed(
 )
 const providerDisabled = computed(() => {
   if (!capabilityState.value) return false
-  return capabilityState.value.state === 'disabled' || capabilityState.value.state === 'blocked'
+  const state = capabilityState.value.state
+  // Real CapabilityState values (agent_console contracts.py): enabled,
+  // disabled_by_policy, not_configured, dependency_not_ready,
+  // blocked_by_prerequisite, stale, failed. Only `enabled` is usable;
+  // dependency_not_ready is surfaced by the input-gating UI (canStartAgent /
+  // FirstRunGuide) rather than the model-disabled banner.
+  return state !== 'enabled' && state !== 'dependency_not_ready'
 })
 
 function listItems(data) {
@@ -503,10 +509,26 @@ async function loadStages(runId) {
   loading.stages = false
 }
 
+// The backend capability endpoint is per-operation (ModelOperation: matching
+// is deterministic and has no model op, so the model tabs map 1:1 and the
+// remaining tabs fall back to the workbench's primary operation).
+function operationForTab(tab) {
+  if (tab === 'interview') return 'interview_preparation'
+  if (tab === 'resume') return 'resume_review'
+  return 'resume_review'
+}
+
 async function loadCapability() {
-  const data = await callApi(() => api.getCapability(), '加载能力状态失败。')
+  const data = await callApi(
+    () => api.getCapability(operationForTab(activeTab.value)),
+    '加载能力状态失败。',
+  )
   if (data) capabilityState.value = data
 }
+
+// Capability is per-operation; refresh when the user switches tabs so the
+// model-disabled banner reflects the visible tab.
+watch(activeTab, () => loadCapability())
 
 async function retryRun(run) {
   if (!run?.id) return

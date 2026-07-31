@@ -340,8 +340,13 @@ class TemporalScheduleActivator:
     """Adapts the ``ScheduleActivator`` Protocol to ``ScheduleManager``.
 
     Delegates to ``ScheduleManager.ensure_schedule()`` with per-source
-    deterministic schedule IDs (``crawl:{source_id}``), the
-    ``CrawlScheduledWorkflow``, and the configured task queue.
+    deterministic schedule IDs (``crawl:{owner_id}:{source_id}``), the
+    ``CrawlScheduledWorkflow``, and the configured task queue.  The owner is
+    part of the schedule id because the ``job_sources`` registry is a global
+    table (no owner column): every candidate's ``select_sources`` returns the
+    SAME source list, so a schedule id without the owner would collide across
+    candidates and the last-writer-wins overwrite would leave only one
+    candidate's inbox receiving background crawl results.
     """
 
     def __init__(
@@ -363,7 +368,14 @@ class TemporalScheduleActivator:
         from careerops.workflows.s5_contracts import ScheduledCrawlWorkflowInput
         from careerops.workflows.s5_workflows import CrawlScheduledWorkflow
 
-        schedule_id = f"crawl:{source_id}"
+        if owner_id is None:
+            raise ValueError(
+                "crawl schedules require an owner_id: the schedule id embeds "
+                "the candidate (crawl:{owner_id}:{source_id}) so per-candidate "
+                "background loops cannot collide on the shared source registry"
+            )
+
+        schedule_id = f"crawl:{owner_id}:{source_id}"
         arg = ScheduledCrawlWorkflowInput(
             owner_id=str(owner_id) if owner_id else "",
             source_id=str(source_id),

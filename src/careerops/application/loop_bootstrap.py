@@ -12,7 +12,14 @@ the autonomous loop:
   readiness gate passes): for EVERY candidate, registers each eligible
   source's schedule and resumes it, bounded by the Tier 2 budget and
   per-source eligibility.  Each candidate id doubles as that candidate's
-  crawl owner id.
+  crawl owner id, and only the sources selected by that candidate's ACTIVE
+  crawl plan are activated (the ``job_sources`` registry is a global table
+  with no owner column, so the candidate's plan is what scopes the loop).
+  Candidates without an active plan get no crawl schedules.
+- legacy cleanup    -- deletes the pre-multi-candidate ``crawl:{source_id}``
+  schedules and the fixed ``mail-sync`` schedule (when the injected
+  ``ScheduleManager`` can list schedules), so upgraded deployments do not
+  double-run old schedules next to the per-candidate ones.
 
 Everything is idempotent (``ScheduleManager.ensure_schedule`` reconciles), so
 calling this on every API restart converges without duplicate side effects.
@@ -27,6 +34,7 @@ logs the reason; the call never raises (the API must still serve).
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import timedelta
 from uuid import UUID
@@ -45,6 +53,26 @@ APPROVAL_SWEEP_INTERVAL = timedelta(seconds=60)
 
 MAIN_TASK_QUEUE = "careerops-m0"
 
+# Pre-multi-candidate schedule formats removed by this branch. The cleanup step
+# deletes them so upgraded deployments do not double-run:
+# - ``crawl:{source_id}`` (one bare uuid after ``crawl:``) -- the candidate was
+#   absent from the id, so the last candidate to bootstrap overwrote everyone
+#   else's schedule. New format: ``crawl:{candidate_id}:{source_id}``.
+# - ``mail-sync`` (fixed id, no candidate) -- new format: ``mail-sync:{candidate_id}``.
+_LEGACY_CRAWL_ID_RE = re.compile(r"^crawl:[0-9a-fA-F-]{36}$")
+_LEGACY_MAIL_SYNC_ID = "mail-sync"
+
+
+def is_legacy_schedule_id(schedule_id: str) -> bool:
+    """Return True for schedule ids that predate the multi-candidate format.
+
+    The legacy crawl schedule id is exactly ``crawl:{uuid}`` (no candidate in
+    the id); the legacy mail-sync schedule is the fixed ``mail-sync`` id.
+    """
+    if schedule_id == _LEGACY_MAIL_SYNC_ID:
+        return True
+    return bool(_LEGACY_CRAWL_ID_RE.fullmatch(schedule_id))
+
 
 @dataclass
 class BootstrapReport:
@@ -55,13 +83,15 @@ class BootstrapReport:
     sweep_registered: bool = False
     crawl_schedules_considered: int = 0
     crawl_activated: int = 0
+    legacy_schedules_deleted: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
 
     def __str__(self) -> str:  # pragma: no cover - cosmetic
         return (
             f"mail={self.mail_registered} outbox={self.outbox_registered} "
             f"sweep={self.sweep_registered} crawl={self.crawl_activated}/"
-            f"{self.crawl_schedules_considered} skipped={self.skipped}"
+            f"{self.crawl_schedules_considered} legacy_deleted="
+            f"{len(self.legacy_schedules_deleted)} skipped={self.skipped}"
         )
 
 
@@ -168,6 +198,22 @@ async def bootstrap_trigger_loop(
     else:
         report.skipped.append("mail-sync: google_oauth_enabled is off")
 
+    # --- legacy-schedule cleanup (only when the manager can enumerate) ---
+    # Upgraded deployments may still hold pre-multi-candidate schedules
+    # (``crawl:{source_id}`` and the fixed ``mail-sync``); delete them so they
+    # do not double-run next to the per-candidate schedules registered below.
+    list_ids = getattr(schedule_manager, "list_schedule_ids", None)
+    if callable(list_ids):
+        try:
+            existing_ids = await list_ids()
+            for schedule_id in existing_ids:
+                if is_legacy_schedule_id(schedule_id):
+                    await schedule_manager.delete(schedule_id)
+                    report.legacy_schedules_deleted.append(schedule_id)
+                    _log.info("trigger-loop bootstrap: deleted legacy schedule %s", schedule_id)
+        except Exception:  # cleanup is best-effort; never crash the API
+            _log.exception("trigger-loop bootstrap: legacy-schedule cleanup failed")
+
     # --- crawl: register + activate eligible sources after the readiness gate ---
     if crawl_activation_service is None:
         report.skipped.append("crawl: activation service not provided")
@@ -193,15 +239,32 @@ async def bootstrap_trigger_loop(
         _log.info("trigger-loop bootstrap: %s", report)
         return report
 
+    plan_repo = getattr(runtime, "crawl_plan_repo", None)
     sources_considered = 0
     schedules_activated = 0
     for candidate_id in candidate_ids:
-        sources = runtime.source_queue_service.select_sources(candidate_id)
-        result = await crawl_activation_service.activate_crawl_schedules(
-            readiness, candidate_id, sources
-        )
-        sources_considered += result.sources_considered
-        schedules_activated += result.schedules_activated
+        # Per-candidate isolation: one candidate's plan read / selection /
+        # activation failure must not abort the whole round (log + continue).
+        try:
+            # The source registry is GLOBAL (no owner column), so the
+            # candidate's ACTIVE plan is what scopes the loop: only sources
+            # selected by that candidate's plan get schedules. A candidate
+            # without an active plan gets no crawl schedules.
+            active_plan = plan_repo.get_active_for(candidate_id) if plan_repo is not None else None
+            if active_plan is None:
+                report.skipped.append(f"crawl: candidate {candidate_id} has no active plan")
+                continue
+            plan_source_ids = set(getattr(active_plan, "sources", ()) or ())
+            sources = runtime.source_queue_service.select_sources(candidate_id)
+            sources = [s for s in sources if s.id in plan_source_ids]
+            result = await crawl_activation_service.activate_crawl_schedules(
+                readiness, candidate_id, sources
+            )
+            sources_considered += result.sources_considered
+            schedules_activated += result.schedules_activated
+        except Exception:  # one candidate must not kill the round
+            _log.exception("trigger-loop bootstrap: crawl registration failed for %s", candidate_id)
+            report.skipped.append(f"crawl: candidate {candidate_id} failed (see log)")
     report.crawl_schedules_considered = sources_considered
     report.crawl_activated = schedules_activated
     _log.info("trigger-loop bootstrap: %s", report)

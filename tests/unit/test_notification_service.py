@@ -228,9 +228,17 @@ class TestNotificationRoutes:
     def test_pending_endpoint_is_public(self) -> None:
         """The recovery endpoint is public (the session/CSRF auth gate was
         removed — auth-rm Task 9). candidate_id comes from the path."""
+        from types import SimpleNamespace
+
         from careerops.api.app import create_app
 
         app = create_app()
+        # auth-rm I1: per-candidate routers carry the path_candidate_id
+        # existence gate; let the test candidate id through (the gate's 404
+        # branch is covered by its own unit + contract tests).
+        app.state.candidate_service = SimpleNamespace(
+            get=lambda candidate_id: SimpleNamespace(id=candidate_id)
+        )
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.get(f"/api/v1/candidates/{uuid4()}/notifications")
         assert resp.status_code == 200

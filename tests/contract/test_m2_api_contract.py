@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from types import SimpleNamespace
 from typing import cast
 from uuid import UUID, uuid4
 
@@ -15,6 +16,13 @@ from careerops.config import RuntimeEnvironment, Settings
 from careerops.orchestration.capability_resolver import SettingsCapabilityResolver
 
 TEST_CANDIDATE_ID = UUID("11111111-1111-4111-8111-111111111111")
+
+
+class _PermissiveCandidateService:
+    """Lets any well-formed candidate id through the ``path_candidate_id`` gate."""
+
+    def get(self, candidate_id: UUID):
+        return SimpleNamespace(id=candidate_id)
 
 
 class FixedReadinessProbe:
@@ -37,8 +45,12 @@ def make_client() -> httpx2.Client:
     settings = Settings.model_validate({"environment": RuntimeEnvironment.TEST})
     app = create_app(settings, readiness_probe=FixedReadinessProbe())
     # No session/CSRF auth anymore (auth-rm Task 9); the capability resolver
-    # stays wired for capability-gated routes.
+    # stays wired for capability-gated routes. The candidate-existence gate
+    # (path_candidate_id) is let through for the fixed test candidate so these
+    # tests keep exercising the route logic (existence is covered by
+    # test_path_candidate_id + the 404 contract tests in test_api_contract).
     app.state.capability_resolver = SettingsCapabilityResolver(settings)
+    app.state.candidate_service = _PermissiveCandidateService()
     return cast("httpx2.Client", TestClient(app))
 
 

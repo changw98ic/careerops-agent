@@ -10,7 +10,7 @@ single place that owns Schedule create/update/pause/resume/delete.
 Design:
 
 - **Idempotent** create/update: a deterministic ``schedule_id`` is derived for
-  each managed schedule (e.g. ``mail-sync:{account_id}``); ``ensure_schedule``
+  each managed schedule (e.g. ``mail-sync:{candidate_id}``); ``ensure_schedule``
   creates when absent and updates the spec/paused-state when present, so it is
   safe to call on every boot without duplicating schedules.
 - **Pause/resume map to schedule state**: the domain layer's pause/resume now
@@ -31,7 +31,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any
+from typing import Any, cast
 
 from temporalio.client import (
     Client,
@@ -100,7 +100,7 @@ class ScheduleManager:
         Returns True when a new schedule was created, False when an existing
         one was updated. The schedule fires ``workflow(arg)`` every
         ``interval``. Use a deterministic ``schedule_id`` (e.g.
-        ``mail-sync:{account_id}``) so repeated calls converge.
+        ``mail-sync:{candidate_id}``) so repeated calls converge.
 
         ``workflow_id`` is the workflow execution id for runs started by this
         schedule (Temporal appends a per-fire suffix so periodic runs do not
@@ -132,6 +132,23 @@ class ScheduleManager:
             _make_reconcile_updater(desired)
         )
         return False
+
+    async def list_schedule_ids(self) -> list[str]:
+        """Return the ids of every schedule currently registered in Temporal.
+
+        Used by the bootstrap's legacy-schedule cleanup: upgraded deployments
+        may still carry ``crawl:{source_id}`` (pre multi-candidate) and the
+        fixed ``mail-sync`` schedules that must be deleted so they do not
+        double-run next to the per-candidate schedules.
+        """
+        # The temporalio stub types ``list_schedules`` as a plain coroutine,
+        # but at runtime it returns an async iterator of
+        # ``ScheduleListDescription``; cast to Any so the iteration types.
+        list_schedules = cast("Any", self._client.list_schedules)
+        ids: list[str] = []
+        async for entry in list_schedules():
+            ids.append(entry.id)
+        return ids
 
     # ------------------------------------------------------------------
     # Pause / resume
@@ -258,11 +275,6 @@ def _make_paused_updater(
 # ----------------------------------------------------------------------
 # Deterministic schedule-id helpers
 # ----------------------------------------------------------------------
-
-
-def mail_sync_schedule_id(account_id: str) -> str:
-    """Deterministic schedule id for an account's inbound-mail poll."""
-    return f"mail-sync:{account_id}"
 
 
 def crawl_schedule_id(owner_id: str, plan_version_id: str) -> str:

@@ -22,6 +22,7 @@ from careerops.application.crawl_activation import (
     CrawlActivationResult,
     CrawlActivationService,
     MatchingChainResult,
+    TemporalScheduleActivator,
 )
 from careerops.application.crawl_readiness import CrawlReadiness, ReadinessCheck
 from careerops.domain.crawl_attempts import (
@@ -608,6 +609,79 @@ class TestMixedSourceIntegration:
         )
 
         assert result.chained is False
+
+
+# ---------------------------------------------------------------------------
+# TemporalScheduleActivator -- per-candidate schedule ids (C1)
+# ---------------------------------------------------------------------------
+
+
+class _RecordingScheduleManager:
+    """Records ensure_schedule calls exactly like ScheduleManager's signature."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def ensure_schedule(self, **kwargs) -> bool:
+        self.calls.append(kwargs)
+        return True
+
+
+class TestTemporalScheduleActivatorScheduleIds:
+    """The crawl schedule id embeds the candidate: ``crawl:{owner}:{source}``.
+
+    The ``job_sources`` registry is a GLOBAL table (no owner column), so a
+    schedule id without the owner collides across candidates and the last
+    bootstrap pass overwrites the previous candidate's schedule -- leaving
+    only one candidate's inbox receiving background crawl results.
+    """
+
+    @pytest.mark.asyncio
+    async def test_schedule_id_embeds_owner_and_source(self) -> None:
+        manager = _RecordingScheduleManager()
+        activator = TemporalScheduleActivator(manager)
+        source_id = uuid4()
+        owner_id = uuid4()
+
+        await activator.activate_source_schedule(
+            source_id, timedelta(hours=1), owner_id=owner_id
+        )
+
+        assert manager.calls[0]["schedule_id"] == f"crawl:{owner_id}:{source_id}"
+        # The workflow argument carries both ids so the fired workflow is
+        # scoped to the right candidate.
+        arg = manager.calls[0]["arg"]
+        assert arg.owner_id == str(owner_id)
+        assert arg.source_id == str(source_id)
+
+    @pytest.mark.asyncio
+    async def test_schedule_id_never_matches_legacy_single_uuid_format(self) -> None:
+        import re
+
+        manager = _RecordingScheduleManager()
+        activator = TemporalScheduleActivator(manager)
+
+        await activator.activate_source_schedule(
+            uuid4(), timedelta(hours=1), owner_id=uuid4()
+        )
+
+        for call in manager.calls:
+            schedule_id = call["schedule_id"]
+            # Old format: crawl:{uuid} with no candidate in the id.
+            assert not re.fullmatch(r"crawl:[0-9a-fA-F-]{36}", schedule_id)
+            assert schedule_id.startswith("crawl:")
+            assert schedule_id.count(":") == 2
+
+    @pytest.mark.asyncio
+    async def test_missing_owner_is_rejected(self) -> None:
+        manager = _RecordingScheduleManager()
+        activator = TemporalScheduleActivator(manager)
+
+        with pytest.raises(ValueError, match="owner_id"):
+            await activator.activate_source_schedule(
+                uuid4(), timedelta(hours=1), owner_id=None
+            )
+        assert manager.calls == []
 
 
 # ---------------------------------------------------------------------------

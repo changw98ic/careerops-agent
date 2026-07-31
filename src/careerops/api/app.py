@@ -5,9 +5,10 @@ from contextlib import asynccontextmanager
 from typing import Any, cast
 from uuid import UUID
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 
 from careerops import __version__
+from careerops.api.auth_dependency import path_candidate_id
 from careerops.api.errors import install_error_handlers
 from careerops.api.metrics_middleware import MetricsMiddleware
 from careerops.api.middleware import RequestIdMiddleware
@@ -597,60 +598,67 @@ def create_app(
     # global routes (jobs, matches, contacts, candidates) are public API.
     app.include_router(jobs_router)
     app.include_router(matching_router)
-    app.include_router(applications_router)
+    # Per-candidate routers carry ``path_candidate_id`` (auth-rm I1): an
+    # unknown ``candidate_id`` in the URL yields 404 instead of silently
+    # returning empty lists (or hitting FK IntegrityError -> 500 on writes).
+    app.include_router(
+        applications_router, dependencies=[Depends(path_candidate_id)]
+    )
     # Global recruiting-contact catalog (company-scoped, not per-candidate).
     app.include_router(contacts_router)
     # Section-3 additive routers (profile / resumes / evidence). Candidate
     # identity comes from the URL path parameter.
-    app.include_router(profile_router)
-    app.include_router(resumes_router)
-    app.include_router(smart_intake_router)
-    app.include_router(evidence_router)
+    app.include_router(profile_router, dependencies=[Depends(path_candidate_id)])
+    app.include_router(resumes_router, dependencies=[Depends(path_candidate_id)])
+    app.include_router(smart_intake_router, dependencies=[Depends(path_candidate_id)])
+    app.include_router(evidence_router, dependencies=[Depends(path_candidate_id)])
     # Section-4 additive routers (crawl sources / plans / runs). Candidate
     # identity comes from the URL path parameter; the CRAWL_PLAN_MANAGEMENT
     # capability gate is composed inside each router.
-    app.include_router(crawl_sources_router)
-    app.include_router(crawl_plans_router)
-    app.include_router(crawl_runs_router)
-    app.include_router(crawl_permissions_router)
+    app.include_router(crawl_sources_router, dependencies=[Depends(path_candidate_id)])
+    app.include_router(crawl_plans_router, dependencies=[Depends(path_candidate_id)])
+    app.include_router(crawl_runs_router, dependencies=[Depends(path_candidate_id)])
+    app.include_router(crawl_permissions_router, dependencies=[Depends(path_candidate_id)])
     # Section-6 inbox router (tasks 6.7-6.8). Per-candidate path-param router.
-    app.include_router(inbox_router)
-    app.include_router(agent_runs_router)
-    app.include_router(agent_console_router)
+    app.include_router(inbox_router, dependencies=[Depends(path_candidate_id)])
+    app.include_router(agent_runs_router, dependencies=[Depends(path_candidate_id)])
+    app.include_router(agent_console_router, dependencies=[Depends(path_candidate_id)])
     # Phase 9: notification routes (SSE stream + recovery). Per-candidate
     # path-param router.
-    app.include_router(notifications_router)
+    app.include_router(notifications_router, dependencies=[Depends(path_candidate_id)])
     # Section-7 application-workspace router (tasks 7.8). Additive paths only
     # (detail / prepare / channels / channel / package / timeline /
     # confirm-external-submission / state); candidate ownership resolved from
     # the path.
-    app.include_router(application_workspace_router)
+    app.include_router(
+        application_workspace_router, dependencies=[Depends(path_candidate_id)]
+    )
     # Section-9 email-payload router (tasks 9.1, 9.6). Additive paths only
     # (recruiting-contacts list + submission-preview). Performs NO provider
     # side effects (the actual send is Section 10); responses carry
     # Cache-Control: no-store.
-    app.include_router(email_payloads_router)
+    app.include_router(email_payloads_router, dependencies=[Depends(path_candidate_id)])
     # Section-10 system-managed-send router (tasks 10.1-10.8, 10.11). Additive
     # paths only (confirm / status / reconcile); gated on the
     # SYSTEM_MANAGED_SEND capability which stays DENIED at the contract layer.
-    app.include_router(system_send_router)
+    app.include_router(system_send_router, dependencies=[Depends(path_candidate_id)])
     # Section-12 mail-intelligence router (tasks 12.5-12.6). Per-candidate
     # path-param router; additive paths only (extract/proposal, list, get,
     # accept, reject). Proposals are review-only; application state changes
     # ONLY through the USER-sourced transition path on acceptance (Iron Rule
     # 2); responses carry Cache-Control: no-store.
-    app.include_router(mail_intelligence_router)
+    app.include_router(mail_intelligence_router, dependencies=[Depends(path_candidate_id)])
     # Section-11 Gmail read-sync router (tasks 11.7, 11.10). Per-candidate
     # path-param router; additive paths only. Gated on the GMAIL_READ
     # capability, which stays DENIED at the contract layer until a separate
     # qualification change releases it (Iron Rule 7); responses carry
     # Cache-Control: no-store and bounded cursor pagination.
-    app.include_router(mail_sync_router)
+    app.include_router(mail_sync_router, dependencies=[Depends(path_candidate_id)])
     # Section-13 reply-draft + follow-up router (tasks 13.7-13.8, 13.10).
     # Additive paths only. Drafts are review-only; high-risk categories are
     # permanently denied system send; auto-send is permanently denied;
     # responses carry Cache-Control: no-store and bounded cursor pagination.
-    app.include_router(reply_drafts_router)
+    app.include_router(reply_drafts_router, dependencies=[Depends(path_candidate_id)])
 
     # Review endpoint (plan v0.4 §2.7 / §3 Stage 3): the human fallback for
     # A/B-escalated approvals. Mounted when the runtime actually compiled the

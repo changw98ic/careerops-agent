@@ -8,9 +8,10 @@ from datetime import UTC
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, Field
 
+from careerops.api.auth_dependency import path_candidate_id
 from careerops.api.errors import DependencyNotReadyError, NotFoundError
 
 router = APIRouter(prefix="/api/v1", tags=["matching"])
@@ -138,6 +139,7 @@ async def list_candidates(
     response_model=EvidenceItemResponse,
     status_code=201,
     summary="Import candidate evidence",
+    dependencies=[Depends(path_candidate_id)],
 )
 async def import_evidence(
     candidate_id: UUID,
@@ -214,6 +216,7 @@ async def get_remote_eligibility(
     "/candidates/{candidate_id}/matches",
     response_model=MatchListResponse,
     summary="List match results",
+    dependencies=[Depends(path_candidate_id)],
 )
 async def list_matches(
     candidate_id: UUID,
@@ -266,6 +269,7 @@ async def list_matches(
     response_model=MatchResultResponse,
     status_code=201,
     summary="Run matching for a candidate against a job",
+    dependencies=[Depends(path_candidate_id)],
 )
 async def run_match(
     candidate_id: UUID,

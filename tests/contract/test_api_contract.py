@@ -1,6 +1,7 @@
 import re
 from collections.abc import Mapping
 from typing import cast
+from uuid import UUID, uuid4
 
 import httpx2
 from fastapi import HTTPException
@@ -322,3 +323,70 @@ def test_interactive_docs_are_disabled_in_production() -> None:
     response = make_client(RuntimeEnvironment.PRODUCTION).get("/docs")
 
     assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# auth-rm I1: unknown candidate ids fail closed with 404 (not empty / not 500)
+# ---------------------------------------------------------------------------
+
+
+class _StrictCandidateService:
+    """Candidate service that knows NO candidate (every get -> None)."""
+
+    def get(self, candidate_id: UUID):
+        return None
+
+
+def _client_with_strict_candidate_gate() -> httpx2.Client:
+    """create_app client whose path_candidate_id gate always answers 404."""
+    settings = Settings.model_validate({"environment": RuntimeEnvironment.TEST})
+    app = create_app(settings, readiness_probe=FixedReadinessProbe())
+    app.state.candidate_service = _StrictCandidateService()
+    return cast("httpx2.Client", TestClient(app))
+
+
+def test_unknown_candidate_get_returns_404_not_empty() -> None:
+    """GET on a per-candidate router with an unknown id -> 404, not empty."""
+    client = _client_with_strict_candidate_gate()
+    response = client.get(f"/api/v1/candidates/{uuid4()}/inbox")
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "NOT_FOUND"
+
+
+def test_unknown_candidate_post_returns_404_not_500() -> None:
+    """POST on a per-candidate write route with an unknown id -> 404, not 500.
+
+    Before the dependency was wired, an unknown candidate id reached the
+    application repo and hit the candidate FK -> IntegrityError -> 500.
+    """
+    client = _client_with_strict_candidate_gate()
+    response = client.post(
+        f"/api/v1/candidates/{uuid4()}/applications",
+        json={"canonical_job_id": str(uuid4())},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "NOT_FOUND"
+
+
+def test_known_candidate_passes_the_gate() -> None:
+    """A candidate the service knows passes the gate and reaches the route."""
+    cid = uuid4()
+
+    class _KnownCandidateService:
+        def get(self, candidate_id: UUID):
+            if candidate_id == cid:
+                return object()
+            return None
+
+    settings = Settings.model_validate({"environment": RuntimeEnvironment.TEST})
+    app = create_app(settings, readiness_probe=FixedReadinessProbe())
+    app.state.candidate_service = _KnownCandidateService()
+    client = cast("httpx2.Client", TestClient(app))
+
+    # The route itself fails closed (503) without a wired service, but the
+    # candidate gate must pass (i.e. NOT a 404) for the known id.
+    response = client.get(f"/api/v1/candidates/{cid}/inbox")
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "DEPENDENCY_NOT_READY"

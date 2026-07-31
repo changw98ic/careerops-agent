@@ -16,6 +16,7 @@ import pytest
 from temporalio.client import (
     Client,
     Schedule,
+    ScheduleListDescription,
     ScheduleState,
     ScheduleUpdate,
     ScheduleUpdateInput,
@@ -27,7 +28,6 @@ from careerops.infrastructure.temporal.schedule_manager import (
     ScheduleManager,
     crawl_schedule_id,
     gmail_token_refresh_schedule_id,
-    mail_sync_schedule_id,
 )
 
 # Minimal stubs matching the temporalio client surface ScheduleManager uses.
@@ -100,6 +100,18 @@ class _FakeClient:
         self.schedules[schedule_id] = handle
         self.created.append((schedule_id, schedule))
         return handle
+
+    async def list_schedules(self, *_: Any, **__: Any) -> Any:
+        for schedule_id in sorted(self.schedules):
+            yield ScheduleListDescription(
+                id=schedule_id,
+                schedule=None,
+                info=None,
+                typed_search_attributes=None,
+                search_attributes=None,
+                data_converter=None,
+                raw_entry=None,
+            )
 
 
 def _manager() -> tuple[ScheduleManager, _FakeClient]:
@@ -267,11 +279,38 @@ class TestDescribe:
 
 
 class TestScheduleIds:
-    def test_mail_sync_id_is_deterministic(self) -> None:
-        assert mail_sync_schedule_id("acc-1") == "mail-sync:acc-1"
-
     def test_crawl_id_includes_owner_and_version(self) -> None:
         assert crawl_schedule_id("owner", "v1") == "crawl:owner:v1"
 
     def test_token_refresh_id_is_constant(self) -> None:
         assert gmail_token_refresh_schedule_id() == "gmail-token-refresh"
+
+
+class TestListScheduleIds:
+    @pytest.mark.asyncio
+    async def test_lists_all_registered_schedule_ids(self) -> None:
+        mgr, _ = _manager()
+        await mgr.ensure_schedule(
+            schedule_id="outbox-drain",
+            workflow=_WORKFLOW,
+            arg=1,
+            interval=timedelta(minutes=10),
+            task_queue="q",
+        )
+        await mgr.ensure_schedule(
+            schedule_id="mail-sync:cand-1",
+            workflow=_WORKFLOW,
+            arg=1,
+            interval=timedelta(minutes=5),
+            task_queue="q",
+        )
+
+        assert sorted(await mgr.list_schedule_ids()) == [
+            "mail-sync:cand-1",
+            "outbox-drain",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_lists_empty_when_no_schedules(self) -> None:
+        mgr, _ = _manager()
+        assert await mgr.list_schedule_ids() == []

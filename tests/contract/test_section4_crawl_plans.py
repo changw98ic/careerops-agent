@@ -19,6 +19,7 @@ contract (status codes, error envelopes, server-side ownership).
 from __future__ import annotations
 
 from collections.abc import Mapping
+from types import SimpleNamespace
 from typing import Any, cast
 from uuid import UUID, uuid4
 
@@ -122,6 +123,18 @@ class FixedReadinessProbe:
         return None
 
 
+class _PermissiveCandidateService:
+    """Lets any well-formed candidate id through the ``path_candidate_id`` gate.
+
+    These tests exercise route logic with per-test owner ids, not the
+    candidate-existence contract (covered by test_path_candidate_id + the 404
+    contract tests in test_api_contract).
+    """
+
+    def get(self, candidate_id: UUID):
+        return SimpleNamespace(id=candidate_id)
+
+
 def _make_api_client(
     *,
     source_service: CrawlSourceService | None = None,
@@ -140,6 +153,10 @@ def _make_api_client(
     settings = Settings.model_validate({"environment": RuntimeEnvironment.TEST})
     probe = FixedReadinessProbe()
     app = create_app(settings, readiness_probe=probe)
+    # auth-rm I1: per-candidate routers carry the path_candidate_id existence
+    # gate; let every well-formed id through so route behavior is what is
+    # tested here.
+    app.state.candidate_service = _PermissiveCandidateService()
     if source_service is not None:
         app.state.crawl_source_service = source_service
     if plan_service is not None:

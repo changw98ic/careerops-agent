@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import cast
 from uuid import UUID, uuid4
 
@@ -48,11 +49,24 @@ class _FixedReadinessProbe:
         return None
 
 
+class _PermissiveCandidateService:
+    """Lets any well-formed candidate id through the ``path_candidate_id`` gate.
+
+    These tests exercise route behavior with a fixed candidate id, not the
+    candidate-existence contract (that is covered by test_path_candidate_id
+    and the 404 contract tests in test_api_contract).
+    """
+
+    def get(self, candidate_id: UUID):
+        return SimpleNamespace(id=candidate_id)
+
+
 def _make_client() -> httpx2.Client:
     settings = Settings.model_validate({"environment": RuntimeEnvironment.TEST})
     probe = _FixedReadinessProbe()
 
     app = create_app(settings, readiness_probe=probe)
+    app.state.candidate_service = _PermissiveCandidateService()
     return cast("httpx2.Client", TestClient(app))
 
 

@@ -21,8 +21,9 @@ Run::
 from __future__ import annotations
 
 from collections.abc import Mapping
+from types import SimpleNamespace
 from typing import cast
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx2
 from fastapi.testclient import TestClient
@@ -48,9 +49,20 @@ class _FixedReadinessProbe:
         return None
 
 
+class _PermissiveCandidateService:
+    """Lets any well-formed candidate id through the ``path_candidate_id`` gate."""
+
+    def get(self, candidate_id: UUID):
+        return SimpleNamespace(id=candidate_id)
+
+
 def _make_client() -> httpx2.Client:
     settings = Settings.model_validate({"environment": RuntimeEnvironment.TEST})
     app = create_app(settings, readiness_probe=_FixedReadinessProbe())
+    # auth-rm I1: per-candidate routers carry the path_candidate_id existence
+    # gate; let every well-formed id through so the ownership/status-code
+    # contracts below keep exercising the route logic.
+    app.state.candidate_service = _PermissiveCandidateService()
     return cast("httpx2.Client", TestClient(app))
 
 

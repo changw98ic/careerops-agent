@@ -144,42 +144,31 @@ make verify-compose
 forwarding, and tears down volumes on exit. `make verify-m0` additionally requires
 `CAREEROPS_TEST_DATABASE_URL` for a separate disposable PostgreSQL integration database.
 
-## First-owner bootstrap and normal sign-in
+## Creating candidates
 
-After the migration service has completed and API is healthy, issue a one-time bootstrap token
-from a local shell or via the API container. The raw token is printed once; do not paste it into
-logs, shell history, tickets, or source control.
+The console-login layer (bootstrap token, `/login`, sessions, cookies, CSRF, auth rate
+limiting) was removed: there is no "owner account" to bootstrap anymore. Candidates are plain
+rows in the `candidates` table, created through the API's global candidate surface (no
+per-candidate auth gate, auth-rm Task 9):
 
 ```bash
-# On a host configured with the same database/runtime environment:
-make bootstrap
-
-# Or, while the Compose stack is running:
-docker compose run --rm api careerops-bootstrap
+# Create a candidate (the API listens on the compose-internal name too):
+curl --fail --silent -X POST http://127.0.0.1:${CAREEROPS_API_PORT:-8000}/api/v1/candidates \
+  -H 'Content-Type: application/json' \
+  -d '{"display_name": "First Candidate"}'
 ```
 
-The token expires in 15 minutes and is invalid after use. Open the SPA at
-`http://127.0.0.1:${CAREEROPS_FRONTEND_PORT:-5173}/bootstrap`, provide the token, choose a canonical
-username (`[a-z0-9][a-z0-9._-]{2,63}`), and choose a password. Completion creates the sole
-owner account and rotates the pre-authentication cookie into an authenticated session. The
-backend exposes only the versioned `/api/v1/auth/*` endpoints; it does not serve an HTML auth
-page.
+The response carries the new candidate's `id`. Every per-candidate resource lives under
+`/api/v1/candidates/{candidate_id}/...` (profile, crawl plans, inbox, applications, ...) and
+the API validates that the path-supplied candidate id exists: an unknown id returns `404
+NOT_FOUND` rather than silently empty lists. Pick a candidate from `GET
+/api/v1/candidates` (the frontend candidate selector does exactly this), then drive the SPA
+at `http://127.0.0.1:${CAREEROPS_FRONTEND_PORT:-5173}/` with that candidate selected.
 
-For subsequent access, open the SPA `/login` page and sign in with that username and password.
-The root dashboard is session-protected. Use the SPA **退出** action to end the session; logout
-revokes the server-side session and clears the browser cookies. Lost-password recovery
-is intentionally not an email flow; it needs a local console/host recovery procedure before it
-is enabled.
-
-The console accepts only its configured Host and Origin allowlists. It uses `HttpOnly`,
-`SameSite=Strict` cookies and requires Secure cookies when configured for HTTPS. Do not add
-public hostnames or a reverse proxy without extending the security design and its tests.
-Bootstrap, login, and logout throttling uses a shared Redis fixed window. Redis and protocol
-errors deny the request. The limiter key is derived from `request.client.host`; it deliberately
-does not trust `X-Forwarded-For` or related client-supplied forwarding headers.
-The latest local acceptance run verified that the first five invalid login attempts were
-accepted by the limiter, the sixth returned `429`, and an API restart remained limited by the
-shared Redis state.
+There is no login, logout, or session state; the frontend simply holds the selected candidate
+id. On API startup the trigger-loop bootstrap registers the background schedules (outbox
+drain, approval sweep, per-candidate mail sync and per-candidate crawl) for every existing
+candidate — nothing else needs to be done to start the loop.
 
 ## Troubleshooting
 

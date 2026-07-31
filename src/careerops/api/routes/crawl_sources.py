@@ -1,12 +1,11 @@
 """Crawl-source API routes (Section 4, task 4.7).
 
-Additive routes under ``/api/v1/crawl-sources`` backed by
-:class:`CrawlSourceService`. Every route resolves the candidate SERVER-SIDE via
-:func:`require_candidate_id`, pulls the service through
-:func:`require_repository` (503 on missing wiring — Iron Rule 7), and passes
-through the Phase-0 ``CRAWL_PLAN_MANAGEMENT`` capability gate (released by
-default; Iron Rule 8). A client-supplied ``candidate_id`` is NEVER honored for
-ownership scoping.
+Additive routes under ``/api/v1/candidates/{candidate_id}/crawl-sources`` backed by
+:class:`CrawlSourceService`. Every route takes the candidate from the URL path,
+pulls the service through :func:`require_repository` (503 on missing wiring —
+Iron Rule 7), and passes through the Phase-0 ``CRAWL_PLAN_MANAGEMENT``
+capability gate (released by default; Iron Rule 8). A client-supplied
+``candidate_id`` is NEVER honored for ownership scoping.
 
 Sources DECLARE SCOPE ONLY (Iron Rule 6): recording trust / terms / robots
 status here does not bypass the crawl policy layer
@@ -25,7 +24,6 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 
-from careerops.api.auth_dependency import require_candidate_id
 from careerops.api.capability_dependency import require_capability, require_repository
 from careerops.api.errors import InvalidStateError
 from careerops.application.crawl_plan_service import CrawlSourceService
@@ -33,7 +31,7 @@ from careerops.domain.crawl_plans import CrawlPolicyStatus, CrawlSourceState
 from careerops.orchestration.capability_resolver import CapabilityKind
 
 router = APIRouter(
-    prefix="/api/v1/crawl-sources",
+    prefix="/api/v1/candidates/{candidate_id}/crawl-sources",
     tags=["crawl-sources"],
     dependencies=[Depends(require_capability(CapabilityKind.CRAWL_PLAN_MANAGEMENT))],
 )
@@ -116,7 +114,7 @@ def _service(request: Request) -> CrawlSourceService:
 
 @router.get("")
 def list_sources(
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[CrawlSourceService, Depends(_service)],
     limit: int = Query(default=50, ge=1, le=200),
 ) -> CrawlSourceListResponse:
@@ -127,7 +125,7 @@ def list_sources(
 @router.post("", status_code=201)
 def register_source(
     body: CrawlSourceWriteRequest,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[CrawlSourceService, Depends(_service)],
 ) -> CrawlSourceResponse:
     """Register a trusted ATS / official source.
@@ -155,7 +153,7 @@ def register_source(
 @router.get("/{source_id}")
 def get_source(
     source_id: UUID,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[CrawlSourceService, Depends(_service)],
 ) -> CrawlSourceResponse:
     return _to_response(service.get_source(candidate_id, source_id))
@@ -165,7 +163,7 @@ def get_source(
 def update_source(
     source_id: UUID,
     body: CrawlSourceUpdateRequest,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[CrawlSourceService, Depends(_service)],
 ) -> CrawlSourceResponse:
     source = service.update(
@@ -186,7 +184,7 @@ def update_source(
 @router.delete("/{source_id}", status_code=204)
 def remove_source(
     source_id: UUID,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[CrawlSourceService, Depends(_service)],
 ) -> None:
     service.remove(candidate_id, source_id)
@@ -195,7 +193,7 @@ def remove_source(
 @router.post("/{source_id}/pause")
 def pause_source(
     source_id: UUID,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[CrawlSourceService, Depends(_service)],
 ) -> CrawlSourceResponse:
     """Idempotent: flip ``enabled`` off. Retains prior postings / evidence /
@@ -206,7 +204,7 @@ def pause_source(
 @router.post("/{source_id}/resume")
 def resume_source(
     source_id: UUID,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[CrawlSourceService, Depends(_service)],
 ) -> CrawlSourceResponse:
     """Idempotent: flip ``enabled`` on and return a PAUSED source to ACTIVE.

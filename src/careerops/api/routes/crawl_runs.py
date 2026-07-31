@@ -1,12 +1,12 @@
 """Crawl-run API routes (Section 4, task 4.7).
 
-Additive routes under ``/api/v1/crawl-runs`` backed by :class:`CrawlRunService`.
-Read-only inspection of run history: list runs for the owner, list runs bound
-to a plan version, and fetch a single run detail. Section 4 records run
-identity + terminal counters; the actual posting/version ingest lives in
-Section 5. Same Iron-rule posture as the other crawl routers: server-side
-candidate ownership, ``require_repository`` (503) on missing wiring, and the
-``CRAWL_PLAN_MANAGEMENT`` capability gate (released by default).
+Additive routes under ``/api/v1/candidates/{candidate_id}/crawl-runs`` backed by
+:class:`CrawlRunService`. Read-only inspection of run history: list runs for
+the owner, list runs bound to a plan version, and fetch a single run detail.
+Section 4 records run identity + terminal counters; the actual posting/version
+ingest lives in Section 5. Same Iron-rule posture as the other crawl routers:
+path-supplied candidate ownership, ``require_repository`` (503) on missing
+wiring, and the ``CRAWL_PLAN_MANAGEMENT`` capability gate (released by default).
 """
 
 # pyright: reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownArgumentType=false
@@ -20,13 +20,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 
-from careerops.api.auth_dependency import require_candidate_id
 from careerops.api.capability_dependency import require_capability, require_repository
 from careerops.application.crawl_plan_service import CrawlRunService
 from careerops.orchestration.capability_resolver import CapabilityKind
 
 router = APIRouter(
-    prefix="/api/v1/crawl-runs",
+    prefix="/api/v1/candidates/{candidate_id}/crawl-runs",
     tags=["crawl-runs"],
     dependencies=[Depends(require_capability(CapabilityKind.CRAWL_PLAN_MANAGEMENT))],
 )
@@ -86,7 +85,7 @@ def _service(request: Request) -> CrawlRunService:
 
 @router.get("")
 def list_runs(
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[CrawlRunService, Depends(_service)],
     limit: int = Query(default=50, ge=1, le=200),
     plan_version_id: UUID | None = None,
@@ -108,7 +107,7 @@ def list_runs(
 @router.get("/{run_id}")
 def get_run(
     run_id: UUID,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[CrawlRunService, Depends(_service)],
 ) -> RunResponse:
     """Return one run, scoped transitively via its plan version's owner. A run

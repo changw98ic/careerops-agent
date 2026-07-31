@@ -134,9 +134,9 @@ def _make_api_client(
 
     When services are provided they are attached to ``app.state`` so
     ``require_repository`` resolves them; when absent the routes hit 503.
-    ``candidate_id`` is injected via a mock auth service so
-    ``require_candidate_id`` resolves to the given UUID.  A test session
-    cookie is set on the client so ``require_api_auth`` passes.
+    ``candidate_id`` is supplied by the URL path (per-test f-string); the
+    ``candidate_id`` arg here only gates whether the capability resolver is
+    wired (the crawl routers still pass through ``require_capability``).
     """
     settings = Settings.model_validate({"environment": RuntimeEnvironment.TEST})
     probe = FixedReadinessProbe()
@@ -227,7 +227,7 @@ class TestUnsupportedSourceType:
             candidate_id=owner,
         )
         resp = client.post(
-            "/api/v1/crawl-sources",
+            f"/api/v1/candidates/{owner}/crawl-sources",
             json={
                 "company_id": str(uuid4()),
                 "source_type": "workday",
@@ -368,7 +368,7 @@ class TestInvalidSchedule:
             candidate_id=owner,
         )
         resp = client.post(
-            "/api/v1/crawl-plans/versions",
+            f"/api/v1/candidates/{owner}/crawl-plans/versions",
             json={
                 "interval_seconds": 10,
                 "timezone": "UTC",
@@ -384,7 +384,7 @@ class TestInvalidSchedule:
             candidate_id=owner,
         )
         resp = client.post(
-            "/api/v1/crawl-plans/versions",
+            f"/api/v1/candidates/{owner}/crawl-plans/versions",
             json={
                 "interval_seconds": MIN_SCHEDULE_INTERVAL_SECONDS,
                 "timezone": "Invalid/Zone",
@@ -546,7 +546,7 @@ class TestPlanVersionImmutability:
             candidate_id=owner_id,
         )
         resp1 = client.post(
-            "/api/v1/crawl-plans/versions",
+            f"/api/v1/candidates/{owner_id}/crawl-plans/versions",
             json={
                 "sources": [str(src.id)],
                 "themes": ["python"],
@@ -558,7 +558,7 @@ class TestPlanVersionImmutability:
         v1_id = resp1.json()["id"]
 
         resp2 = client.post(
-            "/api/v1/crawl-plans/versions",
+            f"/api/v1/candidates/{owner_id}/crawl-plans/versions",
             json={
                 "sources": [str(src.id)],
                 "themes": ["golang"],
@@ -571,7 +571,7 @@ class TestPlanVersionImmutability:
         assert v2_id != v1_id
 
         # List versions: both present, v2 is active.
-        list_resp = client.get("/api/v1/crawl-plans/versions")
+        list_resp = client.get(f"/api/v1/candidates/{owner_id}/crawl-plans/versions")
         items = list_resp.json()["items"]
         assert len(items) == 2
         active_ids = [i["id"] for i in items if i["is_active"]]
@@ -741,14 +741,14 @@ class TestPauseBehavior:
 
         # Create a version first.
         client.post(
-            "/api/v1/crawl-plans/versions",
+            f"/api/v1/candidates/{owner}/crawl-plans/versions",
             json={
                 "interval_seconds": MIN_SCHEDULE_INTERVAL_SECONDS,
                 "timezone": "UTC",
             },
         )
         # Pause.
-        resp = client.post("/api/v1/crawl-plans/pause")
+        resp = client.post(f"/api/v1/candidates/{owner}/crawl-plans/pause")
         assert resp.status_code == 200
         assert resp.json()["state"] == "paused"
         assert resp.json()["active"] is None
@@ -912,8 +912,8 @@ class TestRunNowIdempotency:
             run_service=run_svc,
             candidate_id=owner,
         )
-        r1 = client.post("/api/v1/crawl-plans/run-now")
-        r2 = client.post("/api/v1/crawl-plans/run-now")
+        r1 = client.post(f"/api/v1/candidates/{owner}/crawl-plans/run-now")
+        r2 = client.post(f"/api/v1/candidates/{owner}/crawl-plans/run-now")
         assert r1.status_code == 200
         assert r2.status_code == 200
         assert r1.json()["id"] == r2.json()["id"]
@@ -1065,20 +1065,17 @@ class TestOwnershipScoping:
     substitution is rejected; missing repo -> 503."""
 
     def test_api_source_routes_reject_unauthenticated(self) -> None:
-        """Without a session/auth, the route rejects the request.
-
-        The crawl-plan routes carry a ``require_capability`` dependency that
-        checks the capability resolver on ``app.state``.  When the resolver
-        is absent (non-RuntimeResources probe) the dependency raises 503.
-        When auth_service is absent AND no capability resolver is wired the
-        request may hit either the capability gate (503) or the auth gate
-        (403).  Both are safe-deny outcomes; the test accepts either.
+        """candidate_id now comes from the path (no session principal), so
+        the auth gate is gone. The crawl routes still carry a
+        ``require_capability`` dependency; when the resolver is absent (no
+        ``RuntimeResources`` probe / candidate_id not wired) the dependency
+        raises 503 — the safe-deny outcome the assertion accepts.
         """
         client = _make_api_client(
             source_service=CrawlSourceService(InMemoryCrawlSourceRepository()),
             candidate_id=None,
         )
-        resp = client.get("/api/v1/crawl-sources")
+        resp = client.get(f"/api/v1/candidates/{uuid4()}/crawl-sources")
         assert resp.status_code in (401, 403, 503)
 
     def test_api_plan_routes_reject_unauthenticated(self) -> None:
@@ -1086,7 +1083,7 @@ class TestOwnershipScoping:
             plan_service=CrawlPlanService(InMemoryCrawlPlanRepository()),
             candidate_id=None,
         )
-        resp = client.get("/api/v1/crawl-plans")
+        resp = client.get(f"/api/v1/candidates/{uuid4()}/crawl-plans")
         assert resp.status_code in (401, 403, 503)
 
     def test_api_run_routes_reject_unauthenticated(self) -> None:
@@ -1098,7 +1095,7 @@ class TestOwnershipScoping:
             ),
             candidate_id=None,
         )
-        resp = client.get("/api/v1/crawl-runs")
+        resp = client.get(f"/api/v1/candidates/{uuid4()}/crawl-runs")
         assert resp.status_code in (401, 403, 503)
 
     def test_api_returns_503_when_source_service_missing(self) -> None:
@@ -1115,7 +1112,7 @@ class TestOwnershipScoping:
         # check rather than failing at the capability gate.
         settings = Settings.model_validate({"environment": RuntimeEnvironment.TEST})
         cast(Any, client).app.state.capability_resolver = SettingsCapabilityResolver(settings)
-        resp = client.get("/api/v1/crawl-sources")
+        resp = client.get(f"/api/v1/candidates/{owner}/crawl-sources")
         assert resp.status_code == 503
         body = resp.json()
         assert body["error"]["code"] == "DEPENDENCY_NOT_READY"
@@ -1125,7 +1122,7 @@ class TestOwnershipScoping:
         client = _make_api_client(candidate_id=owner)
         settings = Settings.model_validate({"environment": RuntimeEnvironment.TEST})
         cast(Any, client).app.state.capability_resolver = SettingsCapabilityResolver(settings)
-        resp = client.get("/api/v1/crawl-plans")
+        resp = client.get(f"/api/v1/candidates/{owner}/crawl-plans")
         assert resp.status_code == 503
         assert resp.json()["error"]["code"] == "DEPENDENCY_NOT_READY"
 
@@ -1134,7 +1131,7 @@ class TestOwnershipScoping:
         client = _make_api_client(candidate_id=owner)
         settings = Settings.model_validate({"environment": RuntimeEnvironment.TEST})
         cast(Any, client).app.state.capability_resolver = SettingsCapabilityResolver(settings)
-        resp = client.get("/api/v1/crawl-runs")
+        resp = client.get(f"/api/v1/candidates/{owner}/crawl-runs")
         assert resp.status_code == 503
         assert resp.json()["error"]["code"] == "DEPENDENCY_NOT_READY"
 

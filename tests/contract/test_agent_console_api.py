@@ -472,16 +472,17 @@ class TestAgentRuns:
 
 class TestForbiddenCrawlPlansRootMutation:
     def test_no_root_post_crawl_plans_in_openapi(self) -> None:
-        """Verify that POST /api/v1/crawl-plans (root) is not an allowed route."""
+        """Verify that POST .../crawl-plans (root) is not an allowed route."""
         client = _make_client()
         response = client.get("/api/v1/openapi.json")
         assert response.status_code == 200
         paths = response.json()["paths"]
-        # The root POST /api/v1/crawl-plans must NOT be an allowed mutation.
-        if "/api/v1/crawl-plans" in paths:
-            methods = set(paths["/api/v1/crawl-plans"].keys())
+        # The root POST .../crawl-plans must NOT be an allowed mutation.
+        crawl_plans_path = "/api/v1/candidates/{candidate_id}/crawl-plans"
+        if crawl_plans_path in paths:
+            methods = set(paths[crawl_plans_path].keys())
             assert "post" not in methods, (
-                "Forbidden: POST /api/v1/crawl-plans root mutation must not exist"
+                "Forbidden: POST crawl-plans root mutation must not exist"
             )
 
 
@@ -493,14 +494,14 @@ class TestForbiddenCrawlPlansRootMutation:
 class TestCrawlPlanEndpoints:
     def test_get_crawl_plans_returns_200_or_503(self) -> None:
         client = _make_client()
-        response = client.get("/api/v1/crawl-plans")
+        response = client.get(f"/api/v1/candidates/{CANDIDATE_ID}/crawl-plans")
         # Service may not be wired in test mode
         assert response.status_code in (200, 503)
 
     def test_crawl_plan_versions_requires_idempotency(self) -> None:
         client = _make_client()
         response = client.post(
-            "/api/v1/crawl-plans/versions",
+            f"/api/v1/candidates/{CANDIDATE_ID}/crawl-plans/versions",
             json={"source_id": str(uuid4())},
             headers={
                 "X-CSRF-Token": "test-csrf-token",

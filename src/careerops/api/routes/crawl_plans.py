@@ -1,8 +1,9 @@
 """Crawl-plan API routes (Section 4, task 4.7).
 
-Additive routes under ``/api/v1/crawl-plans`` backed by :class:`CrawlPlanService`
-and :class:`CrawlRunService` (run-now). Same Iron-rule posture as the sources
-router: server-side candidate ownership, ``require_repository`` (503) on
+Additive routes under ``/api/v1/candidates/{candidate_id}/crawl-plans`` backed by
+:class:`CrawlPlanService` and :class:`CrawlRunService` (run-now). Same Iron-rule
+posture as the sources router: path-supplied candidate ownership,
+``require_repository`` (503) on
 missing wiring, and the ``CRAWL_PLAN_MANAGEMENT`` capability gate (released by
 default). The run-now route returns the queued run record after requesting its
 idempotent Temporal workflow; it never waits for crawl completion.
@@ -30,7 +31,6 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 
-from careerops.api.auth_dependency import require_candidate_id
 from careerops.api.capability_dependency import require_capability, require_repository
 from careerops.api.errors import InvalidStateError
 from careerops.application.crawl_plan_service import (
@@ -61,7 +61,7 @@ except ImportError:  # pragma: no cover - temporalio is a runtime dependency
 _log = logging.getLogger("careerops.api.crawl_plans")
 
 router = APIRouter(
-    prefix="/api/v1/crawl-plans",
+    prefix="/api/v1/candidates/{candidate_id}/crawl-plans",
     tags=["crawl-plans"],
     dependencies=[Depends(require_capability(CapabilityKind.CRAWL_PLAN_MANAGEMENT))],
 )
@@ -336,7 +336,7 @@ def _source_repo(request: Request) -> CrawlSourceService:
 
 @router.get("")
 def get_active_plan(
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[CrawlPlanService, Depends(_plan_service)],
 ) -> CrawlPlanHeadResponse:
     """Return the active-plan head view: the active version (or ``null`` when
@@ -347,7 +347,7 @@ def get_active_plan(
 
 @router.get("/versions")
 def list_plan_versions(
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[CrawlPlanService, Depends(_plan_service)],
     limit: int = Query(default=50, ge=1, le=200),
 ) -> CrawlPlanVersionListResponse:
@@ -360,7 +360,7 @@ def list_plan_versions(
 @router.get("/versions/{version_id}")
 def get_plan_version(
     version_id: UUID,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[CrawlPlanService, Depends(_plan_service)],
 ) -> CrawlPlanVersionResponse:
     return _to_response(service.get_version(candidate_id, version_id))
@@ -375,7 +375,7 @@ def get_plan_version(
 async def create_plan_version(
     request: Request,
     body: CrawlPlanWriteRequest,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[CrawlPlanService, Depends(_plan_service)],
 ) -> CrawlPlanVersionResponse:
     """Validate, persist, and (by default) activate a new plan version.
@@ -399,7 +399,7 @@ async def create_plan_version(
 async def activate_plan_version(
     request: Request,
     version_id: UUID,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[CrawlPlanService, Depends(_plan_service)],
 ) -> CrawlPlanVersionResponse:
     """Activate an existing version (deactivates the prior active one). The
@@ -415,7 +415,7 @@ async def activate_plan_version(
 @router.post("/pause")
 async def pause_plan(
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[CrawlPlanService, Depends(_plan_service)],
 ) -> CrawlPlanHeadResponse:
     """Idempotent: deactivate the active version so the scheduler fires no new
@@ -431,7 +431,7 @@ async def pause_plan(
 @router.post("/resume")
 async def resume_plan(
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[CrawlPlanService, Depends(_plan_service)],
 ) -> CrawlPlanHeadResponse:
     """Idempotent: re-activate the latest version. Raises ``INVALID_STATE`` if
@@ -451,7 +451,7 @@ async def resume_plan(
 @router.post("/run-now")
 async def run_plan_now(
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     run_service: Annotated[CrawlRunService, Depends(_run_service)],
 ) -> RunResponse:
     """Create (or return the existing PENDING) run for the active plan.
@@ -477,7 +477,7 @@ async def run_plan_now(
 
 @router.get("/readiness")
 def get_readiness_state(
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[CrawlPlanService, Depends(_plan_service)],
     request: Request,
 ) -> ReadinessStateResponse:
@@ -573,7 +573,7 @@ def get_readiness_state(
 
 @router.get("/empty-state-cta")
 def get_empty_state_cta(
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[CrawlPlanService, Depends(_plan_service)],
     request: Request,
 ) -> EmptyStateCTAResponse:
@@ -641,7 +641,7 @@ def get_empty_state_cta(
 
 @router.get("/scope-preview")
 def get_scope_preview(
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[CrawlPlanService, Depends(_plan_service)],
     request: Request,
     version_id: UUID | None = None,

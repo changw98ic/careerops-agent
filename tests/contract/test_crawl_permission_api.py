@@ -26,7 +26,6 @@ from careerops.application.crawl_permission_service import (
     ListPermissionAuditSink,
 )
 from careerops.api.routes.crawl_permissions import router as crawl_permissions_router
-from careerops.api.auth_dependency import require_candidate_id
 from careerops.domain.crawl_attempts import (
     CrawlPermissionState,
     CrawlSourcePermission,
@@ -181,12 +180,7 @@ def _build_app(
     # Stash repos so the list-all endpoint can iterate sources.
     svc._sources = source_repo  # type: ignore[attr-defined]
 
-    # Override require_candidate_id to return a fixed owner (skip auth).
-    async def _fake_candidate_id() -> UUID:
-        return OWNER
-
-    app.dependency_overrides[require_candidate_id] = _fake_candidate_id
-
+    # candidate_id now comes from the URL path (OWNER); no auth override needed.
     app.include_router(crawl_permissions_router)
     return app
 
@@ -220,7 +214,7 @@ def client() -> tuple[TestClient, InMemorySourceRepo, InMemoryPermissionRepo, Li
 
 
 class TestPermissionAPIRequest:
-    """POST /api/v1/crawl-sources/{source_id}/permissions"""
+    """POST /api/v1/candidates/{candidate_id}/crawl-sources/{source_id}/permissions"""
 
     def test_request_creates_pending(self, client: tuple[TestClient, InMemorySourceRepo, InMemoryPermissionRepo, ListPermissionAuditSink]) -> None:
         c, source_repo, _, audit = client
@@ -228,7 +222,7 @@ class TestPermissionAPIRequest:
         source_repo.save(source)
 
         resp = c.post(
-            f"/api/v1/crawl-sources/{source.id}/permissions",
+            f"/api/v1/candidates/{OWNER}/crawl-sources/{source.id}/permissions",
             json={"login_evidence": "login required", "domain_scope": "example.com"},
         )
         assert resp.status_code == 201
@@ -248,28 +242,28 @@ class TestPermissionAPIRequest:
         source = _make_source()
         source_repo.save(source)
 
-        resp1 = c.post(f"/api/v1/crawl-sources/{source.id}/permissions", json={})
-        resp2 = c.post(f"/api/v1/crawl-sources/{source.id}/permissions", json={})
+        resp1 = c.post(f"/api/v1/candidates/{OWNER}/crawl-sources/{source.id}/permissions", json={})
+        resp2 = c.post(f"/api/v1/candidates/{OWNER}/crawl-sources/{source.id}/permissions", json={})
         assert resp1.status_code == 201
         assert resp2.status_code == 201
         assert resp1.json()["id"] == resp2.json()["id"]
 
     def test_request_nonexistent_source_404(self, client: tuple[TestClient, InMemorySourceRepo, InMemoryPermissionRepo, ListPermissionAuditSink]) -> None:
         c, _, _, _ = client
-        resp = c.post(f"/api/v1/crawl-sources/{uuid4()}/permissions", json={})
+        resp = c.post(f"/api/v1/candidates/{OWNER}/crawl-sources/{uuid4()}/permissions", json={})
         assert resp.status_code == 404
 
 
 class TestPermissionAPIList:
-    """GET /api/v1/crawl-sources/{source_id}/permissions"""
+    """GET /api/v1/candidates/{candidate_id}/crawl-sources/{source_id}/permissions"""
 
     def test_list_returns_permissions(self, client: tuple[TestClient, InMemorySourceRepo, InMemoryPermissionRepo, ListPermissionAuditSink]) -> None:
         c, source_repo, _, _ = client
         source = _make_source()
         source_repo.save(source)
 
-        c.post(f"/api/v1/crawl-sources/{source.id}/permissions", json={})
-        resp = c.get(f"/api/v1/crawl-sources/{source.id}/permissions")
+        c.post(f"/api/v1/candidates/{OWNER}/crawl-sources/{source.id}/permissions", json={})
+        resp = c.get(f"/api/v1/candidates/{OWNER}/crawl-sources/{source.id}/permissions")
         assert resp.status_code == 200
         data = resp.json()
         assert data["total"] == 1
@@ -280,18 +274,18 @@ class TestPermissionAPIList:
         source = _make_source()
         source_repo.save(source)
 
-        resp = c.get(f"/api/v1/crawl-sources/{source.id}/permissions")
+        resp = c.get(f"/api/v1/candidates/{OWNER}/crawl-sources/{source.id}/permissions")
         assert resp.status_code == 200
         assert resp.json()["total"] == 0
 
 
 class TestPermissionAPIDecisions:
-    """POST /api/v1/crawl-permissions/{id}/grant|deny|revoke"""
+    """POST /api/v1/candidates/{candidate_id}/crawl-permissions/{id}/grant|deny|revoke"""
 
     def _request_permission(self, c: TestClient, source_repo: InMemorySourceRepo) -> str:
         source = _make_source()
         source_repo.save(source)
-        resp = c.post(f"/api/v1/crawl-sources/{source.id}/permissions", json={})
+        resp = c.post(f"/api/v1/candidates/{OWNER}/crawl-sources/{source.id}/permissions", json={})
         assert resp.status_code == 201
         return resp.json()["id"]
 
@@ -299,7 +293,7 @@ class TestPermissionAPIDecisions:
         c, source_repo, _, audit = client
         perm_id = self._request_permission(c, source_repo)
 
-        resp = c.post(f"/api/v1/crawl-permissions/{perm_id}/grant")
+        resp = c.post(f"/api/v1/candidates/{OWNER}/crawl-permissions/{perm_id}/grant")
         assert resp.status_code == 200
         data = resp.json()
         assert data["state"] == "granted"
@@ -313,7 +307,7 @@ class TestPermissionAPIDecisions:
         c, source_repo, _, audit = client
         perm_id = self._request_permission(c, source_repo)
 
-        resp = c.post(f"/api/v1/crawl-permissions/{perm_id}/deny", json={"reason": "not now"})
+        resp = c.post(f"/api/v1/candidates/{OWNER}/crawl-permissions/{perm_id}/deny", json={"reason": "not now"})
         assert resp.status_code == 200
         assert resp.json()["state"] == "denied"
         assert audit.events[-1].decision.value == "denied"
@@ -321,9 +315,9 @@ class TestPermissionAPIDecisions:
     def test_revoke_after_grant(self, client: tuple[TestClient, InMemorySourceRepo, InMemoryPermissionRepo, ListPermissionAuditSink]) -> None:
         c, source_repo, _, audit = client
         perm_id = self._request_permission(c, source_repo)
-        c.post(f"/api/v1/crawl-permissions/{perm_id}/grant")
+        c.post(f"/api/v1/candidates/{OWNER}/crawl-permissions/{perm_id}/grant")
 
-        resp = c.post(f"/api/v1/crawl-permissions/{perm_id}/revoke", json={"reason": "changed mind"})
+        resp = c.post(f"/api/v1/candidates/{OWNER}/crawl-permissions/{perm_id}/revoke", json={"reason": "changed mind"})
         assert resp.status_code == 200
         assert resp.json()["state"] == "revoked"
         assert audit.events[-1].decision.value == "revoked"
@@ -331,34 +325,34 @@ class TestPermissionAPIDecisions:
     def test_deny_on_granted_returns_409(self, client: tuple[TestClient, InMemorySourceRepo, InMemoryPermissionRepo, ListPermissionAuditSink]) -> None:
         c, source_repo, _, _ = client
         perm_id = self._request_permission(c, source_repo)
-        c.post(f"/api/v1/crawl-permissions/{perm_id}/grant")
+        c.post(f"/api/v1/candidates/{OWNER}/crawl-permissions/{perm_id}/grant")
 
-        resp = c.post(f"/api/v1/crawl-permissions/{perm_id}/deny", json={})
+        resp = c.post(f"/api/v1/candidates/{OWNER}/crawl-permissions/{perm_id}/deny", json={})
         assert resp.status_code == 409
 
     def test_grant_on_denied_returns_409(self, client: tuple[TestClient, InMemorySourceRepo, InMemoryPermissionRepo, ListPermissionAuditSink]) -> None:
         c, source_repo, _, _ = client
         perm_id = self._request_permission(c, source_repo)
-        c.post(f"/api/v1/crawl-permissions/{perm_id}/deny", json={})
+        c.post(f"/api/v1/candidates/{OWNER}/crawl-permissions/{perm_id}/deny", json={})
 
-        resp = c.post(f"/api/v1/crawl-permissions/{perm_id}/grant")
+        resp = c.post(f"/api/v1/candidates/{OWNER}/crawl-permissions/{perm_id}/grant")
         assert resp.status_code == 409
 
     def test_grant_nonexistent_404(self, client: tuple[TestClient, InMemorySourceRepo, InMemoryPermissionRepo, ListPermissionAuditSink]) -> None:
         c, _, _, _ = client
-        resp = c.post(f"/api/v1/crawl-permissions/{uuid4()}/grant")
+        resp = c.post(f"/api/v1/candidates/{OWNER}/crawl-permissions/{uuid4()}/grant")
         assert resp.status_code == 404
 
     def test_get_permission(self, client: tuple[TestClient, InMemorySourceRepo, InMemoryPermissionRepo, ListPermissionAuditSink]) -> None:
         c, source_repo, _, _ = client
         perm_id = self._request_permission(c, source_repo)
 
-        resp = c.get(f"/api/v1/crawl-permissions/{perm_id}")
+        resp = c.get(f"/api/v1/candidates/{OWNER}/crawl-permissions/{perm_id}")
         assert resp.status_code == 200
         assert resp.json()["id"] == perm_id
         assert resp.json()["state"] == "pending"
 
     def test_get_nonexistent_404(self, client: tuple[TestClient, InMemorySourceRepo, InMemoryPermissionRepo, ListPermissionAuditSink]) -> None:
         c, _, _, _ = client
-        resp = c.get(f"/api/v1/crawl-permissions/{uuid4()}")
+        resp = c.get(f"/api/v1/candidates/{OWNER}/crawl-permissions/{uuid4()}")
         assert resp.status_code == 404

@@ -1,17 +1,17 @@
 """Crawl-permission API routes (real-autonomous-career-loop Phase 6.3).
 
 Ownership-scoped CRUD for source-specific crawl permission requests.
-Every route resolves the candidate SERVER-SIDE via ``require_candidate_id``
-(Iron Rule 2) and pulls the ``CrawlPermissionService`` from ``app.state``.
+Every route takes the candidate from the URL path (Iron Rule 2) and pulls the
+``CrawlPermissionService`` from ``app.state``.
 
 Endpoints:
-- GET    /api/v1/crawl-permissions                     -- list ownership-scoped requests
-- GET    /api/v1/crawl-permissions/{permission_id}     -- get one permission
-- GET    /api/v1/crawl-sources/{source_id}/permissions  -- list permissions for a source
-- POST   /api/v1/crawl-sources/{source_id}/permissions  -- request permission (pauses source)
-- POST   /api/v1/crawl-permissions/{permission_id}/grant  -- grant
-- POST   /api/v1/crawl-permissions/{permission_id}/deny   -- deny
-- POST   /api/v1/crawl-permissions/{permission_id}/revoke -- revoke
+- GET    /api/v1/candidates/{candidate_id}/crawl-permissions                     -- list ownership-scoped requests
+- GET    /api/v1/candidates/{candidate_id}/crawl-permissions/{permission_id}     -- get one permission
+- GET    /api/v1/candidates/{candidate_id}/crawl-sources/{source_id}/permissions  -- list permissions for a source
+- POST   /api/v1/candidates/{candidate_id}/crawl-sources/{source_id}/permissions  -- request permission (pauses source)
+- POST   /api/v1/candidates/{candidate_id}/crawl-permissions/{permission_id}/grant  -- grant
+- POST   /api/v1/candidates/{candidate_id}/crawl-permissions/{permission_id}/deny   -- deny
+- POST   /api/v1/candidates/{candidate_id}/crawl-permissions/{permission_id}/revoke -- revoke
 """
 
 from __future__ import annotations
@@ -23,7 +23,6 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 
-from careerops.api.auth_dependency import require_candidate_id
 from careerops.api.capability_dependency import require_repository
 from careerops.api.errors import InvalidStateError, NotFoundError
 from careerops.application.crawl_permission_service import CrawlPermissionService
@@ -31,7 +30,7 @@ from careerops.application.crawl_plan_service import CrawlSourceService
 from careerops.domain.crawl_attempts import CrawlPermissionState
 
 router = APIRouter(
-    prefix="/api/v1",
+    prefix="/api/v1/candidates/{candidate_id}",
     tags=["crawl-permissions"],
 )
 _LOGIN_TOOLS: dict[str, object] = {}
@@ -103,7 +102,7 @@ def _service(request: Request) -> CrawlPermissionService:
 
 @router.get("/crawl-permissions", response_model=PermissionListResponse)
 def list_all_permissions(
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[CrawlPermissionService, Depends(_service)],
     limit: int = Query(default=50, ge=1, le=200),
 ) -> PermissionListResponse:
@@ -133,7 +132,7 @@ def list_all_permissions(
 @router.get("/crawl-permissions/{permission_id}", response_model=PermissionResponse)
 def get_permission(
     permission_id: UUID,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[CrawlPermissionService, Depends(_service)],
 ) -> PermissionResponse:
     try:
@@ -149,7 +148,7 @@ def get_permission(
 )
 def grant_permission(
     permission_id: UUID,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[CrawlPermissionService, Depends(_service)],
     body: DecisionRequest | None = None,
 ) -> PermissionResponse:
@@ -170,7 +169,7 @@ def grant_permission(
 def open_login_session(
     permission_id: UUID,
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[CrawlPermissionService, Depends(_service)],
 ) -> LoginSessionResponse:
     """Open the approved source in its isolated persistent browser session."""
@@ -203,7 +202,7 @@ def open_login_session(
 def deny_permission(
     permission_id: UUID,
     body: DecisionRequest,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[CrawlPermissionService, Depends(_service)],
 ) -> PermissionResponse:
     try:
@@ -222,7 +221,7 @@ def deny_permission(
 def revoke_permission(
     permission_id: UUID,
     body: DecisionRequest,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[CrawlPermissionService, Depends(_service)],
 ) -> PermissionResponse:
     try:
@@ -245,7 +244,7 @@ def revoke_permission(
 )
 def list_permissions_for_source(
     source_id: UUID,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[CrawlPermissionService, Depends(_service)],
     limit: int = Query(default=50, ge=1, le=200),
 ) -> PermissionListResponse:
@@ -264,7 +263,7 @@ def list_permissions_for_source(
 def request_permission(
     source_id: UUID,
     body: PermissionRequest,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[CrawlPermissionService, Depends(_service)],
 ) -> PermissionResponse:
     """Request crawl permission for a source.

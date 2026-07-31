@@ -541,7 +541,8 @@ async function retryRun(run) {
     selectedRun.value = result
     runs.value = [result, ...runs.value.filter((item) => item.id !== result.id)]
     if (result.id) loadStages(result.id)
-    message.success('运行已提交重试。')
+    // Synchronous execution: the retry has already finished by now.
+    message.success('已用原输入重试，新运行已完成。')
   }
   actionLoading.retry = false
 }
@@ -557,7 +558,7 @@ async function stopRun(run) {
     selectedRun.value = result
     runs.value = runs.value.map((item) => (item.id === result.id ? result : item))
     if (result.id) loadStages(result.id)
-    message.success('已发送停止信号。')
+    message.success('运行已取消。')
   }
   actionLoading.stop = false
 }
@@ -587,7 +588,7 @@ function capabilityLabel(value) {
 function stateLabel(value) {
   return {
     pending: '排队中', running: '运行中', succeeded: '已完成', unavailable: '模型关闭',
-    abstained: '已弃答', failed: '失败', reviewed: '已审核', stale: '已过期',
+    abstained: '已弃答', failed: '失败', reviewed: '已审核', stale: '已过期', cancelled: '已取消',
   }[value] || value
 }
 

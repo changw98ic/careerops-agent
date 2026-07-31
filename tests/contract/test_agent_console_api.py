@@ -445,6 +445,25 @@ class TestAgentRuns:
         response = client.get(f"/api/v1/candidates/{CANDIDATE_ID}/agents/runs/{uuid4()}/reviews")
         assert response.status_code in (404, 503)
 
+    def test_retry_run_returns_503_without_service(self) -> None:
+        client = _make_client()
+        response = client.post(
+            f"/api/v1/candidates/{CANDIDATE_ID}/agents/runs/{uuid4()}/retry", json={}
+        )
+        assert response.status_code == 503
+
+    def test_get_run_stages_returns_503_without_service(self) -> None:
+        client = _make_client()
+        response = client.get(f"/api/v1/candidates/{CANDIDATE_ID}/agents/runs/{uuid4()}/stages")
+        assert response.status_code == 503
+
+    def test_stop_run_returns_503_without_service(self) -> None:
+        client = _make_client()
+        response = client.post(
+            f"/api/v1/candidates/{CANDIDATE_ID}/agents/runs/{uuid4()}/stop", json={}
+        )
+        assert response.status_code == 503
+
 
 # ---------------------------------------------------------------------------
 # 11. Forbidden POST /api/v1/crawl-plans root mutation
@@ -634,6 +653,9 @@ class TestOpenAPIRouteSet:
             "/api/v1/candidates/{candidate_id}/agents/runs/{run_id}",
             "/api/v1/candidates/{candidate_id}/agents/runs/{run_id}/review",
             "/api/v1/candidates/{candidate_id}/agents/runs/{run_id}/reviews",
+            "/api/v1/candidates/{candidate_id}/agents/runs/{run_id}/retry",
+            "/api/v1/candidates/{candidate_id}/agents/runs/{run_id}/stages",
+            "/api/v1/candidates/{candidate_id}/agents/runs/{run_id}/stop",
             "/api/v1/candidates/{candidate_id}/smart-intake/capability",
             "/api/v1/candidates/{candidate_id}/smart-intake/previews",
             "/api/v1/candidates/{candidate_id}/smart-intake/previews/{preview_id}",

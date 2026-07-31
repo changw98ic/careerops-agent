@@ -287,6 +287,12 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
         "/api/v1/candidates/{candidate_id}/agents/runs/{run_id}",
         "/api/v1/candidates/{candidate_id}/agents/runs/{run_id}/review",
         "/api/v1/candidates/{candidate_id}/agents/runs/{run_id}/reviews",
+        # Run control for synchronous execution (qa7): retry replays the
+        # stored input into a new run; stages is always empty; stop cancels
+        # a pending run.
+        "/api/v1/candidates/{candidate_id}/agents/runs/{run_id}/retry",
+        "/api/v1/candidates/{candidate_id}/agents/runs/{run_id}/stages",
+        "/api/v1/candidates/{candidate_id}/agents/runs/{run_id}/stop",
         # Review-only smart-intake previews + draft decisions (per-candidate;
         # auth-rm path-param migration).
         "/api/v1/candidates/{candidate_id}/smart-intake/capability",

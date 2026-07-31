@@ -164,7 +164,12 @@
 
       <!-- Stage timeline -->
       <a-card title="阶段时间线" size="small" class="run-center__card">
-        <StageTimeline :stages="stages" />
+        <StageTimeline v-if="stages.length" :stages="stages" />
+        <div v-else class="run-center__stages-empty">
+          <span class="muted">
+            同步执行：该运行由后端进程直接完成，不产生分阶段事件。
+          </span>
+        </div>
       </a-card>
 
       <!-- Timing -->
@@ -268,17 +273,22 @@ const liveMessage = computed(() => {
 })
 
 // --- State-dependent visibility ---
-const TERMINAL_STATES = new Set(['succeeded', 'failed', 'unavailable', 'abstained', 'stale', 'cancelled', 'reviewed'])
+// Retry is offered only for runs that finished WITHOUT a reviewable outcome:
+// the backend replays their stored input into a new run. SUCCEEDED/REVIEWED
+// runs are never retried (a silent duplicate).
+const RETRYABLE_STATES = new Set(['failed', 'abstained', 'unavailable', 'cancelled'])
 const REVIEWABLE_STATES = new Set(['succeeded', 'unavailable', 'abstained'])
 
 const canRetry = computed(() => {
   if (!props.run) return false
-  return TERMINAL_STATES.has(props.run.state) && props.run.state !== 'reviewed'
+  return RETRYABLE_STATES.has(props.run.state)
 })
 
+// Synchronous execution runs inline in the HTTP call, so PENDING is only a
+// transient state; stop is offered whenever one is visible anyway.
 const canStop = computed(() => {
   if (!props.run) return false
-  return props.run.state === 'pending' || props.run.state === 'running'
+  return props.run.state === 'pending'
 })
 
 const canReview = computed(() => {
@@ -505,6 +515,12 @@ function onReview(decision) {
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 6px;
+}
+
+.run-center__stages-empty {
+  padding: 14px 0;
+  color: var(--color-tertiary, #8c8c8c);
+  font-size: 13px;
 }
 
 .run-center__result-json {

@@ -86,10 +86,18 @@ class AgentRuntime:
         prompt_version: str,
         trace_id: str = "",
         now: datetime | None = None,
+        retry_of: UUID | None = None,
     ) -> AgentRun:
         occurred_at = now or datetime.now(UTC)
         input_hash = bundle.input_hash or canonical_input_hash(bundle.identities)
-        idempotency_key = f"{capability.value}:{input_hash}"
+        if retry_of is not None:
+            # A retry must never resolve to the original run through the
+            # idempotency lookup. The key is derived from the retried run so
+            # retrying the SAME source run twice returns the same new run
+            # (idempotent retry), while retrying a retry gets a fresh key.
+            idempotency_key = f"{capability.value}:{input_hash}:retry:{retry_of}"
+        else:
+            idempotency_key = f"{capability.value}:{input_hash}"
         existing = self._repository.find_by_idempotency(candidate_id, capability, idempotency_key)
         if existing is not None:
             return existing
@@ -185,6 +193,35 @@ class AgentRuntime:
                 result=_bounded_result(result),
                 error_category=_safe_reason(reason),
                 finished_at=now or datetime.now(UTC),
+            )
+        )
+
+    def stop(
+        self,
+        candidate_id: UUID,
+        run_id: UUID,
+        *,
+        reason_code: str = "user_requested",
+        now: datetime | None = None,
+    ) -> AgentRun:
+        """Cancel a run that is still PENDING.
+
+        Synchronous in-process execution cannot be interrupted mid-call, so
+        only a PENDING (not yet claimed) run can be stopped; RUNNING and
+        terminal runs raise :class:`InvalidStateError`.
+        """
+        run = self.get(candidate_id, run_id)
+        if run.state is not AgentRunState.PENDING:
+            raise InvalidStateError(
+                "agent run is not pending; synchronous execution cannot be interrupted"
+            )
+        occurred_at = now or datetime.now(UTC)
+        return self._repository.update(
+            replace(
+                run,
+                state=AgentRunState.CANCELLED,
+                error_category=_safe_reason(reason_code),
+                finished_at=occurred_at,
             )
         )
 

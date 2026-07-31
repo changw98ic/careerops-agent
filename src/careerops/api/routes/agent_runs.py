@@ -12,10 +12,16 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from careerops.api.capability_dependency import require_repository
+from careerops.api.errors import InvalidStateError
 from careerops.application.agent_services import (
     AgentStartInput,
 )
-from careerops.domain.agent_runs import AgentCapability, AgentReviewDecision, AgentRun
+from careerops.domain.agent_runs import (
+    AgentCapability,
+    AgentReviewDecision,
+    AgentRun,
+    AgentRunState,
+)
 
 router = APIRouter(prefix="/api/v1/candidates/{candidate_id}/agents", tags=["agents"])
 
@@ -33,6 +39,13 @@ class AgentReviewRequest(BaseModel):
     decision: AgentReviewDecision
     note: str = Field(default="", max_length=1_000)
     edited_result: dict[str, object] = Field(default_factory=dict)
+
+
+class AgentRunControlRequest(BaseModel):
+    """Optional guard body for retry/stop; both actions are body-less by design."""
+
+    expected_state: AgentRunState | None = None
+    reason_code: str = Field(default="", max_length=64)
 
 
 class AgentRunResponse(BaseModel):
@@ -164,6 +177,81 @@ def list_agent_reviews(
         ],
         "total": len(reviews),
     }
+
+
+@router.post("/runs/{run_id}/retry")
+def retry_agent_run(
+    run_id: UUID,
+    request: Request,
+    candidate_id: UUID,
+    body: AgentRunControlRequest | None = None,
+) -> AgentRunResponse:
+    """Replay a retryable run's stored input into a NEW run and execute it.
+
+    Only runs in {failed, abstained, unavailable, cancelled} are retryable;
+    everything else is a 409. The retry carries its own idempotency key, so
+    the original run is never returned by the idempotency lookup, and the
+    same source run retried twice is itself idempotent.
+    """
+    runtime = require_repository(request, "agent_runtime")
+    run = runtime.get(candidate_id, run_id)  # type: ignore[attr-defined]
+    if body is not None:
+        _check_expected_state(run, body.expected_state)
+    service = _service_for_run(request, run.capability)
+    retried = service.retry(candidate_id, run_id)  # type: ignore[attr-defined]
+    return _to_response(retried)
+
+
+@router.get("/runs/{run_id}/stages")
+def list_agent_run_stages(
+    run_id: UUID,
+    request: Request,
+    candidate_id: UUID,
+) -> AgentRunListResponse:
+    runtime = require_repository(request, "agent_runtime")
+    # Synchronous in-process execution emits no stage events: the stage
+    # timeline belongs to the Temporal AgentRunWorkflow path, which the
+    # review-only services never start. Always empty by design; the run is
+    # still verified to exist (404 when missing).
+    runtime.get(candidate_id, run_id)  # type: ignore[attr-defined]
+    return AgentRunListResponse(items=[], total=0)
+
+
+@router.post("/runs/{run_id}/stop")
+def stop_agent_run(
+    run_id: UUID,
+    request: Request,
+    candidate_id: UUID,
+    body: AgentRunControlRequest | None = None,
+) -> AgentRunResponse:
+    """Cancel a PENDING run; RUNNING and terminal runs are a 409.
+
+    Synchronous execution cannot be interrupted mid-call, so a run is only
+    stoppable while it is still pending (not yet claimed).
+    """
+    runtime = require_repository(request, "agent_runtime")
+    if body is not None:
+        _check_expected_state(runtime.get(candidate_id, run_id), body.expected_state)  # type: ignore[attr-defined]
+    run = runtime.stop(  # type: ignore[attr-defined]
+        candidate_id,
+        run_id,
+        reason_code=(body.reason_code if body is not None else "") or "user_requested",
+    )
+    return _to_response(run)
+
+
+def _service_for_run(request: Request, capability: AgentCapability) -> object:
+    """Return the review service that owns ``capability`` (or 409)."""
+    if capability is AgentCapability.RESUME_REVIEW:
+        return require_repository(request, "resume_review_service")
+    if capability is AgentCapability.INTERVIEW_PREPARATION:
+        return require_repository(request, "interview_preparation_service")
+    raise InvalidStateError("agent capability is not retryable")
+
+
+def _check_expected_state(run: AgentRun, expected: AgentRunState | None) -> None:
+    if expected is not None and run.state is not expected:
+        raise InvalidStateError("agent run state changed since the request")
 
 
 def _to_response(run: AgentRun) -> AgentRunResponse:

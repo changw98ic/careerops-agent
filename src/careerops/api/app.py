@@ -16,6 +16,7 @@ from careerops.api.routes.agent_console import router as agent_console_router
 from careerops.api.routes.agent_runs import router as agent_runs_router
 from careerops.api.routes.application_workspace import router as application_workspace_router
 from careerops.api.routes.applications import router as applications_router
+from careerops.api.routes.candidates import router as candidates_router
 from careerops.api.routes.crawl_permissions import router as crawl_permissions_router
 from careerops.api.routes.crawl_plans import router as crawl_plans_router
 from careerops.api.routes.crawl_runs import router as crawl_runs_router
@@ -223,6 +224,7 @@ def create_app(
     # wiring them here lets the REST endpoints return real data.
     if isinstance(probe, RuntimeResources):
         from careerops.application.applications import ApplicationService
+        from careerops.application.candidate_service import CandidateService
         from careerops.application.contacts import ContactService
         from careerops.application.crawl_plan_service import (
             CrawlPlanService,
@@ -239,6 +241,17 @@ def create_app(
         from careerops.application.profile_service import ProfileService
         from careerops.application.resume_service import ResumeService
         from careerops.application.smart_intake import SmartIntakeService
+        from careerops.infrastructure.database.postgres_candidate_repo import (
+            PostgresCandidateRepository,
+        )
+
+        # auth-rm Task 2: global candidate CRUD surface (no candidate path
+        # prefix, no per-candidate auth scoping — the login + multi-candidate
+        # path params are being removed). The route reads this off
+        # ``app.state.candidate_service`` and returns 503 if it is absent.
+        app.state.candidate_service = CandidateService(
+            PostgresCandidateRepository(probe.database)
+        )
 
         app.state.matching_repository = probe.matching_read_repo
         app.state.evidence_import_service = EvidenceImportService(probe.matching_read_repo)
@@ -584,6 +597,11 @@ def create_app(
     install_error_handlers(app)
     app.include_router(health_router)
     app.include_router(metrics_router)
+    # auth-rm Task 2: global candidate CRUD routes (list / create / detail).
+    # Mounted without ``require_api_auth`` because the console login is being
+    # removed; the candidate surface is the new global management endpoint and
+    # fails closed (503) via ``_service`` when the service is not wired.
+    app.include_router(candidates_router)
 
     # Build the browser-origin settings once for the API auth and CSRF gates.
     web_settings: ConsoleWebSettings | None = None

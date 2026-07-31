@@ -27,8 +27,9 @@ Three concrete implementations of the Protocols in
   (Iron Rule 4); a duplicate insert raises :class:`ConflictError`.
 
 Server-side candidate ownership (Iron Rule 2): every method takes an
-``owner_id`` parameter that the caller resolves from the authenticated console
-user (``console_users.candidate_id``). The repositories scope every read/write
+``owner_id`` parameter that the caller resolves server-side from the
+``candidates`` table (the console-login user model was removed; there is no
+``console_users`` lookup anymore). The repositories scope every read/write
 by that id.
 
 This module is intentionally NOT wired into ``RuntimeResources`` here — that

@@ -431,23 +431,32 @@ def test_initial_migration_round_trip_and_database_guards(database_url: str) -> 
             "SET payload_version_id = payload_version_id WHERE false"
         ),
     )
-    assert_role_permission_denied(
-        engine,
-        role="careerops_api",
-        statement=(
-            "INSERT INTO careerops.outbox_events ("
-            "id, event_key, action_intent_id, payload_version_id, event_type, status, "
-            "available_at, published_at) VALUES ("
-            ":id, :event_key, :intent_id, :payload_id, 'workflow_signal', 'published', "
-            "now(), now())"
-        ),
-        parameters={
-            "id": uuid4(),
-            "event_key": f"forged/{uuid4()}",
-            "intent_id": intent_b,
-            "payload_id": payload_b,
-        },
-    )
+    # Forging an outbox event is rejected by the outbox lifecycle trigger
+    # (must start 'pending'), not by permissions: migration 0038 deliberately
+    # granted INSERT to careerops_api so the workflow loop can enqueue. The
+    # guard still makes a forged 'published' event impossible (55000), the
+    # same shape as the content_blobs lifecycle guards above.
+    with (
+        pytest.raises(DBAPIError) as forged_outbox_error,
+        engine.begin() as connection,
+    ):
+        connection.execute(sa.text("SET LOCAL ROLE careerops_api"))
+        connection.execute(
+            sa.text(
+                "INSERT INTO careerops.outbox_events ("
+                "id, event_key, action_intent_id, payload_version_id, event_type, status, "
+                "available_at, published_at) VALUES ("
+                ":id, :event_key, :intent_id, :payload_id, 'workflow_signal', 'published', "
+                "now(), now())"
+            ),
+            {
+                "id": uuid4(),
+                "event_key": f"forged/{uuid4()}",
+                "intent_id": intent_b,
+                "payload_id": payload_b,
+            },
+        )
+    assert sqlstate(forged_outbox_error.value) == "55000"
 
     with (
         pytest.raises(DBAPIError) as cross_intent_error,

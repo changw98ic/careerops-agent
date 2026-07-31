@@ -11,8 +11,9 @@ candidate at a time — enforced at the DB by the partial unique index
 active version in the same transaction that flips the new one to active.
 
 Server-side candidate ownership (Iron Rule 2): every method takes a
-``candidate_id`` parameter that the caller resolves from the authenticated
-console user (``console_users.candidate_id``). The repository scopes every
+``candidate_id`` parameter that the caller resolves server-side from the
+``candidates`` table (the console-login user model was removed; there is no
+``console_users`` lookup anymore). The repository scopes every
 read/write by that id; ``get_by_version_id`` rejects a version id that belongs
 to a different candidate instead of silently returning it.
 

@@ -4,10 +4,13 @@ loop: database identity, candidate ownership, cycles).
 Mirrors the project pattern from ``test_migrations`` / ``test_storage_outbox`` /
 ``test_temporal_m1``: skip when ``CAREEROPS_TEST_DATABASE_URL`` is unset. The
 shared test database is treated as disposable — we reset to base, upgrade to
-head, exercise the 0014 objects (uniqueness, runtime-role least privilege,
-ownership scoping), downgrade exactly one revision to prove the additive
-downgrade removes only what 0014 created, then restore to head for downstream
-test modules.
+0014 (the revision under test, where the 0014 objects and their
+``console_users`` counterpart exist), exercise the 0014 objects (uniqueness,
+runtime-role least privilege, ownership scoping), downgrade exactly one
+revision to prove the additive downgrade removes only what 0014 created, then
+restore to head (0039) — which drops the auth tables (``console_users`` /
+``console_sessions``) and is asserted gone — and alembic check proves the
+upgraded schema still matches schema.py byte-for-byte.
 
 Why a single test function: every assertion mutates migration state, so we keep
 the whole round-trip in one function (the same shape ``test_migrations`` uses)
@@ -123,10 +126,12 @@ def test_migration_0014_upgrade_downgrade_uniqueness_and_runtime_role(
 
     try:
         # ------------------------------------------------------------------
-        # 1. From-scratch upgrade: reset to base, then upgrade to head.
+        # 1. From-scratch upgrade: reset to base, then upgrade to 0014 — the
+        #    revision under test (head is now 0039, which drops the auth
+        #    tables; those are asserted gone in section 7 after restoring).
         # ------------------------------------------------------------------
         command.downgrade(config, "base")
-        command.upgrade(config, "head")
+        command.upgrade(config, "0014")
 
         # ------------------------------------------------------------------
         # 2. Assert 0014 created every new table / column / constraint.
@@ -398,10 +403,16 @@ def test_migration_0014_upgrade_downgrade_uniqueness_and_runtime_role(
             assert _has_column(connection, "console_users", "candidate_id")
 
         # ------------------------------------------------------------------
-        # 7. Restore to head for downstream test modules; alembic check proves
-        #    the upgraded schema still matches schema.py byte-for-byte.
+        # 7. Restore to head (0039) for downstream test modules. Head dropped
+        #    the auth tables (console_users / console_sessions) — assert they
+        #    are gone — and alembic check proves the upgraded schema still
+        #    matches schema.py byte-for-byte.
         # ------------------------------------------------------------------
         command.upgrade(config, "head")
+        with engine.connect() as connection:
+            inspector = sa.inspect(connection)
+            assert not inspector.has_table("console_users", schema="careerops")
+            assert not inspector.has_table("console_sessions", schema="careerops")
         command.check(config)
     finally:
         engine.dispose()

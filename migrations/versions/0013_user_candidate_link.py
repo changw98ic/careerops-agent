@@ -39,10 +39,13 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint(
-        "fk_console_users_candidate_id_candidates",
-        "console_users",
-        schema="careerops",
-        type_="foreignkey",
-    )
-    op.drop_column("console_users", "candidate_id", schema="careerops")
+    # 0039 dropped the auth tables; downgrades from >=0039 must tolerate their
+    # absence (both ops fail on a missing relation).
+    if sa.inspect(op.get_bind()).has_table("console_users", schema="careerops"):
+        op.drop_constraint(
+            "fk_console_users_candidate_id_candidates",
+            "console_users",
+            schema="careerops",
+            type_="foreignkey",
+        )
+        op.drop_column("console_users", "candidate_id", schema="careerops")

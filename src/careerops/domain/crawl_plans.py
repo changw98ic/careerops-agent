@@ -31,8 +31,9 @@ Three concepts back the "采集计划" workspace (design Decision 2):
   (Section 5).
 
 Server-side ownership (Iron Rule 2): every repository method takes an
-``owner_id`` parameter that the caller resolves from the authenticated console
-user (``console_users.candidate_id``). The repositories scope every read/write
+``owner_id`` parameter that the caller resolves server-side from the
+``candidates`` table (the console-login user model was removed; there is no
+``console_users`` lookup anymore). The repositories scope every read/write
 by that id; a client-supplied owner substitute is never honored.
 
 The lifecycle enums :class:`CrawlPlanState` and :class:`CrawlRunState` already

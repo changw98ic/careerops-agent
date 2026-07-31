@@ -35,9 +35,9 @@ _API_GRANTS = (
     "rotated_to_session_id) ON careerops.console_sessions TO careerops_api",
 )
 _API_REVOKES = (
-    "REVOKE ALL ON careerops.console_sessions FROM careerops_api",
-    "REVOKE ALL ON careerops.bootstrap_tokens FROM careerops_api",
-    "REVOKE ALL ON careerops.console_users FROM careerops_api",
+    ("REVOKE ALL ON careerops.console_sessions FROM careerops_api", "console_sessions"),
+    ("REVOKE ALL ON careerops.bootstrap_tokens FROM careerops_api", "bootstrap_tokens"),
+    ("REVOKE ALL ON careerops.console_users FROM careerops_api", "console_users"),
 )
 
 
@@ -61,12 +61,15 @@ def _grant_api_auth_capability() -> None:
 
 def _revoke_api_auth_capability() -> None:
     if op.get_context().as_sql:
-        for statement in _API_REVOKES:
+        for statement, _table in _API_REVOKES:
             op.execute(sa.text(statement))
         return
     if _api_role_exists():
-        for statement in _API_REVOKES:
-            op.execute(sa.text(statement))
+        # 0039 dropped the auth tables; downgrades to <0039 must tolerate
+        # their absence (REVOKE on a missing relation fails).
+        for statement, table in _API_REVOKES:
+            if sa.inspect(op.get_bind()).has_table(table, schema="careerops"):
+                op.execute(sa.text(statement))
 
 
 def upgrade() -> None:
@@ -258,21 +261,26 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     _revoke_api_auth_capability()
+    # if_exists: 0039 dropped these tables, so downgrades from >=0039 must
+    # tolerate the indexes/tables already being gone.
     op.drop_index(
         "ix_console_sessions_expiry",
         table_name="console_sessions",
         schema="careerops",
+        if_exists=True,
     )
     op.drop_index(
         "ix_console_sessions_user_state",
         table_name="console_sessions",
         schema="careerops",
+        if_exists=True,
     )
-    op.drop_table("console_sessions", schema="careerops")
+    op.drop_table("console_sessions", schema="careerops", if_exists=True)
     op.drop_index(
         "ix_bootstrap_tokens_active_expiry",
         table_name="bootstrap_tokens",
         schema="careerops",
+        if_exists=True,
     )
-    op.drop_table("bootstrap_tokens", schema="careerops")
-    op.drop_table("console_users", schema="careerops")
+    op.drop_table("bootstrap_tokens", schema="careerops", if_exists=True)
+    op.drop_table("console_users", schema="careerops", if_exists=True)

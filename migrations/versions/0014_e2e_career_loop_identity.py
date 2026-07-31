@@ -60,6 +60,13 @@ def _role_exists(role_name: str) -> bool:
     )
 
 
+def _table_exists(table: str) -> bool:
+    """True when the table exists (or when rendering offline SQL)."""
+    if op.get_context().as_sql:
+        return True
+    return sa.inspect(op.get_bind()).has_table(table, schema="careerops")
+
+
 def _apply(statement: str) -> None:
     """Execute a role grant/revoke, honoring offline SQL rendering.
 
@@ -455,8 +462,12 @@ def downgrade() -> None:
     # tables/columns/constraints are untouched (additive invariant). Check
     # constraints are dropped by their short name; the naming convention
     # expands identically to the upgrade path so the resolved DB name matches.
-    _apply("REVOKE UPDATE (candidate_id) ON careerops.console_users FROM careerops_api")
-    _apply("REVOKE INSERT (candidate_id) ON careerops.console_users FROM careerops_api")
+    #
+    # 0039 dropped console_users; downgrades from >=0039 tolerate its absence
+    # (REVOKE / DROP CONSTRAINT on a missing relation would fail).
+    if _table_exists("console_users"):
+        _apply("REVOKE UPDATE (candidate_id) ON careerops.console_users FROM careerops_api")
+        _apply("REVOKE INSERT (candidate_id) ON careerops.console_users FROM careerops_api")
     _apply("REVOKE SELECT, INSERT, UPDATE ON careerops.application_cycles FROM careerops_api")
     _apply("REVOKE SELECT, INSERT, UPDATE ON careerops.profile_versions FROM careerops_api")
 
@@ -512,9 +523,10 @@ def downgrade() -> None:
     )
     op.drop_table("profile_versions", schema="careerops")
 
-    op.drop_constraint(
-        "uq_console_users_candidate_id",
-        "console_users",
-        schema="careerops",
-        type_="unique",
-    )
+    if _table_exists("console_users"):
+        op.drop_constraint(
+            "uq_console_users_candidate_id",
+            "console_users",
+            schema="careerops",
+            type_="unique",
+        )

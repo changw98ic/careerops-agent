@@ -156,9 +156,11 @@ describe('api client — per-candidate URL prefixing', () => {
     const fetchSpy = mockOk()
     store.switchCandidate('c2')
 
+    await api.listApplications({ state: 'active' })
     await api.listInbox({ limit: 10 })
 
-    expect(fetchSpy.mock.calls[0][0]).toContain('/api/v1/candidates/c2/inbox?')
+    expect(fetchSpy.mock.calls[0][0]).toContain('/api/v1/candidates/c2/applications?')
+    expect(fetchSpy.mock.calls[1][0]).toContain('/api/v1/candidates/c2/inbox?')
   })
 
   it('nested per-candidate methods (matches, agents, smart-intake) get the prefix', async () => {
@@ -191,5 +193,28 @@ describe('api client — per-candidate URL prefixing', () => {
     expect(urls[1]).toBe('/api/v1/jobs/j1')
     expect(urls[2]).toContain('/api/v1/companies?')
     expect(urls[3]).toBe('/api/v1/companies/comp1/contacts')
+  })
+})
+
+describe('api client — missing candidate guard', () => {
+  it('throws a clear error instead of building a candidates// URL', async () => {
+    vi.resetModules()
+    window.localStorage.clear()
+    const { api } = await import('../src/api/client.js')
+
+    expect(() => api.listApplications()).toThrow('请先创建或选择候选人')
+    expect(() => api.getActiveProfile()).toThrow('请先创建或选择候选人')
+  })
+
+  it('global endpoints still work without a selected candidate', async () => {
+    vi.resetModules()
+    window.localStorage.clear()
+    const { api } = await import('../src/api/client.js')
+    const fetchSpy = vi.fn().mockResolvedValue(jsonResponse({ items: [], total: 0 }))
+    globalThis.fetch = fetchSpy
+
+    await api.listJobs({})
+
+    expect(fetchSpy.mock.calls[0][0]).toContain('/api/v1/jobs?')
   })
 })

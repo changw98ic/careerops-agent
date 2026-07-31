@@ -15,9 +15,12 @@
       </a-select>
       <a-button class="candidate-add-btn" @click="openCreate">＋ 新建候选人</a-button>
     </template>
-    <template v-else-if="status === 'ready' || status === 'empty' || status === 'error'">
+    <template v-else-if="status === 'ready' || status === 'empty'">
       <a-button type="primary" @click="openCreate">创建候选人</a-button>
       <span class="candidate-hint">还没有候选人，创建后即可开始使用。</span>
+    </template>
+    <template v-else-if="status === 'error'">
+      <a-button @click="retryLoad">重新加载候选人</a-button>
     </template>
     <a-spin v-else size="small" />
 
@@ -49,6 +52,7 @@ import {
   candidates,
   currentCandidateId,
   status,
+  load as loadCandidates,
   switchCandidate,
   create as createCandidate,
 } from '../stores/candidate.js'
@@ -59,6 +63,14 @@ const newName = ref('')
 
 function onChange(id) {
   if (id) switchCandidate(id)
+}
+
+async function retryLoad() {
+  try {
+    await loadCandidates()
+  } catch (err) {
+    message.error(err.message || '加载候选人列表失败，请重试。')
+  }
 }
 
 function openCreate() {

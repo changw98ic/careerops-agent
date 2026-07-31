@@ -121,6 +121,11 @@ export const smartIntakeUiEnabled = import.meta.env.VITE_SMART_INTAKE_ENABLED ==
  * metrics) stay unprefixed — they do NOT go through `cand()`.
  */
 function cand(suffix) {
+  if (!currentCandidateId.value) {
+    // No candidate selected yet — views are gated on the App-level create
+    // prompt, but never emit a malformed `/candidates//...` URL.
+    throw new Error('请先创建或选择候选人。')
+  }
   return `/api/v1/candidates/${currentCandidateId.value}${suffix}`
 }
 

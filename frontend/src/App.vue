@@ -91,7 +91,25 @@
       </a-layout-header>
 
       <a-layout-content class="app-content">
-        <router-view />
+        <!--
+          Views are gated on the candidate list having settled (auth-rm Task 15
+          review): child onMounted runs before App's async loadCandidates(), so
+          without this gate first-visit views would fetch with an empty
+          candidate id. The :key remounts the view tree when the current
+          candidate changes, so every view re-fetches with the new identity
+          (whole-env switch) instead of showing stale per-candidate data.
+        -->
+        <div v-if="candidateStatus === 'idle' || candidateStatus === 'loading'" class="candidate-gate">
+          <a-spin size="large" />
+        </div>
+        <div v-else-if="candidateStatus === 'error'" class="candidate-gate">
+          <a-empty description="候选人列表加载失败，请重试。" />
+          <a-button type="primary" @click="retryCandidates">重新加载</a-button>
+        </div>
+        <div v-else-if="candidateStatus === 'empty'" class="candidate-gate">
+          <a-empty description="还没有候选人，请点击右上角「创建候选人」开始使用。" />
+        </div>
+        <router-view v-else :key="currentCandidateId" />
       </a-layout-content>
     </a-layout>
   </a-layout>
@@ -116,7 +134,11 @@ import {
   ThunderboltOutlined,
 } from '@ant-design/icons-vue'
 import CandidateSelector from './components/CandidateSelector.vue'
-import { load as loadCandidates } from './stores/candidate.js'
+import {
+  currentCandidateId,
+  load as loadCandidates,
+  status as candidateStatus,
+} from './stores/candidate.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -141,17 +163,22 @@ window.addEventListener('resize', onResize)
 onUnmounted(() => window.removeEventListener('resize', onResize))
 
 // collapse = true on mobile by default; then settle the current candidate so
-// per-candidate API calls always have an id to address.
+// per-candidate API calls always have an id to address. The router-view gate
+// above keeps views unmounted until this resolves.
 onMounted(async () => {
   if (isMobile.value) {
     collapsed.value = true
   }
+  await retryCandidates()
+})
+
+async function retryCandidates() {
   try {
     await loadCandidates()
   } catch (err) {
     message.error(err.message || '加载候选人列表失败，请刷新重试。')
   }
-})
+}
 
 const siderVisible = computed(() => !isMobile.value || mobileOpen.value)
 
@@ -251,5 +278,14 @@ function handleMenuClick({ key }) {
   padding: 24px;
   min-height: calc(100vh - 64px);
   background: var(--surface-secondary);
+}
+
+.candidate-gate {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  min-height: 40vh;
 }
 </style>

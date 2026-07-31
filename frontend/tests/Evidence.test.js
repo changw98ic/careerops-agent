@@ -19,7 +19,6 @@ vi.mock('../src/api/client.js', () => ({
     retryable: !!err?.retryable,
     isDependencyNotReady: err?.status === 503 || err?.code === 'DEPENDENCY_NOT_READY',
   }),
-  setCsrfToken: vi.fn(),
 }))
 
 vi.mock('ant-design-vue', () => ({ message: { success: vi.fn(), info: vi.fn(), warning: vi.fn() } }))

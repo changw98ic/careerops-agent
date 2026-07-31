@@ -84,7 +84,6 @@ vi.mock('../src/api/client.js', () => ({
       err?.code === 'DEPENDENCY_NOT_READY' ||
       err?.code === 'UNAVAILABLE_DEPENDENCY',
   }),
-  setCsrfToken: vi.fn(),
 }))
 
 const mockPush = vi.fn()

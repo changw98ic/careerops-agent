@@ -1,27 +1,25 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// We test the api client by importing it and mocking fetch
-// The client uses a module-level csrfToken variable
+// We test the api client by importing it and mocking fetch.
+// The CSRF-token machinery was removed with the console login UI (task 14),
+// so state-changing requests no longer attach an X-CSRF-Token header.
 
 beforeEach(() => {
   vi.restoreAllMocks()
 })
 
 describe('api client', () => {
-  let api, setCsrfToken, formatApiError
+  let api, formatApiError
 
   beforeEach(async () => {
     // Re-import to get fresh module state
     vi.resetModules()
     const mod = await import('../src/api/client.js')
     api = mod.api
-    setCsrfToken = mod.setCsrfToken
     formatApiError = mod.formatApiError
   })
 
-  it('setCsrfToken stores token for subsequent requests', async () => {
-    setCsrfToken('my-csrf-token')
-
+  it('lists jobs via GET', async () => {
     const fetchSpy = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -31,27 +29,9 @@ describe('api client', () => {
 
     await api.listJobs()
 
-    // listJobs uses GET, so no CSRF header
     const [url, opts] = fetchSpy.mock.calls[0]
     expect(url).toContain('/api/v1/jobs')
     expect(opts.method || 'GET').toBe('GET')
-  })
-
-  it('sends CSRF token on POST requests', async () => {
-    setCsrfToken('post-token')
-
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: () => Promise.resolve({ id: 'app-1' }),
-    })
-    globalThis.fetch = fetchSpy
-
-    await api.createApplication({ canonical_job_id: 'j1' })
-
-    const [, opts] = fetchSpy.mock.calls[0]
-    expect(opts.headers['X-CSRF-Token']).toBe('post-token')
-    expect(opts.method).toBe('POST')
   })
 
   it('throws on non-ok response', async () => {
@@ -64,11 +44,7 @@ describe('api client', () => {
     await expect(api.getJob('j1')).rejects.toThrow('500')
   })
 
-  it('throws on 401 and redirects', async () => {
-    const origLocation = window.location
-    delete window.location
-    window.location = { href: '' }
-
+  it('throws on 401 without redirecting', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 401,
@@ -76,15 +52,9 @@ describe('api client', () => {
     })
 
     await expect(api.getJob('j1')).rejects.toThrow()
-    // handleUnauthorized redirects to /login
-    // (may be async, so we just verify the throw)
-
-    window.location = origLocation
   })
 
   it('sends JSON body for POST with object', async () => {
-    setCsrfToken('tok')
-
     const fetchSpy = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -142,8 +112,7 @@ describe('api client', () => {
     expect(fetchSpy.mock.calls[2][0]).toBe('/api/v1/agents/resume-review')
   })
 
-  it('exposes smart intake preview and apply endpoints with CSRF', async () => {
-    setCsrfToken('smart-token')
+  it('exposes smart intake preview and apply endpoints', async () => {
     const fetchSpy = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -166,7 +135,6 @@ describe('api client', () => {
     await api.getSmartIntakeCapability()
 
     expect(fetchSpy.mock.calls[0][0]).toBe('/api/v1/smart-intake/previews')
-    expect(fetchSpy.mock.calls[0][1].headers['X-CSRF-Token']).toBe('smart-token')
     expect(fetchSpy.mock.calls[1][0]).toBe('/api/v1/smart-intake/previews/p1')
     expect(fetchSpy.mock.calls[2][0]).toBe('/api/v1/smart-intake/previews/p1/apply')
     expect(fetchSpy.mock.calls[3][0]).toBe('/api/v1/smart-intake/capability')

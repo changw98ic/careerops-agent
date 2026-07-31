@@ -7,7 +7,6 @@ vi.mock('../src/api/client.js', () => ({
     listJobs: (...args) => mockListJobs(...args),
   },
   formatApiError: (err, fallback) => err?.message || fallback,
-  setCsrfToken: vi.fn(),
 }))
 
 const mockPush = vi.fn()

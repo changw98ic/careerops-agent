@@ -7,14 +7,11 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { status } from '../stores/session.js'
 
 const router = useRouter()
 
 const goHome = () => {
-  const target = status.value === 'authenticated' ? '/dashboard' : '/login'
-  router.push(target)
+  router.push('/dashboard')
 }
 </script>

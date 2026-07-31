@@ -1,8 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { status, checkSession } from './stores/session.js'
 
 const Dashboard = () => import('./views/Dashboard.vue')
-const Login = () => import('./views/Login.vue')
 const Jobs = () => import('./views/Jobs.vue')
 const JobDetail = () => import('./views/JobDetail.vue')
 const Companies = () => import('./views/Companies.vue')
@@ -22,7 +20,6 @@ const AgentWorkbench = () => import('./views/AgentWorkbench.vue')
 const NotFound = () => import('./views/NotFound.vue')
 
 const routes = [
-  { path: '/login', name: 'login', component: Login },
   { path: '/', redirect: '/dashboard' },
   { path: '/dashboard', name: 'dashboard', component: Dashboard, meta: { auth: true, title: 'Overview' } },
   { path: '/jobs', name: 'jobs', component: Jobs, meta: { auth: true } },
@@ -41,7 +38,6 @@ const routes = [
   { path: '/mail-follow-up', name: 'mail-follow-up', component: MailFollowUp, meta: { auth: true, title: '邮件跟进' } },
   { path: '/reply-queue', name: 'reply-queue', component: ReplyReviewQueue, meta: { auth: true, title: '回复评审' } },
   { path: '/ai-workbench', name: 'ai-workbench', component: AgentWorkbench, meta: { auth: true, title: '智能工作台', allowedTabs: ['matching', 'resume', 'interview'] } },
-  { path: '/bootstrap', name: 'bootstrap', component: () => import('./views/Bootstrap.vue') },
   { path: '/404', name: 'not-found', component: NotFound },
   { path: '/:pathMatch(.*)*', name: 'catch-all', redirect: '/404' },
 ]
@@ -56,30 +52,12 @@ const router = createRouter({
 // browser history. Additive; the default export below is unchanged.
 export { routes }
 
-let sessionReady = false
-
 // Allowed tabs for the AI workbench route.  Kept in sync with the route meta
 // so the guard can validate incoming `?tab=` query values and fall back to
 // "matching" when the value is missing or not in the allowlist.
 const AI_WORKBENCH_ALLOWED_TABS = ['matching', 'resume', 'interview']
 
-router.beforeEach(async (to) => {
-  // Wait for session check on first navigation
-  if (!sessionReady && status.value === 'unknown') {
-    await checkSession()
-    sessionReady = true
-  }
-
-  // Authenticated user hitting /login -> redirect to dashboard
-  if (to.name === 'login' && status.value === 'authenticated') {
-    return { name: 'dashboard' }
-  }
-
-  // Protected route with no session -> redirect to login
-  if (to.meta.auth && status.value !== 'authenticated') {
-    return { name: 'login' }
-  }
-
+router.beforeEach((to) => {
   // Validate `tab` query parameter for the AI workbench route.
   // context_id is passed through as-is (opaque identifier).
   if (to.name === 'ai-workbench') {

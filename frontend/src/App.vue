@@ -1,11 +1,5 @@
 <template>
-  <div v-if="!sessionReady" class="session-loading">
-    <a-spin size="large" />
-  </div>
-
-  <router-view v-else-if="isLoginPage" />
-
-  <a-layout v-else class="app-shell">
+  <a-layout class="app-shell">
     <!-- mobile backdrop -->
     <div v-if="isMobile && mobileOpen" class="sider-backdrop" @click="closeMobileSider" />
 
@@ -93,23 +87,6 @@
           <div class="header-divider"></div>
           <span class="header-title">{{ pageTitle }}</span>
         </div>
-
-        <div class="header-right">
-          <div class="header-user">
-            <div class="user-avatar">
-              <UserOutlined />
-            </div>
-            <div class="user-info">
-              <span class="user-name">{{ user.username }}</span>
-              <span class="user-role">管理员</span>
-            </div>
-          </div>
-          <div class="header-divider"></div>
-          <a-button type="text" class="logout-button" :loading="loggingOut" @click="logout">
-            <LogoutOutlined />
-            <span>退出</span>
-          </a-button>
-        </div>
       </a-layout-header>
 
       <a-layout-content class="app-content">
@@ -129,22 +106,17 @@ import {
   DashboardOutlined,
   FileTextOutlined,
   InboxOutlined,
-  LogoutOutlined,
   MailOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   RobotOutlined,
   SolutionOutlined,
   ThunderboltOutlined,
-  UserOutlined,
 } from '@ant-design/icons-vue'
-import { status, user, checkSession, logout as sessionLogout } from './stores/session.js'
-import { message } from 'ant-design-vue'
 
 const route = useRoute()
 const router = useRouter()
 const collapsed = ref(false)
-const loggingOut = ref(false)
 
 // --- mobile detection ---
 const MOBILE_BP = 768
@@ -166,9 +138,6 @@ onUnmounted(() => window.removeEventListener('resize', onResize))
 
 // collapse = true on mobile by default
 onMounted(() => {
-  if (status.value === 'unknown') {
-    checkSession()
-  }
   if (isMobile.value) {
     collapsed.value = true
   }
@@ -190,10 +159,6 @@ function closeMobileSider() {
   }
 }
 
-const isLoginPage = computed(() => route.name === 'login')
-
-// Block rendering until session check completes
-const sessionReady = computed(() => status.value !== 'unknown' && status.value !== 'checking')
 const selectedKeys = computed(() => [String(route.name || 'dashboard')])
 const pageTitle = computed(() => {
   const titles = {
@@ -223,27 +188,9 @@ function handleMenuClick({ key }) {
   closeMobileSider()
 }
 
-async function logout() {
-  loggingOut.value = true
-  try {
-    await sessionLogout()
-  } catch (err) {
-    message.error(err.message || 'Logout failed')
-    loggingOut.value = false
-  }
-}
-
 </script>
 
 <style scoped>
-.session-loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100vh;
-  background: var(--surface-secondary);
-}
-
 .app-header {
   display: flex;
   align-items: center;
@@ -256,12 +203,6 @@ async function logout() {
 }
 
 .header-left {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.header-right {
   display: flex;
   align-items: center;
   gap: 16px;
@@ -294,67 +235,6 @@ async function logout() {
   font-weight: 600;
   color: var(--color-primary);
   letter-spacing: -0.01em;
-}
-
-.header-user {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 6px 12px;
-  border-radius: var(--radius-sm);
-  transition: all 0.2s ease;
-  cursor: pointer;
-}
-
-.header-user:hover {
-  background: rgba(0, 0, 0, 0.04);
-}
-
-.user-avatar {
-  width: 36px;
-  height: 36px;
-  border-radius: var(--radius-sm);
-  background: linear-gradient(135deg, var(--accent-primary), var(--accent-primary-hover));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--color-inverse);
-  font-size: 16px;
-}
-
-.user-info {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.user-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--color-primary);
-  line-height: 1;
-}
-
-.user-role {
-  font-size: 11px;
-  color: var(--color-tertiary);
-  line-height: 1;
-}
-
-.logout-button {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  border-radius: var(--radius-sm);
-  color: var(--color-tertiary);
-  font-size: 13px;
-  transition: all 0.2s ease;
-}
-
-.logout-button:hover {
-  background: rgba(185, 28, 28, 0.06);
-  color: var(--color-error);
 }
 
 .app-content {

@@ -9,7 +9,6 @@ vi.mock('../src/api/client.js', () => ({
     listApplications: (...args) => mockListApplications(...args),
   },
   formatApiError: (err, fallback) => err?.message || fallback,
-  setCsrfToken: vi.fn(),
 }))
 
 vi.mock('vue-router', () => ({

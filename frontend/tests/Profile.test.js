@@ -26,7 +26,6 @@ vi.mock('../src/api/client.js', () => ({
   }),
   formatApiError: (err, fallback) => err?.messageText || err?.message || fallback,
   smartIntakeUiEnabled: false,
-  setCsrfToken: vi.fn(),
 }))
 
 vi.mock('ant-design-vue', () => ({ message: { success: vi.fn(), info: vi.fn(), warning: vi.fn() } }))

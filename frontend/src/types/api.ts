@@ -70,22 +70,6 @@ export interface Company {
   updated_at: string
 }
 
-// 用户相关类型
-export interface User {
-  username: string
-  candidate_id: string
-  email?: string
-  created_at?: string
-}
-
-// 会话相关类型
-export interface Session {
-  authenticated: boolean
-  user: User | null
-  csrf_token: string | null
-  expires_at: string | null
-}
-
 // 统计数据类型
 export interface DashboardMetrics {
   jobs: number
@@ -218,7 +202,6 @@ export type ApplicationResponse = ApiResponse<Application>
 export type ApplicationsResponse = ApiResponse<PaginatedResponse<Application>>
 export type CompanyResponse = ApiResponse<Company>
 export type CompaniesResponse = ApiResponse<PaginatedResponse<Company>>
-export type SessionResponse = ApiResponse<Session>
 export type CrawlSourcesResponse = ApiResponse<PaginatedResponse<CrawlSource>>
 export type CrawlRunsResponse = ApiResponse<PaginatedResponse<CrawlRun>>
 export type MailThreadsResponse = ApiResponse<PaginatedResponse<MailThread>>

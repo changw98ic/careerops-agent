@@ -1,10 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
-import { ref } from 'vue'
-
-vi.mock('../src/stores/session.js', () => ({
-  status: ref('anonymous'),
-}))
 
 const mockPush = vi.fn()
 vi.mock('vue-router', () => ({
@@ -26,7 +21,6 @@ const stubs = {
 }
 
 import NotFound from '../src/views/NotFound.vue'
-import { status } from '../src/stores/session.js'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -38,19 +32,10 @@ describe('NotFound.vue', () => {
     expect(wrapper.text()).toContain('404')
   })
 
-  it('navigates to /dashboard when authenticated', async () => {
-    status.value = 'authenticated'
+  it('navigates to /dashboard from the 404 page', async () => {
     const wrapper = mount(NotFound, { global: { stubs } })
 
     await wrapper.find('button').trigger('click')
     expect(mockPush).toHaveBeenCalledWith('/dashboard')
-  })
-
-  it('navigates to /login when anonymous', async () => {
-    status.value = 'anonymous'
-    const wrapper = mount(NotFound, { global: { stubs } })
-
-    await wrapper.find('button').trigger('click')
-    expect(mockPush).toHaveBeenCalledWith('/login')
   })
 })

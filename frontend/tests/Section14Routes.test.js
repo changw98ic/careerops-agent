@@ -46,8 +46,8 @@ describe('Section 14.1 — authenticated route coverage', () => {
     }
   })
 
-  it('keeps login + bootstrap reachable without an existing session', () => {
-    expect(byName.get('login').meta?.auth).toBeFalsy()
-    expect(byName.get('bootstrap').meta?.auth).toBeFalsy()
+  it('no longer registers login or bootstrap routes (auth UI removed)', () => {
+    expect(byName.has('login')).toBe(false)
+    expect(byName.has('bootstrap')).toBe(false)
   })
 })

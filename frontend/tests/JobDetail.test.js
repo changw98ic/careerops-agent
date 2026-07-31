@@ -11,7 +11,6 @@ vi.mock('../src/api/client.js', () => ({
     createApplication: (...args) => mockCreateApplication(...args),
     getEmailDraft: (...args) => mockGetEmailDraft(...args),
   },
-  setCsrfToken: vi.fn(),
   // Faithful stub of the real parseApiError so dependency-not-ready detection
   // (status 503 / DEPENDENCY_NOT_READY) behaves like production.
   parseApiError: (err) => ({

@@ -1,33 +1,5 @@
-const CSRF_HEADER = 'X-CSRF-Token'
-
-let csrfToken = ''
-
-export function setCsrfToken(token) {
-  csrfToken = token
-}
-
-function getCsrfToken() {
-  return csrfToken
-}
-
-async function handleUnauthorized() {
-  // Dynamic import to avoid circular dependency with session.js
-  try {
-    const session = await import('../stores/session.js')
-    session.clearUser()
-    session.status.value = 'anonymous'
-  } catch {
-    // Session store not available; proceed with redirect only
-  }
-  window.location.href = '/login'
-}
-
 async function request(path, options = {}) {
   const headers = { ...options.headers }
-  const method = (options.method || 'GET').toUpperCase()
-  if (method !== 'GET' && method !== 'HEAD') {
-    headers[CSRF_HEADER] = getCsrfToken()
-  }
   const isForm = options.body instanceof FormData
   if (options.body && typeof options.body === 'object' && !isForm) {
     headers['Content-Type'] = 'application/json'
@@ -35,8 +7,8 @@ async function request(path, options = {}) {
   }
   // FormData: let the browser set the multipart boundary; do not add Content-Type.
   const res = await fetch(path, { ...options, headers, credentials: 'same-origin' })
+  // 401 has no login page to bounce to anymore; views surface the failure.
   if (res.status === 401) {
-    await handleUnauthorized()
     throw new Error('unauthorized')
   }
   if (!res.ok) {

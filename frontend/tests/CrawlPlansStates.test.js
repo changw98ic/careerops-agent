@@ -30,7 +30,6 @@ vi.mock('../src/api/client.js', () => ({
     isDependencyNotReady:
       err?.status === 503 || err?.code === 'DEPENDENCY_NOT_READY',
   }),
-  setCsrfToken: vi.fn(),
 }))
 
 vi.mock('vue-router', () => ({

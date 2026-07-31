@@ -123,7 +123,7 @@ async def preauth(request: Request) -> JSONResponse:
             ok=True, csrf_token=secrets.csrf_token, trace_id=trace_id
         ).model_dump(),
     )
-    # Preauth cookies: short-lived (15 min), same as the old Jinja2 flow.
+    # Preauth cookies are short-lived (15 minutes) for the SPA auth flow.
     response.set_cookie(
         "careerops_session",
         secrets.token,

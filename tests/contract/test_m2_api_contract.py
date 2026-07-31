@@ -135,20 +135,3 @@ class TestCompensationAPI:
         body = response.json()
         assert body["error"]["code"] == "DEPENDENCY_NOT_READY"
         assert body["error"]["retryable"] is True
-
-
-class TestMatchingUI:
-    def test_matches_page_renders_empty(self) -> None:
-        response = make_client().get("/matches")
-        assert response.status_code == 200
-        assert "text/html" in response.headers["content-type"]
-        assert "匹配结果" in response.text
-
-    def test_matches_page_cache_control(self) -> None:
-        response = make_client().get("/matches")
-        assert response.headers["cache-control"] == "no-store"
-
-    def test_match_detail_returns_503_without_repository(self) -> None:
-        response = make_client().get(f"/matches/{uuid4()}")
-        assert response.status_code == 503
-        assert "服务不可用" in response.text

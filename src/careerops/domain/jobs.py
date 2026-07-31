@@ -77,6 +77,8 @@ class JobPostingVersion:
     structured_data: dict[str, Any] = field(default_factory=lambda: {})
     changed_fields: tuple[str, ...] = ()
     captured_at: datetime | None = None
+    crawl_run_id: UUID | None = None
+    plan_version_id: UUID | None = None
     created_at: datetime | None = None
 
 

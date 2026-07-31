@@ -233,18 +233,13 @@ class TestFullChainReplay:
         # Submit with auto-send enabled
         outcome = service.submit_send(request, account_opt_in=True, now=NOW)
         assert outcome.auto_send is True
-        # M5A policy requires approval for external writes; auto_send flag means
-        # the four-layer gate passed, but the kernel still requires explicit approval.
-        assert outcome.status is IntentStatus.AWAITING_APPROVAL
+        # With the human-approval gate torn down for auto-send
+        # (real-autonomous-career-loop), auto_send_approved makes the M5A policy
+        # ALLOW the external write, so the intent is ELIGIBLE (not awaiting
+        # approval) and executes without a separate human approval step.
+        assert outcome.status is IntentStatus.ELIGIBLE
 
-        # Approve through the kernel (auto-send means approval is automatic)
-        kernel_instance = kernel
-        approval = kernel_instance.request_approval(
-            outcome.intent_id, requested_for="auto-send-system", now=NOW
-        )
-        kernel_instance.approve(approval.id, now=NOW)
-
-        # Execute
+        # Execute directly — no manual approval needed for auto-send.
         exec_outcome = service.execute_send(outcome.intent_id, now=NOW)
         assert exec_outcome.status is IntentStatus.CONFIRMED
 

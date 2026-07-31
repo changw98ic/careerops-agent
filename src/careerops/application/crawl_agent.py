@@ -26,12 +26,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import cast
 from urllib.parse import urlsplit, urlunsplit
 
 from careerops.adapters.job_sources import RawJobRecord
 from careerops.application.llm_job_extraction import LLMJobExtractor
-from careerops.infrastructure.ego_tool import BrowserTool, CapturedApiCall
+from careerops.infrastructure.ego_tool import BrowserTool, CapturedApiCall, PageFetchResult
 from careerops.model_gateway.base import StructuredModelClient, StructuredModelRequest
 
 # Generic page trigger used when a source supplies no site-specific trigger.
@@ -87,6 +91,116 @@ GENERIC_TRIGGER = """(() => {
 # Distinct from the LLM extractor's ``llm-extraction`` tag so the sink can tell
 # API-captured postings apart from model-extracted ones.
 API_CAPTURE_PROVENANCE = "api-capture"
+
+
+class CrawlActionLimitReached(RuntimeError):
+    """Raised before a browser operation would exceed a run/global budget."""
+
+
+class CrawlTimeLimitReached(RuntimeError):
+    """Raised before a browser operation would exceed the wall-clock limit."""
+
+
+@dataclass(frozen=True, slots=True)
+class CrawlAgentRunResult:
+    """Measured result returned by the bounded Tier 2 crawl path."""
+
+    records: tuple[RawJobRecord, ...] = ()
+    action_count: int = 0
+    consecutive_empty_pages: int = 0
+    stop_reason: str = "completed"
+
+
+@dataclass(slots=True)
+class _CrawlMetrics:
+    max_consecutive_empty: int = 3
+    seen_identities: set[str] = field(default_factory=lambda: set[str]())
+    consecutive_empty_pages: int = 0
+
+    def note_page(self, records: list[RawJobRecord]) -> None:
+        new_ids = {
+            record.external_id
+            for record in records
+            if record.external_id and record.external_id not in self.seen_identities
+        }
+        if new_ids:
+            self.seen_identities.update(new_ids)
+            self.consecutive_empty_pages = 0
+        else:
+            self.consecutive_empty_pages += 1
+
+
+class _BoundedBrowserTool:
+    """Counts and authorizes each concrete BrowserTool operation."""
+
+    def __init__(
+        self,
+        delegate: BrowserTool,
+        *,
+        max_actions: int,
+        deadline: float,
+        consume_action: Callable[[], bool] | None,
+    ) -> None:
+        self._delegate = delegate
+        self._max_actions = max_actions
+        self._deadline = deadline
+        self._consume_action = consume_action
+        self.action_count = 0
+
+    @property
+    def is_ready(self) -> bool:
+        return self._delegate.is_ready
+
+    def _before_action(self) -> None:
+        if time.monotonic() >= self._deadline:
+            raise CrawlTimeLimitReached("Tier 2 wall-clock limit reached")
+        if self.action_count >= self._max_actions:
+            raise CrawlActionLimitReached("Tier 2 browser-action limit reached")
+        if self._consume_action is not None and not self._consume_action():
+            raise CrawlActionLimitReached("global Tier 2 browser-action budget exhausted")
+        self.action_count += 1
+
+    def navigate(self, url: str, *, wait_s: float = 8.0) -> dict[str, str]:
+        self._before_action()
+        return self._delegate.navigate(url, wait_s=wait_s)
+
+    def capture_html(self) -> str:
+        self._before_action()
+        return self._delegate.capture_html()
+
+    def run_page_script(self, script: str) -> object:
+        self._before_action()
+        return self._delegate.run_page_script(script)
+
+    def capture_network(
+        self,
+        *,
+        url_contains: str = "",
+        trigger_script: str = "",
+        wait_s: float = 6.0,
+    ) -> list[CapturedApiCall]:
+        self._before_action()
+        return self._delegate.capture_network(
+            url_contains=url_contains,
+            trigger_script=trigger_script,
+            wait_s=wait_s,
+        )
+
+    def fetch_in_page(
+        self,
+        url: str,
+        *,
+        method: str = "GET",
+        body: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> PageFetchResult:
+        self._before_action()
+        return self._delegate.fetch_in_page(
+            url,
+            method=method,
+            body=body,
+            headers=headers,
+        )
 
 # Common JSON paths to the job array in a job-list API response, tried in order.
 _JOB_ARRAY_PATHS: tuple[tuple[str, ...], ...] = (
@@ -149,10 +263,13 @@ def _heuristic_find_jobs(obj: object, depth: int = 0) -> list[dict[str, object]]
     """Recursively find a list of dicts containing title-like fields."""
     if depth > 5:
         return []
-    if isinstance(obj, list) and len(obj) > 0 and isinstance(obj[0], dict):
-        sample = cast("dict[str, object]", obj[0])
+    if isinstance(obj, list):
+        items = cast("list[object]", obj)
+        if not items or not isinstance(items[0], dict):
+            return []
+        sample = cast("dict[str, object]", items[0])
         if any(k in sample for k in _TITLE_KEYS):
-            return cast("list[dict[str, object]]", obj)
+            return cast("list[dict[str, object]]", items)
     if isinstance(obj, dict):
         for v in cast("dict[str, object]", obj).values():
             result = _heuristic_find_jobs(v, depth + 1)
@@ -212,6 +329,141 @@ class CrawlAgent:
         self._tool = tool
         self._extractor = extractor
         self._model = model_client
+        self._metrics: _CrawlMetrics | None = None
+        self._run_lock = threading.Lock()
+
+    def close(self) -> None:
+        """Release the process-owned browser, when the tool supports it."""
+        close = getattr(self._tool, "close", None)
+        if callable(close):
+            close()
+
+    def crawl_bounded(
+        self,
+        source_url: str,
+        *,
+        max_actions: int = 30,
+        max_duration_s: float = 300.0,
+        max_consecutive_empty: int = 3,
+        session_ref: str | None = None,
+        consume_action: Callable[[], bool] | None = None,
+        trigger_script: str = "",
+        api_substr: str = "",
+        max_pages: int = 20,
+        wait_s: float = 7.0,
+    ) -> CrawlAgentRunResult:
+        """Serialize runs because one browser page/session belongs to this agent."""
+        with self._run_lock:
+            return self._crawl_bounded_locked(
+                source_url,
+                max_actions=max_actions,
+                max_duration_s=max_duration_s,
+                max_consecutive_empty=max_consecutive_empty,
+                session_ref=session_ref,
+                consume_action=consume_action,
+                trigger_script=trigger_script,
+                api_substr=api_substr,
+                max_pages=max_pages,
+                wait_s=wait_s,
+            )
+
+    def _crawl_bounded_locked(
+        self,
+        source_url: str,
+        *,
+        max_actions: int = 30,
+        max_duration_s: float = 300.0,
+        max_consecutive_empty: int = 3,
+        session_ref: str | None = None,
+        consume_action: Callable[[], bool] | None = None,
+        trigger_script: str = "",
+        api_substr: str = "",
+        max_pages: int = 20,
+        wait_s: float = 7.0,
+    ) -> CrawlAgentRunResult:
+        """Run the agent with limits enforced at every browser operation."""
+        if max_actions <= 0 or max_duration_s <= 0 or max_consecutive_empty <= 0:
+            raise ValueError("Tier 2 limits must be positive")
+
+        bind_session = getattr(self._tool, "bind_session", None)
+        if not callable(bind_session):
+            if session_ref:
+                return CrawlAgentRunResult(stop_reason="session_expired")
+        else:
+            bind_session(session_ref)
+
+        original_tool = self._tool
+        bounded = _BoundedBrowserTool(
+            original_tool,
+            max_actions=max_actions,
+            deadline=time.monotonic() + max_duration_s,
+            consume_action=consume_action,
+        )
+        self._tool = cast("BrowserTool", bounded)
+        self._metrics = _CrawlMetrics(max_consecutive_empty=max_consecutive_empty)
+        stop_reason = "completed"
+        records: list[RawJobRecord] = []
+        try:
+            records = self.crawl(
+                source_url,
+                trigger_script=trigger_script,
+                api_substr=api_substr,
+                max_pages=max_pages,
+                wait_s=wait_s,
+            )
+            if bounded.action_count >= max_actions:
+                stop_reason = "action_limit"
+            elif self._metrics.consecutive_empty_pages >= max_consecutive_empty:
+                stop_reason = "duplicate_stop"
+            elif session_ref and not records:
+                html = self._tool.capture_html().lower()
+                if any(
+                    signal in html
+                    for signal in (
+                        "login required",
+                        "sign in to continue",
+                        "please log in",
+                        "you must be logged in",
+                        "authentication required",
+                    )
+                ):
+                    stop_reason = "session_expired"
+        except CrawlActionLimitReached:
+            stop_reason = "action_limit"
+        except CrawlTimeLimitReached:
+            stop_reason = "time_limit"
+        finally:
+            metrics = self._metrics
+            self._metrics = None
+            self._tool = original_tool
+
+        deduped: dict[str, RawJobRecord] = {
+            record.external_id: record
+            for record in records
+            if record.external_id
+        }
+        return CrawlAgentRunResult(
+            records=tuple(deduped.values()),
+            action_count=bounded.action_count,
+            consecutive_empty_pages=metrics.consecutive_empty_pages,
+            stop_reason=stop_reason,
+        )
+
+    def _note_page(self, records: list[RawJobRecord]) -> bool:
+        if self._metrics is None:
+            return False
+        self._metrics.note_page(records)
+        return (
+            self._metrics.consecutive_empty_pages
+            >= self._metrics.max_consecutive_empty
+        )
+
+    def _empty_page_limit_reached(self) -> bool:
+        return (
+            self._metrics is not None
+            and self._metrics.consecutive_empty_pages
+            >= self._metrics.max_consecutive_empty
+        )
 
     def crawl(
         self,
@@ -301,6 +553,7 @@ class CrawlAgent:
             if arr:
                 records = [r for r in (_to_record(item, origin) for item in arr) if r]
                 if records:
+                    self._note_page(records)
                     # Try to paginate via replay for more jobs.
                     extra = self._safe_replay(cap, origin, max_pages)
                     return records + extra
@@ -312,8 +565,12 @@ class CrawlAgent:
             records = self._safe_replay(cap, origin, max_pages)
             if records:
                 return records
+            if self._empty_page_limit_reached():
+                return []
         html = self._tool.capture_html()
-        return self._extractor.extract(html)
+        records = self._extractor.extract(html, source_url=origin)
+        self._note_page(records)
+        return records
 
     def _safe_replay(self, api: CapturedApiCall, origin: str, max_pages: int) -> list[RawJobRecord]:
         """Try to paginate via fetch_in_page; return [] on any error."""
@@ -367,7 +624,7 @@ class CrawlAgent:
         """
         if self._model is None or not self._model.is_enabled:
             return []
-        action_schema = {
+        action_schema: dict[str, object] = {
             "type": "object",
             "additionalProperties": False,
             "required": ["action", "reasoning"],
@@ -520,17 +777,22 @@ class CrawlAgent:
             try:
                 parsed: object = json.loads(res.body)
             except (ValueError, TypeError):
-                break
+                if self._note_page([]):
+                    break
+                continue
             arr = _parse_job_array(parsed)
             if not arr:
-                break
+                if self._note_page([]):
+                    break
+                continue
+            page_records: list[RawJobRecord] = []
             for item in arr:
                 record = _to_record(item, origin)
                 if record is not None and record.external_id not in seen:
                     seen.add(record.external_id)
                     records.append(record)
-            # Stop when a page returns fewer than a full page (last page).
-            if len(arr) < 2:
+                    page_records.append(record)
+            if self._note_page(page_records):
                 break
         return records
 

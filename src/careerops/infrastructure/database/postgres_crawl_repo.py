@@ -1075,6 +1075,7 @@ def _row_to_permission(row: sa.RowMapping, owner_id: UUID) -> CrawlSourcePermiss
         expires_at=row["expires_at"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        session_ref=str(row["session_ref"]) if row.get("session_ref") else None,
     )
 
 
@@ -1116,6 +1117,7 @@ class PostgresCrawlPermissionRepository:
             "revoked_at": permission.revoked_at,
             "expired_at": permission.expired_at,
             "expires_at": permission.expires_at,
+            "session_ref": permission.session_ref,
         }
         with self._engine.begin() as conn:
             conn.execute(
@@ -1133,6 +1135,7 @@ class PostgresCrawlPermissionRepository:
                         "revoked_at": permission.revoked_at,
                         "expired_at": permission.expired_at,
                         "expires_at": permission.expires_at,
+                        "session_ref": permission.session_ref,
                         "updated_at": sa.func.now(),
                     },
                 )

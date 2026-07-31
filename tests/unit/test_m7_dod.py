@@ -281,12 +281,13 @@ class TestDoDAutoSendDefaultOff:
         assert can_send is True
         assert reasons == ()
 
-    def test_config_rejects_auto_send_enabled(self) -> None:
-        """Settings validator rejects auto_send_enabled=True (requires M7 RQ)."""
+    def test_auto_send_default_off_but_settable(self) -> None:
+        """The M7 startup gate is torn down for the single-user autonomous loop:
+        auto_send_enabled defaults off but is honored at construction."""
         from careerops.config import Settings
 
-        with pytest.raises(ValueError, match="M7"):
-            Settings(auto_send_enabled=True)
+        assert Settings.model_validate({}).auto_send_enabled is False
+        assert Settings.model_validate({"auto_send_enabled": True}).auto_send_enabled is True
 
 
 class TestDoDReleaseQualificationInvalidation:

@@ -205,6 +205,21 @@ export const api = {
     request('/api/v1/crawl-runs?' + new URLSearchParams(params || {})),
   getCrawlRun: (id) => request(`/api/v1/crawl-runs/${id}`),
 
+  // -- Crawl permissions (Phase 6) --
+  listCrawlPermissions: (params) =>
+    request('/api/v1/crawl-permissions?' + new URLSearchParams(params || {})),
+  getCrawlPermission: (id) => request(`/api/v1/crawl-permissions/${id}`),
+  grantCrawlPermission: (id) =>
+    request(`/api/v1/crawl-permissions/${id}/grant`, { method: 'POST', body: {} }),
+  denyCrawlPermission: (id) =>
+    request(`/api/v1/crawl-permissions/${id}/deny`, { method: 'POST', body: {} }),
+  revokeCrawlPermission: (id) =>
+    request(`/api/v1/crawl-permissions/${id}/revoke`, { method: 'POST', body: {} }),
+  openCrawlLoginSession: (id) =>
+    request(`/api/v1/crawl-permissions/${id}/open-login`, { method: 'POST' }),
+  requestCrawlPermission: (sourceId, data) =>
+    request(`/api/v1/crawl-sources/${sourceId}/permissions`, { method: 'POST', body: data || {} }),
+
   // -- Inbox (Section 6) --
   listInbox: (params) =>
     request('/api/v1/inbox?' + new URLSearchParams(params || {})),

@@ -29,21 +29,21 @@ from uuid import UUID
 
 from careerops.application.crawl_readiness import CrawlReadiness
 from careerops.domain.crawl_attempts import (
+    SUCCESSFUL_CHAIN_OUTCOMES,
     CrawlAttemptOutcome,
     CrawlSourceAttempt,
-    SUCCESSFUL_CHAIN_OUTCOMES,
 )
 from careerops.domain.crawl_plans import CrawlSource
 from careerops.infrastructure.temporal.m1_crawl_sink import CrawlSourceResult
 
 __all__ = [
-    "CrawlActivationService",
+    "BudgetChecker",
     "CrawlActivationResult",
-    "MatchingChainResult",
+    "CrawlActivationService",
     "InboxProjector",
+    "MatchingChainResult",
     "ScheduleActivator",
     "TemporalScheduleActivator",
-    "BudgetChecker",
 ]
 
 _log = logging.getLogger(__name__)
@@ -366,12 +366,19 @@ class TemporalScheduleActivator:
         schedule_id = f"crawl:{source_id}"
         arg = ScheduledCrawlWorkflowInput(
             owner_id=str(owner_id) if owner_id else "",
+            source_id=str(source_id),
         )
+        interval_seconds = max(1, int(interval.total_seconds()))
+        # Temporal interval schedules share an epoch anchor.  A stable offset
+        # spreads a large source catalog across the interval instead of
+        # starting every source in the same second after reconciliation.
+        offset = timedelta(seconds=source_id.int % interval_seconds)
         return await self._manager.ensure_schedule(  # type: ignore[union-attr]
             schedule_id=schedule_id,
             workflow=CrawlScheduledWorkflow,
             arg=arg,
             interval=interval,
+            offset=offset,
             task_queue=self._task_queue,
             paused=paused,
             note=f"source={source_id}",

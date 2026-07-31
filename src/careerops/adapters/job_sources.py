@@ -120,12 +120,17 @@ class GreenhouseAdapter:
                 location = str(location_obj.get("name", ""))
             # absolute_url is the apply URL from Greenhouse
             url = str(job.get("absolute_url", ""))
+            # ``?content=true`` on the public list endpoint includes the full
+            # posting body.  Preserve it so a broad scan does not make one
+            # redundant detail request per job.
+            description = html.unescape(str(job.get("content", "")))
             records.append(
                 RawJobRecord(
                     external_id=ext_id,
                     title=title,
                     location=location,
                     url=url,
+                    description=description,
                     raw_data=job,
                 )
             )

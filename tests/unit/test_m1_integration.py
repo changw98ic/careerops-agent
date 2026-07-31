@@ -219,6 +219,24 @@ class TestGreenhouseAdapter:
         assert result.response_hash != ""
         assert result.parser_version == "greenhouse-v1"
 
+    def test_list_jobs_preserves_content_when_requested(self) -> None:
+        adapter = GreenhouseAdapter()
+        result = adapter.list_jobs(
+            {
+                "jobs": [
+                    {
+                        "id": 123,
+                        "title": "Platform Engineer",
+                        "location": {"name": "Remote"},
+                        "absolute_url": "https://example.test/jobs/123",
+                        "content": "&lt;p&gt;Build the platform.&lt;/p&gt;",
+                    }
+                ]
+            }
+        )
+
+        assert result.jobs[0].description == "<p>Build the platform.</p>"
+
     def test_invalid_data(self) -> None:
         adapter = GreenhouseAdapter()
         result = adapter.list_jobs("not a dict")
@@ -1209,131 +1227,3 @@ class TestJobsApiRoutes:
         assert response.status_code == 200
         data = response.json()
         assert data["total"] == 0
-
-
-# --- Web UI tests ---
-
-
-class TestJobsUi:
-    def test_ui_importable(self) -> None:
-        from careerops.web.jobs_ui import web_router
-
-        assert web_router is not None
-
-    def test_companies_page_no_repo(self) -> None:
-        from fastapi import FastAPI
-        from fastapi.testclient import TestClient
-
-        from careerops.web.jobs_ui import web_router
-
-        app = FastAPI()
-        app.include_router(web_router)
-        client = TestClient(app)
-        response = client.get("/companies")
-        assert response.status_code == 200
-        assert "text/html" in response.headers["content-type"]
-
-    def test_jobs_inbox_page_no_repo(self) -> None:
-        from fastapi import FastAPI
-        from fastapi.testclient import TestClient
-
-        from careerops.web.jobs_ui import web_router
-
-        app = FastAPI()
-        app.include_router(web_router)
-        client = TestClient(app)
-        response = client.get("/jobs")
-        assert response.status_code == 200
-        assert "text/html" in response.headers["content-type"]
-
-    def test_job_detail_page_not_found(self) -> None:
-        from fastapi import FastAPI
-        from fastapi.testclient import TestClient
-
-        from careerops.web.jobs_ui import web_router
-
-        app = FastAPI()
-        app.include_router(web_router)
-        client = TestClient(app)
-        response = client.get("/jobs/nonexistent")
-        assert response.status_code == 404
-
-    def test_companies_page_with_repo(self) -> None:
-        from fastapi import FastAPI
-        from fastapi.testclient import TestClient
-
-        from careerops.web.jobs_ui import web_router
-
-        class MockRepo:
-            def list_companies(self, cursor: str | None, limit: int) -> dict[str, object]:
-                return {
-                    "items": [{"id": "c1", "name": "Acme", "normalized_name": "acme"}],
-                    "total": 1,
-                    "next_cursor": None,
-                }
-
-        app = FastAPI()
-        app.include_router(web_router)
-        app.state.job_read_repository = MockRepo()
-        client = TestClient(app)
-        response = client.get("/companies")
-        assert response.status_code == 200
-        assert "Acme" in response.text
-
-    def test_jobs_inbox_page_with_repo(self) -> None:
-        from fastapi import FastAPI
-        from fastapi.testclient import TestClient
-
-        from careerops.web.jobs_ui import web_router
-
-        class MockRepo:
-            def list_canonical_jobs(
-                self, cursor: str | None, limit: int, state: str | None
-            ) -> dict[str, object]:
-                return {
-                    "items": [
-                        {
-                            "id": "j1",
-                            "company_id": "c1",
-                            "canonical_title": "Engineer",
-                            "aggregate_state": "active",
-                        }
-                    ],
-                    "total": 1,
-                    "next_cursor": None,
-                }
-
-        app = FastAPI()
-        app.include_router(web_router)
-        app.state.job_read_repository = MockRepo()
-        client = TestClient(app)
-        response = client.get("/jobs")
-        assert response.status_code == 200
-        assert "Engineer" in response.text
-
-    def test_job_detail_page_with_repo(self) -> None:
-        from fastapi import FastAPI
-        from fastapi.testclient import TestClient
-
-        from careerops.web.jobs_ui import web_router
-
-        class MockRepo:
-            def get_job_detail(self, job_id: str) -> dict[str, object] | None:
-                if job_id == "j1":
-                    return {
-                        "id": "j1",
-                        "company_id": "c1",
-                        "canonical_title": "Engineer",
-                        "aggregate_state": "active",
-                        "versions": [],
-                        "merge_decisions": [],
-                    }
-                return None
-
-        app = FastAPI()
-        app.include_router(web_router)
-        app.state.job_read_repository = MockRepo()
-        client = TestClient(app)
-        response = client.get("/jobs/j1")
-        assert response.status_code == 200
-        assert "Engineer" in response.text

@@ -13,9 +13,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from dataclasses import dataclass, field
+from collections.abc import AsyncGenerator
+from contextlib import suppress
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import AsyncGenerator
+from typing import Protocol
 from uuid import UUID, uuid4
 
 __all__ = [
@@ -81,16 +83,14 @@ class SSEChannel:
         for queue in self._subscribers.get(user_id, []):
             try:
                 queue.put_nowait(sse_data)
-            except asyncio.QueueFull:  # pragma: no cover – unbounded queue
+            except asyncio.QueueFull:  # pragma: no cover - unbounded queue
                 _log.warning("SSE queue full for user %s, dropping event", user_id)
 
     def shutdown(self, user_id: str) -> None:
         """Send sentinel to all subscribers of *user_id* (graceful close)."""
         for queue in self._subscribers.pop(user_id, []):
-            try:
+            with suppress(asyncio.QueueFull):
                 queue.put_nowait(None)
-            except asyncio.QueueFull:  # pragma: no cover
-                pass
 
 
 def _format_sse(event: NotificationEvent) -> str:
@@ -104,6 +104,14 @@ def _format_sse(event: NotificationEvent) -> str:
     return f"event: {event.event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
+class NotificationRepository(Protocol):
+    def save(self, event: NotificationEvent) -> NotificationEvent: ...
+
+    def list_pending(self, user_id: str) -> list[NotificationEvent]: ...
+
+    def mark_delivered(self, user_id: str, event_id: UUID) -> None: ...
+
+
 class NotificationService:
     """Outbox-style notification service with SSE push.
 
@@ -112,9 +120,14 @@ class NotificationService:
     Clients can recover missed events via ``get_pending``.
     """
 
-    def __init__(self, sse_channel: SSEChannel) -> None:
+    def __init__(
+        self,
+        sse_channel: SSEChannel,
+        repository: NotificationRepository | None = None,
+    ) -> None:
         self._channel = sse_channel
         self._outbox: dict[str, list[NotificationEvent]] = {}
+        self._repository = repository
 
     # ------------------------------------------------------------------
     # Core API
@@ -134,21 +147,28 @@ class NotificationService:
             payload=payload,
             created_at=datetime.now(UTC),
         )
-        self._outbox.setdefault(user_id, []).append(event)
+        if self._repository is None:
+            self._outbox.setdefault(user_id, []).append(event)
+        else:
+            event = self._repository.save(event)
         self._channel.publish(user_id, event)
         return event
 
     def get_pending(self, user_id: str) -> list[NotificationEvent]:
         """Return undelivered events for *user_id* (recovery)."""
+        if self._repository is not None:
+            return self._repository.list_pending(user_id)
         return [e for e in self._outbox.get(user_id, []) if not e.delivered]
 
     def mark_delivered(self, user_id: str, event_id: UUID) -> None:
         """Acknowledge delivery of *event_id* for *user_id*."""
+        if self._repository is not None:
+            self._repository.mark_delivered(user_id, event_id)
+            return
         for event in self._outbox.get(user_id, []):
             if event.id == event_id:
                 event.delivered = True
                 return
-
     # ------------------------------------------------------------------
     # Convenience helpers
     # ------------------------------------------------------------------

@@ -253,13 +253,19 @@ class SettingsCapabilityResolver:
             )
 
         if capability is CapabilityKind.AUTO_SEND:
-            # Permanently denied regardless of flag state. ``auto_send_enabled``
-            # stays in Settings for forward compatibility but the resolver
-            # hard-denies so no configuration flip can bypass the human
-            # confirmation gate (design Decision 11; Iron Rule 1).
+            # The permanent hard-deny is torn down for the single-user
+            # autonomous loop (real-autonomous-career-loop). AUTO_SEND now
+            # follows the operator flag like the other capabilities; autonomy
+            # is bounded downstream by the autonomous-action policy
+            # (reversible categories auto-act, irreversible commitments blocked).
+            if settings.auto_send_enabled:
+                return CapabilityDecision(
+                    released=True,
+                    reason="auto-send released; bounded by the autonomous-action policy",
+                )
             return CapabilityDecision(
                 released=False,
-                reason=("auto-send permanently denied; human confirmation required for every send"),
+                reason="auto-send disabled by operator flag",
             )
 
         # Fail-closed for any member not explicitly handled above. Unreachable

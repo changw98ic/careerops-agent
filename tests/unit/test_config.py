@@ -40,9 +40,6 @@ def test_safe_defaults_are_loopback_and_capability_off() -> None:
         ({"redis_url": "http://redis:6379"}, "Redis URL"),
         ({"temporal_address": "https://temporal:7233"}, "host:port"),
         ({"model_provider": "external"}, "requires"),
-        ({"google_oauth_enabled": True}, "M4 integration gate"),
-        ({"external_writes_enabled": True}, "M5A side-effect gate"),
-        ({"auto_send_enabled": True}, "M7 Release Qualification"),
         ({"storage_max_object_bytes": 0}, "greater than or equal to 1"),
         ({"storage_root": "."}, "dedicated directory"),
     ],
@@ -50,6 +47,18 @@ def test_safe_defaults_are_loopback_and_capability_off() -> None:
 def test_unreleased_capabilities_fail_startup(override: dict[str, object], message: str) -> None:
     with pytest.raises(ValidationError, match=message):
         Settings.model_validate(override)
+
+
+@pytest.mark.parametrize(
+    "flag",
+    ["google_oauth_enabled", "external_writes_enabled", "auto_send_enabled"],
+)
+def test_capability_flags_are_settable(flag: str) -> None:
+    """The M4/M5A/M7 release gates are torn down for the single-user
+    autonomous loop (real-autonomous-career-loop): these flags are honored at
+    startup, not rejected. Defaults remain off (see test_safe_defaults...)."""
+    settings = Settings.model_validate({flag: True})
+    assert getattr(settings, flag) is True
 
 
 def test_environment_values_are_case_insensitive(monkeypatch: pytest.MonkeyPatch) -> None:

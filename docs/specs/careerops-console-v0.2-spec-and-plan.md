@@ -9,9 +9,9 @@
 ## 0. 先说清楚两个 Bootstrap
 
 - Bootstrap CSS 组件库：移除，不再使用。
-- `/bootstrap` 地址：保留，它是首次创建 CareerOps 账号的流程，不能因为移除 CSS 组件库而删除。
+- `/bootstrap` 地址：保留在 Vue SPA 中，它是首次创建 CareerOps 账号的流程；后端不再提供同名服务端页面。
 
-正式控制台统一使用 Vue 3、Ant Design Vue 和 AntV G2。旧的 Jinja 页面只能作为迁移期间的兼容实现，不能和 Vue 页面同时作为正式入口。
+正式控制台统一使用 Vue 3、Ant Design Vue 和 AntV G2。认证、Bootstrap、仪表盘和主工作区只走 Vue SPA；M1/M2 的独立只读页面仍可在显式关闭 SPA 时使用，不作为认证入口。
 
 本文不改变以下安全边界：
 
@@ -57,14 +57,13 @@
 
 ## 2. 正式运行方式
 
-正式运行只允许一种模式：Vue 前端由 Docker 构建并由 API 同域名提供。
+正式运行采用前后端分离：Vue 前端由独立服务提供静态页面，浏览器只访问前端同源地址，前端服务将 `/api/*` 反向转发给 API。
 
 ```text
 Docker / Compose
-  ├── Node 构建 frontend/dist
-  ├── 把 frontend/dist 复制到 Python 镜像
-  ├── CAREEROPS_SERVE_SPA=true
-  └── API 同时提供页面、静态资源和 API
+  ├── frontend：Node 构建并提供 frontend/dist
+  ├── frontend：同源转发 /api/* -> api:8000
+  └── api：只提供版本化 API，不提供页面和静态资源
 ```
 
 要求：
@@ -72,14 +71,13 @@ Docker / Compose
 - Dockerfile 使用多阶段构建；
 - Node 镜像摘要固定；
 - 前端构建使用 `npm ci`；
-- API 镜像中必须存在 `frontend/dist`；
-- Compose 明确设置 `CAREEROPS_SERVE_SPA=true`；
-- Vue 页面和 API 使用同一个域名和端口；
-- `dist` 缺失时启动失败，不得静默退回旧页面；
-- `make verify-compose` 必须检查返回的是 Vue 页面，而不是旧 Jinja 页面。
+- 前端镜像中必须存在 `frontend/dist`；
+- Compose 必须启动独立 `frontend` 服务，并设置 `VITE_API_PROXY_TARGET=http://api:8000`；
+- 浏览器页面和 API 请求对外表现为同一个前端源；
+- API 不得挂载前端静态目录或 SPA fallback；
+- `make verify-compose` 必须检查前端页面和前端 `/api` 转发都可用。
 
-现有 Dockerfile 未复制前端，必须在实施阶段修正：
-`Dockerfile` 的当前复制范围只覆盖 Python 源码和迁移文件。
+后端 `Dockerfile` 只复制 Python 源码和迁移文件；前端由 `frontend/Dockerfile` 独立构建。
 
 ## 3. 认证和会话 Spec
 
@@ -546,16 +544,14 @@ OpenAPI 必须声明实际会返回的 401、403、409、422、429、503，不�
 
 任务：
 
-- Dockerfile 增加 Node 构建阶段；
-- Node 镜像摘要固定；
-- 执行 `npm ci` 和 `npm run build`；
-- 复制 `frontend/dist` 到 Python 镜像；
-- Compose 设置 `CAREEROPS_SERVE_SPA=true`；
-- dist 缺失时启动失败；
-- Compose 验证 Vue 页面、bootstrap、404 和静态资源；
+- 新增独立 `frontend/Dockerfile`，Node 镜像摘要固定；
+- 前端执行 `npm ci` 和 `npm run build`，由 frontend 服务提供静态资源；
+- Compose 启动独立 frontend 服务，并设置 `VITE_API_PROXY_TARGET=http://api:8000`；
+- API 镜像不复制 `frontend/dist`，不启用 SPA fallback；
+- Compose 验证 Vue 页面、bootstrap、404 和前端 `/api` 转发；
 - CI 增加前端安装、测试、构建和包大小检查。
 
-验收：标准 Compose 启动后访问到的是 Vue 页面，不是旧 Jinja 页面。
+验收：标准 Compose 启动后访问前端服务得到 Vue 页面，前端 `/api/*` 转发到 API，后端不提供旧服务端页面。
 
 ## 阶段 4：修前端业务页面
 

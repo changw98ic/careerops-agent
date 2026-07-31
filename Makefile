@@ -1,7 +1,7 @@
 UV_PROJECT_ENVIRONMENT := venv
 export UV_PROJECT_ENVIRONMENT
 
-.PHONY: audit bootstrap coverage format migrate migration-check run security setup verify \
+.PHONY: audit bootstrap coverage demo-llm-crawl format migrate migration-check run security setup verify \
 	verify-compose verify-db verify-frontend verify-m0 verify-m1 verify-m1-contracts verify-m1-full \
 	verify-temporal
 
@@ -50,8 +50,9 @@ verify-compose:
 		trap 'docker compose down --volumes --remove-orphans' EXIT; \
 		docker compose up --build --wait; \
 		curl --fail --silent http://127.0.0.1:$${CAREEROPS_API_PORT:-8000}/api/v1/health/ready; \
-		curl --fail --silent http://127.0.0.1:$${CAREEROPS_API_PORT:-8000}/login | \
-			grep -q 'CareerOps</title>'
+		curl --fail --silent http://127.0.0.1:$${CAREEROPS_FRONTEND_PORT:-5173}/ | \
+			grep -q '<div id="app"></div>'; \
+		curl --fail --silent http://127.0.0.1:$${CAREEROPS_FRONTEND_PORT:-5173}/api/v1/health/live
 
 verify-m0: verify security verify-db verify-compose
 
@@ -73,6 +74,9 @@ verify-frontend:
 	LIMIT=$$((250 * 1024)); \
 	echo "Initial JS gzip size: $$SIZE bytes (limit: $$LIMIT)"; \
 	if [ "$$SIZE" -gt "$$LIMIT" ]; then echo "::error::Bundle too large"; exit 1; fi
+
+demo-llm-crawl:
+	uv run python scripts/demo_llm_crawl.py
 
 verify: verify-m1-contracts
 	uv lock --check

@@ -20,7 +20,7 @@ The MVP includes:
 - public recruiting contacts with source evidence, manual application confirmation and deterministic follow-up reminders;
 - dedicated Gmail read/classify/internal-draft/approval followed later by narrowly scoped Gmail Send;
 - FreeBusy and human-triggered event creation on a dedicated CareerOps Interviews calendar;
-- policy, approval, outbox, reconciliation, audit, retention, recovery and a Chinese-first thin server-rendered console.
+- policy, approval, outbox, reconciliation, audit, retention, recovery and a Chinese-first Vue console backed by a versioned API.
 
 The following are not in v1:
 
@@ -31,7 +31,7 @@ The following are not in v1:
 - MCP, especially mutation tools; direct provider tools exposed to an agent;
 - salary negotiation, offer acceptance/rejection, process withdrawal or identity/bank document transmission.
 
-MVP UI is FastAPI + Jinja2 + HTMX with local CSP-compatible JavaScript. Object content uses a local content-addressed volume behind a storage port. `MODEL_PROVIDER=disabled` is the safe runtime default.
+MVP UI is a separately served Vue SPA using same-origin `/api/*` forwarding to FastAPI. Object content uses a local content-addressed volume behind a storage port. `MODEL_PROVIDER=disabled` is the safe runtime default.
 
 ## Consequences
 

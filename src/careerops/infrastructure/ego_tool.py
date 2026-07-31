@@ -23,6 +23,7 @@ driven by a fake in tests.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess  # nosec B404 -- fixed argv, no shell
 from dataclasses import dataclass
@@ -111,6 +112,15 @@ class EgoBrowserTool:
         self._binary = binary
         self._task_space = task_space
         self._timeout_s = timeout_s
+
+    def bind_session(self, session_ref: str | None) -> None:
+        """Select the persisted, source-scoped ego task space for this run."""
+        if session_ref is None:
+            self._task_space = "careerops-crawl"
+            return
+        if not re.fullmatch(r"careerops-login-[0-9a-f-]{36}", session_ref):
+            raise ValueError("invalid crawl session reference")
+        self._task_space = session_ref
 
     @property
     def is_ready(self) -> bool:

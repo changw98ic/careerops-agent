@@ -343,3 +343,58 @@ class TestCrawlAgentReActLoop:
         assert model.invoke_count == 3
         # One scroll primitive per step (page-state snapshot is the other call).
         assert browser.run_page_script_calls.count(_SCROLL_SCRIPT) == 3
+
+
+class TestBoundedCrawlAgent:
+    def test_counts_real_browser_operations_and_stops_before_action_four(self) -> None:
+        browser = _FakeBrowserTool()
+        agent = CrawlAgent(
+            browser,
+            _FakeExtractor([]),
+            model_client=_DisabledModelClient(),
+        )
+
+        result = agent.crawl_bounded(
+            _SOURCE_URL,
+            max_actions=3,
+            max_duration_s=30,
+            max_consecutive_empty=3,
+            wait_s=0,
+        )
+
+        assert result.stop_reason == "action_limit"
+        assert result.action_count == 3
+        actual_operations = (
+            len(browser.navigate_calls)
+            + browser.capture_html_calls
+            + len(browser.run_page_script_calls)
+            + len(browser.capture_network_calls)
+            + len(browser.fetch_in_page_calls)
+        )
+        assert actual_operations == 3
+
+    def test_stops_after_three_result_pages_without_new_identity(self) -> None:
+        empty_api = CapturedApiCall(
+            url="https://demo.test/api/jobs",
+            method="POST",
+            body='{"page":1}',
+            response="{}",
+        )
+        browser = _FakeBrowserTool(network_calls=[empty_api])
+        agent = CrawlAgent(
+            browser,
+            _FakeExtractor([]),
+            model_client=_DisabledModelClient(),
+        )
+
+        result = agent.crawl_bounded(
+            _SOURCE_URL,
+            max_actions=30,
+            max_duration_s=30,
+            max_consecutive_empty=3,
+            wait_s=0,
+        )
+
+        assert result.stop_reason == "duplicate_stop"
+        assert result.consecutive_empty_pages == 3
+        assert len(browser.fetch_in_page_calls) == 3

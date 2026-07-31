@@ -25,13 +25,12 @@ npm install
 npm run dev
 ```
 
-The Vite dev server starts at `http://localhost:5173` and proxies these paths to the backend:
+The Vite dev server starts at `http://127.0.0.1:5173`. It proxies only API requests to the
+backend; browser pages stay in the Vue application:
 
 | Path | Target |
 |------|--------|
 | `/api/*` | `http://127.0.0.1:8000` |
-| `/login` | `http://127.0.0.1:8000` |
-| `/bootstrap` | `http://127.0.0.1:8000` |
 
 The smart form entry point is default-deny. Set `VITE_SMART_INTAKE_ENABLED=true` only in a
 frontend build paired with backend `CAREEROPS_SMART_INTAKE_ENABLED=true`; otherwise Profile and
@@ -42,7 +41,7 @@ AgentWorkbench show the manual fallback and do not present an interactive AI CTA
 ### First-Time Bootstrap
 
 1. The backend generates a one-time `bootstrap_token` on first startup (printed to stdout).
-2. Navigate to `/bootstrap` in the browser.
+2. Navigate to `http://127.0.0.1:5173/bootstrap` in both development and Compose.
 3. Enter the token, choose a username and password.
 4. The frontend calls `POST /api/v1/auth/bootstrap` which creates the initial admin user.
 5. On success the session is established and the user is redirected to the dashboard.
@@ -149,7 +148,9 @@ Tests use Vitest with `happy-dom` as the DOM environment. Test files live alongs
 npm run build
 ```
 
-Output goes to `dist/`. This is a static SPA -- serve it with any web server that supports history-mode fallback (all routes serve `index.html`).
+Output goes to `dist/`. The frontend service serves this static SPA with history-mode fallback
+and forwards `/api/*` to the backend. The browser therefore uses one origin for pages and API
+calls even though the processes are separate.
 
 ### Preview Locally
 
@@ -162,7 +163,8 @@ Serves the production build at `http://localhost:4173`.
 ### Deployment Notes
 
 - Use `npm ci` in CI/CD environments for reproducible installs.
-- The backend must be accessible at the same origin or configure CORS/proxy accordingly.
+- The frontend proxy must target the backend through `VITE_API_PROXY_TARGET`; browser code must
+  continue using relative `/api/...` paths.
 - History-mode routing requires the web server to rewrite all non-asset paths to `index.html`.
 
 ## UI Boundaries

@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -141,7 +141,7 @@ class PostgresInboxRepository:
             for m in matches:
                 conn.execute(
                     requirement_match_results.insert().values(
-                        id=UUID(int=0),  # will be replaced by DB default
+                        id=uuid4(),
                         filter_decision_id=filter_decision_id,
                         requirement_name=m.requirement_name,
                         match_level=m.match_level,

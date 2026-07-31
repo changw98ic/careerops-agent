@@ -90,9 +90,20 @@
                   <template v-else-if="column.key === 'permission'">
                     <template v-if="getPermissionForSource(record.id)">
                       <a-space :size="4">
-                        <a-tag :color="permStateColor(getPermissionForSource(record.id).state)" size="small">
-                          {{ permStateLabel(getPermissionForSource(record.id).state) }}
-                        </a-tag>
+                        <a-tooltip>
+                          <template #title>
+                            <div v-if="getPermissionForSource(record.id).disclosed_terms?.purpose">目的: {{ getPermissionForSource(record.id).disclosed_terms.purpose }}</div>
+                            <div v-if="getPermissionForSource(record.id).disclosed_terms?.frequency">频率: {{ getPermissionForSource(record.id).disclosed_terms.frequency }}</div>
+                            <div v-if="getPermissionForSource(record.id).disclosed_terms?.login_evidence">登录凭证: {{ getPermissionForSource(record.id).disclosed_terms.login_evidence }}</div>
+                            <div>动作上限: {{ getPermissionForSource(record.id).disclosed_terms?.max_browser_actions ?? 30 }} 次</div>
+                            <div>时间上限: {{ getPermissionForSource(record.id).disclosed_terms?.max_duration_seconds ?? 300 }} 秒</div>
+                            <div>连续空页上限: {{ getPermissionForSource(record.id).disclosed_terms?.max_consecutive_empty_pages ?? 3 }} 页</div>
+                            <div v-if="getPermissionForSource(record.id).session_ref">会话引用: 已绑定</div>
+                          </template>
+                          <a-tag :color="permStateColor(getPermissionForSource(record.id).state)" size="small">
+                            {{ permStateLabel(getPermissionForSource(record.id).state) }}
+                          </a-tag>
+                        </a-tooltip>
                         <template v-if="getPermissionForSource(record.id).state === 'pending'">
                           <a-button type="link" size="small" :loading="permActionId === getPermissionForSource(record.id).id" @click="grantPerm(getPermissionForSource(record.id).id)">授权</a-button>
                           <a-button type="link" size="small" danger :loading="permActionId === getPermissionForSource(record.id).id" @click="denyPerm(getPermissionForSource(record.id).id)">拒绝</a-button>
@@ -101,6 +112,8 @@
                           <span class="muted" style="font-size: 11px">
                             {{ getPermissionForSource(record.id).expires_at ? '至 ' + formatDate(getPermissionForSource(record.id).expires_at) : '永久' }}
                           </span>
+                          <a-button type="link" size="small" danger :loading="permActionId === getPermissionForSource(record.id).id" @click="revokePerm(getPermissionForSource(record.id).id)">撤销</a-button>
+                          <a-button type="link" size="small" :loading="permActionId === getPermissionForSource(record.id).id" @click="openLoginSession(getPermissionForSource(record.id).id)">打开登录</a-button>
                         </template>
                       </a-space>
                     </template>
@@ -549,6 +562,37 @@ async function denyPerm(id) {
     const info = parseApiError(err)
     if (info.isDependencyNotReady) unavailable.value = true
     else error.value = formatApiError(err, '拒绝失败。')
+  } finally {
+    permActionId.value = ''
+  }
+}
+
+async function revokePerm(id) {
+  permActionId.value = id
+  error.value = ''
+  try {
+    await api.revokeCrawlPermission(id)
+    message.success('已撤销权限')
+    await Promise.all([loadPermissions(), loadSources()])
+  } catch (err) {
+    const info = parseApiError(err)
+    if (info.isDependencyNotReady) unavailable.value = true
+    else error.value = formatApiError(err, '撤销权限失败。')
+  } finally {
+    permActionId.value = ''
+  }
+}
+
+async function openLoginSession(id) {
+  permActionId.value = id
+  error.value = ''
+  try {
+    await api.openCrawlLoginSession(id)
+    message.success('已打开该来源的独立登录窗口，请直接在窗口中完成登录')
+  } catch (err) {
+    const info = parseApiError(err)
+    if (info.isDependencyNotReady) unavailable.value = true
+    else error.value = formatApiError(err, '打开登录窗口失败。')
   } finally {
     permActionId.value = ''
   }

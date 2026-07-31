@@ -353,6 +353,29 @@ class TestSSRFBlocksNewRanges:
         result = fetch("http://bench.example.com/")
         assert result.status_code == 200
 
+    def test_docker_desktop_paired_dns_proxy_allowed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            http_fetcher,
+            "_resolve_host",
+            lambda _host: ("198.18.0.64", "fdfe:dcba:9876::23"),
+        )
+        fake = _FakeResponse(b"ok")
+        _stub_open_with_fake(fake, monkeypatch)
+        assert fetch("https://public.example.com/").status_code == 200
+
+    def test_docker_proxy_pair_does_not_hide_private_ipv4(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            http_fetcher,
+            "_resolve_host",
+            lambda _host: ("198.18.0.64", "10.0.0.9", "fdfe:dcba:9876::23"),
+        )
+        with pytest.raises(SSRFError, match="private/reserved"):
+            fetch("https://mixed.example.com/")
+
 
 class TestDNSRebinding:
     """DNS-rebinding detection: reject when resolved IPs change between calls."""

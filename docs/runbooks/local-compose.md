@@ -3,13 +3,15 @@
 ## Purpose and boundary
 
 This is a disposable, loopback-only development stack. It starts PostgreSQL, Redis, Temporal,
-Temporal UI, a one-shot migration service, the API, and the workflow worker. It is not a
+Temporal UI, a one-shot migration service, the API, the separate frontend proxy, and the
+workflow worker. It is not a
 production deployment procedure: use unique secrets through an approved secret mechanism,
 TLS, SBOM/advisory review for pinned images, backup/restore evidence, deployment evidence,
 and a reviewed reverse-proxy design before exposing any endpoint beyond the local machine.
 
-The only host-published services are API on `127.0.0.1:8000` (or
-`CAREEROPS_API_PORT`) and Temporal UI on `127.0.0.1:8233` (or
+The host-published browser entrypoint is the frontend on `127.0.0.1:5173` (or
+`CAREEROPS_FRONTEND_PORT`). It forwards same-origin `/api/*` requests to the API on
+`127.0.0.1:8000` (or `CAREEROPS_API_PORT`). Temporal UI is on `127.0.0.1:8233` (or
 `CAREEROPS_TEMPORAL_UI_PORT`). PostgreSQL, Redis, and the Temporal server remain on the
 internal Compose network.
 
@@ -44,6 +46,7 @@ export CAREEROPS_TEMPORAL_VISIBILITY_DB_NAME=temporal_visibility
 
 # Optional when the defaults are occupied; both remain bound to 127.0.0.1.
 export CAREEROPS_API_PORT=8000
+export CAREEROPS_FRONTEND_PORT=5173
 export CAREEROPS_TEMPORAL_UI_PORT=8233
 ```
 
@@ -106,8 +109,9 @@ docker compose logs migration --tail=5
 # 3. Check database readiness via application endpoint
 curl --fail --silent http://127.0.0.1:${CAREEROPS_API_PORT:-8000}/api/v1/health/ready
 
-# 4. Verify the SPA is served at the login route
-curl --fail --silent http://127.0.0.1:${CAREEROPS_API_PORT:-8000}/login | grep -q 'CareerOps</title>'
+# 4. Verify the frontend shell and same-origin API forwarding
+curl --fail --silent http://127.0.0.1:${CAREEROPS_FRONTEND_PORT:-5173}/ | grep -q '<div id="app"></div>'
+curl --fail --silent http://127.0.0.1:${CAREEROPS_FRONTEND_PORT:-5173}/api/v1/health/live
 
 # 5. Verify Temporal UI is reachable
 curl --fail --silent http://127.0.0.1:${CAREEROPS_TEMPORAL_UI_PORT:-8233}/
@@ -136,9 +140,9 @@ make verify-compose
 ```
 
 `make verify-compose` runs `docker compose config --quiet`, brings up the stack with
-`--build --wait`, checks `/api/v1/health/ready`, checks `/login` serves the SPA, and tears
-down volumes on exit. `make verify-m0` additionally requires `CAREEROPS_TEST_DATABASE_URL` for
-a separate disposable PostgreSQL integration database.
+`--build --wait`, checks API readiness, checks the frontend shell, verifies same-origin API
+forwarding, and tears down volumes on exit. `make verify-m0` additionally requires
+`CAREEROPS_TEST_DATABASE_URL` for a separate disposable PostgreSQL integration database.
 
 ## First-owner bootstrap and normal sign-in
 
@@ -154,14 +158,16 @@ make bootstrap
 docker compose run --rm api careerops-bootstrap
 ```
 
-The token expires in 15 minutes and is invalid after use. Open
-`http://127.0.0.1:${CAREEROPS_API_PORT:-8000}/bootstrap`, provide the token, choose a canonical
+The token expires in 15 minutes and is invalid after use. Open the SPA at
+`http://127.0.0.1:${CAREEROPS_FRONTEND_PORT:-5173}/bootstrap`, provide the token, choose a canonical
 username (`[a-z0-9][a-z0-9._-]{2,63}`), and choose a password. Completion creates the sole
-owner account and rotates the pre-authentication cookie into an authenticated session.
+owner account and rotates the pre-authentication cookie into an authenticated session. The
+backend exposes only the versioned `/api/v1/auth/*` endpoints; it does not serve an HTML auth
+page.
 
-For subsequent access, open `/login` and sign in with that username and password. The root
-dashboard is session-protected. Use its CSRF-protected **Log out** form to end the session;
-logout revokes the server-side session and clears the browser cookies. Lost-password recovery
+For subsequent access, open the SPA `/login` page and sign in with that username and password.
+The root dashboard is session-protected. Use the SPA **退出** action to end the session; logout
+revokes the server-side session and clears the browser cookies. Lost-password recovery
 is intentionally not an email flow; it needs a local console/host recovery procedure before it
 is enabled.
 

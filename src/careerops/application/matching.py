@@ -420,6 +420,12 @@ class MatchDataRepository(Protocol):
     def get_candidate_evidence(self, candidate_id: UUID) -> list[EvidenceItem]: ...
 
 
+class MatchResultRepository(Protocol):
+    """Persistence port for completed deterministic matching results."""
+
+    def add_match(self, result: MatchResult) -> None: ...
+
+
 class MatchOrchestrator:
     """Orchestrates the full matching pipeline: extract -> match -> score -> tier."""
 
@@ -427,9 +433,11 @@ class MatchOrchestrator:
         self,
         engine: MatchingEngine | None = None,
         data_repository: MatchDataRepository | None = None,
+        result_repository: MatchResultRepository | None = None,
     ) -> None:
         self._engine = engine or MatchingEngine()
         self._data_repository = data_repository
+        self._result_repository = result_repository
 
     def run_match_for_request(
         self,
@@ -445,13 +453,16 @@ class MatchOrchestrator:
             if job_data is not None:
                 structured_data = job_data
             evidence_items = self._data_repository.get_candidate_evidence(candidate_id)
-        return self.run_match(
+        result = self.run_match(
             candidate_id=candidate_id,
             canonical_job_id=canonical_job_id,
             structured_data=structured_data,
             evidence_items=evidence_items,
             now=now,
         )
+        if self._result_repository is not None:
+            self._result_repository.add_match(result)
+        return result
 
     def run_match(
         self,

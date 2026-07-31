@@ -254,6 +254,7 @@ class CrawlSourcePermission:
     expires_at: datetime | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    session_ref: str | None = None  # opaque reference to authenticated session (Phase 6.6)
 
 
 # ---------------------------------------------------------------------------

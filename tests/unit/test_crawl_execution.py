@@ -136,6 +136,7 @@ class TestCrawlExecutionService:
         *,
         policy_fn: Callable[[CrawlPolicyInput], CrawlPolicyDecision] | None = None,
         backoff_policy: BackoffPolicy | None = None,
+        source_queue: MagicMock | None = None,
     ) -> tuple[CrawlExecutionService, MagicMock, MagicMock, MagicMock, MagicMock]:
         """Create a service with mock repos and sink."""
         run_repo = MagicMock()
@@ -154,8 +155,47 @@ class TestCrawlExecutionService:
             sink=sink,
             policy_fn=policy_fn,
             backoff_policy=backoff_policy,
+            source_queue=source_queue,
         )
         return service, run_repo, plan_repo, source_repo, sink
+
+    @pytest.mark.asyncio
+    async def test_fetch_error_still_records_source_attempt(self) -> None:
+        owner_id = uuid4()
+        plan_id = uuid4()
+        source = _make_source(owner_id=owner_id)
+        plan = _make_plan(plan_id=plan_id, owner_id=owner_id, sources=(source.id,))
+        run = _make_run(plan_version_id=plan_id)
+        source_queue = MagicMock()
+
+        service, run_repo, plan_repo, source_repo, sink = self._make_service(
+            source_queue=source_queue
+        )
+        run_repo.get_by_id.return_value = run
+        plan_repo.get_by_id.return_value = plan
+        source_repo.get_by_id.return_value = source
+        sink.crawl_source_with_signals.side_effect = OSError("connection reset")
+        sink.supports_source_type.return_value = True
+        running_run = _make_run(
+            run_id=run.id,
+            plan_version_id=plan_id,
+            state=CrawlRunState.RUNNING,
+        )
+        succeeded_run = _make_run(
+            run_id=run.id,
+            plan_version_id=plan_id,
+            state=CrawlRunState.SUCCEEDED,
+        )
+        run_repo.update_terminal.side_effect = [running_run, succeeded_run]
+
+        await service.execute(owner_id, run.id)
+
+        source_queue.record_attempt.assert_called_once()
+        call = source_queue.record_attempt.call_args
+        assert call.args[:2] == (owner_id, source.id)
+        assert call.args[2].postings == ()
+        assert call.kwargs["transport_error"] is True
+        assert call.kwargs["crawl_run_id"] == run.id
 
     @pytest.mark.asyncio
     async def test_rejects_non_pending_run(self) -> None:

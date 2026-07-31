@@ -95,6 +95,8 @@ def _row_to_version(row: Any) -> JobPostingVersion:
         structured_data=row["structured_data"] or {},
         changed_fields=tuple(row["changed_fields"]) if row["changed_fields"] else (),
         captured_at=row["captured_at"],
+        crawl_run_id=_uuid(row["crawl_run_id"]) if row.get("crawl_run_id") else None,
+        plan_version_id=_uuid(row["plan_version_id"]) if row.get("plan_version_id") else None,
         created_at=row["created_at"],
     )
 
@@ -539,15 +541,49 @@ class PostgresJobReadRepository:
         return _row_to_version(row) if row is not None else None
 
     def find_canonical_by_fingerprint(self, fingerprint: str) -> CanonicalJob | None:
-        """Match by ``normalized_title`` (the fingerprint used during ingestion)."""
+        """Match the deterministic company/title/location fingerprint.
+
+        ``normalized_title`` remains human-readable.  The location lives on
+        the latest posting version, so compute the fingerprint from canonical
+        source data instead of overloading the title column.
+        """
+        from careerops.application.job_ingestion import compute_fingerprint
+
         with self._engine.begin() as conn:
-            row = (
-                conn.execute(
-                    select(canonical_jobs).where(canonical_jobs.c.normalized_title == fingerprint)
+            rows = conn.execute(
+                select(
+                    canonical_jobs,
+                    companies.c.name.label("_company_name"),
+                    job_posting_versions.c.structured_data.label("_structured_data"),
                 )
-                .mappings()
-                .fetchone()
-            )
+                .join(companies, companies.c.id == canonical_jobs.c.company_id)
+                .join(
+                    job_posting_assignments,
+                    job_posting_assignments.c.canonical_job_id == canonical_jobs.c.id,
+                )
+                .join(
+                    job_posting_versions,
+                    job_posting_versions.c.job_posting_id
+                    == job_posting_assignments.c.job_posting_id,
+                )
+                .order_by(job_posting_versions.c.captured_at.desc())
+            ).mappings()
+            row = None
+            for candidate in rows:
+                raw_structured = candidate["_structured_data"]
+                structured = (
+                    cast("dict[str, object]", raw_structured)
+                    if isinstance(raw_structured, dict)
+                    else {}
+                )
+                candidate_fingerprint = compute_fingerprint(
+                    str(candidate["canonical_title"]),
+                    str(structured.get("location", "")),
+                    str(candidate["_company_name"]),
+                )
+                if candidate_fingerprint == fingerprint:
+                    row = candidate
+                    break
         if row is None:
             return None
         return _row_to_canonical(row)
@@ -634,6 +670,8 @@ class PostgresJobReadRepository:
                     structured_data=version.structured_data,
                     changed_fields=list(version.changed_fields),
                     captured_at=version.captured_at,
+                    crawl_run_id=version.crawl_run_id,
+                    plan_version_id=version.plan_version_id,
                 )
                 .on_conflict_do_nothing(
                     index_elements=[

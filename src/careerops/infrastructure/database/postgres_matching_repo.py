@@ -31,10 +31,12 @@ from careerops.domain.candidates import (
 from careerops.infrastructure.database.schema import (
     candidates,
     canonical_jobs,
+    companies,
     compensation_records,
     evidence_items,
     job_posting_assignments,
     job_posting_versions,
+    job_postings,
     match_results,
 )
 
@@ -405,6 +407,72 @@ class PostgresMatchingReadRepository:
 
     def get_candidate_evidence(self, candidate_id: UUID) -> list[EvidenceItem]:
         return self.find_by_candidate(candidate_id)
+
+    def get_job_projection_data(self, canonical_job_id: UUID) -> dict[str, Any] | None:
+        """Return the latest canonical job data required by inbox projection."""
+        with self._engine.begin() as conn:
+            row = (
+                conn.execute(
+                    sa.select(
+                        canonical_jobs.c.canonical_title,
+                        canonical_jobs.c.aggregate_state,
+                        companies.c.name.label("company_name"),
+                        job_posting_versions.c.structured_data,
+                    )
+                    .select_from(
+                        canonical_jobs.join(
+                            companies,
+                            companies.c.id == canonical_jobs.c.company_id,
+                        )
+                        .join(
+                            job_posting_assignments,
+                            canonical_jobs.c.id
+                            == job_posting_assignments.c.canonical_job_id,
+                        )
+                        .join(
+                            job_posting_versions,
+                            job_posting_assignments.c.job_posting_id
+                            == job_posting_versions.c.job_posting_id,
+                        )
+                    )
+                    .where(canonical_jobs.c.id == canonical_job_id)
+                    .order_by(job_posting_versions.c.captured_at.desc())
+                    .limit(1)
+                )
+                .mappings()
+                .first()
+            )
+            if row is None:
+                return None
+            source_states = set(
+                conn.execute(
+                    sa.select(job_postings.c.source_state)
+                    .join(
+                        job_posting_assignments,
+                        job_posting_assignments.c.job_posting_id == job_postings.c.id,
+                    )
+                    .where(
+                        job_posting_assignments.c.canonical_job_id == canonical_job_id
+                    )
+                ).scalars()
+            )
+
+        raw_structured = row["structured_data"]
+        structured = (
+            cast("dict[str, object]", raw_structured)
+            if isinstance(raw_structured, dict)
+            else {}
+        )
+        return {
+            "title": structured.get("title") or row["canonical_title"],
+            "location": structured.get("location", ""),
+            "text": structured.get("description_text")
+            or structured.get("description", ""),
+            "company_name": row["company_name"],
+            "aggregate_state": row["aggregate_state"],
+            "source_states": source_states,
+            "compensation": self.get_compensation(str(canonical_job_id)),
+        }
 
     # -- EvidenceRepository protocol (for EvidenceImportService) ------------
 

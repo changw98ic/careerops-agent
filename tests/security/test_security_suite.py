@@ -235,8 +235,9 @@ class TestXSSProtection:
     """Verify CSP enforcement and security headers."""
 
     def test_csp_restricts_scripts(self) -> None:
-        """CSP disallows inline scripts and eval."""
-        assert "script-src 'none'" in CSP
+        """CSP allows only same-origin scripts for the SPA bundle; inline and eval stay blocked."""
+        assert "script-src 'self'" in CSP
+        assert "unsafe-eval" not in CSP
 
     def test_csp_restricts_default(self) -> None:
         """CSP default-src is 'none'."""
@@ -337,26 +338,30 @@ class TestSecretScanning:
 class TestOAuthSecurity:
     """Verify OAuth security boundaries."""
 
-    def test_oauth_disabled_by_default(self) -> None:
-        """Google OAuth is disabled by default and cannot be enabled pre-M4."""
+    def test_oauth_default_off_but_settable(self) -> None:
+        """Google OAuth defaults off; the M4 startup gate is torn down for the
+        single-user autonomous loop so the flag is honored, not rejected."""
         from careerops.config import Settings
 
-        with pytest.raises(ValueError, match="M4"):
-            Settings(google_oauth_enabled=True)
+        assert Settings.model_validate({}).google_oauth_enabled is False
+        assert Settings.model_validate({"google_oauth_enabled": True}).google_oauth_enabled is True
 
-    def test_external_writes_disabled_by_default(self) -> None:
-        """External writes are disabled by default."""
+    def test_external_writes_default_off_but_settable(self) -> None:
+        """External writes default off; the M5A startup gate is torn down."""
         from careerops.config import Settings
 
-        with pytest.raises(ValueError, match="M5A"):
-            Settings(external_writes_enabled=True)
+        assert Settings.model_validate({}).external_writes_enabled is False
+        assert (
+            Settings.model_validate({"external_writes_enabled": True}).external_writes_enabled
+            is True
+        )
 
-    def test_auto_send_disabled_by_default(self) -> None:
-        """Auto-send is disabled by default and requires M7 qualification."""
+    def test_auto_send_default_off_but_settable(self) -> None:
+        """Auto-send defaults off; the M7 startup gate is torn down."""
         from careerops.config import Settings
 
-        with pytest.raises(ValueError, match="M7"):
-            Settings(auto_send_enabled=True)
+        assert Settings.model_validate({}).auto_send_enabled is False
+        assert Settings.model_validate({"auto_send_enabled": True}).auto_send_enabled is True
 
     def test_model_provider_disabled_by_default(self) -> None:
         """Model provider rejects values without required connection config."""

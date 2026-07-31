@@ -19,10 +19,9 @@ x-careerops-environment: &careerops-environment
   CAREEROPS_GOOGLE_OAUTH_ENABLED: "false"
   CAREEROPS_EXTERNAL_WRITES_ENABLED: "false"
   CAREEROPS_AUTO_SEND_ENABLED: "false"
-  CAREEROPS_CONSOLE_ALLOWED_HOSTS: '["127.0.0.1:${CAREEROPS_API_PORT:-8000}","localhost:${CAREEROPS_API_PORT:-8000}"]'
-  CAREEROPS_CONSOLE_ALLOWED_ORIGINS: '["http://127.0.0.1:${CAREEROPS_API_PORT:-8000}","http://localhost:${CAREEROPS_API_PORT:-8000}"]'
+  CAREEROPS_CONSOLE_ALLOWED_HOSTS: '["api:8000","127.0.0.1:${CAREEROPS_API_PORT:-8000}","localhost:${CAREEROPS_API_PORT:-8000}"]'
+  CAREEROPS_CONSOLE_ALLOWED_ORIGINS: '["http://127.0.0.1:${CAREEROPS_FRONTEND_PORT:-5173}","http://localhost:${CAREEROPS_FRONTEND_PORT:-5173}","http://127.0.0.1:${CAREEROPS_API_PORT:-8000}","http://localhost:${CAREEROPS_API_PORT:-8000}"]'
   CAREEROPS_CONSOLE_COOKIE_SECURE: "false"
-  CAREEROPS_SERVE_SPA: "true"
 
 x-app-service: &app-service
   build:
@@ -159,13 +158,37 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - >-
-          python -c "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=2)" &&
-          python -c "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/', timeout=2); assert b'id=\"app\"' in r.read(), 'Vue SPA not served'"
+        - python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=2)"
       interval: 10s
       timeout: 5s
       retries: 20
       start_period: 15s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    networks:
+      - backend
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      VITE_API_PROXY_TARGET: http://api:8000
+    ports:
+      - 127.0.0.1:${CAREEROPS_FRONTEND_PORT:-5173}:5173
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:5173/').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
 
   workflow-worker:
     <<: *app-service

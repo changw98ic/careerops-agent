@@ -17,16 +17,15 @@ parse-drift signals for the backoff policy (task 5.7).
 from __future__ import annotations
 
 import dataclasses
-import hashlib
 import json
 from collections.abc import Callable
 from datetime import UTC, datetime
 from json import JSONDecodeError, loads
-from typing import Any
-from uuid import UUID, uuid4
+from typing import Any, Protocol
+from urllib.parse import urlsplit, urlunsplit
+from uuid import UUID
 
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 
 from careerops.adapters.http_fetcher import FetchedResponse, fetch
@@ -40,7 +39,9 @@ from careerops.adapters.job_sources import (
     SitemapAdapter,
     StaticHtmlAdapter,
 )
-from careerops.infrastructure.database.schema import job_posting_versions, job_postings
+from careerops.application.job_ingestion import JobIngestionService
+from careerops.infrastructure.database.postgres_job_repo import PostgresJobReadRepository
+from careerops.infrastructure.database.schema import companies, job_sources
 from careerops.infrastructure.temporal.ego_browser_executor import EgoBrowserExecutor
 from careerops.workflows.m1_contracts import (
     CrawledPostingRecord,
@@ -48,6 +49,10 @@ from careerops.workflows.m1_contracts import (
 )
 
 FetcherFn = Callable[[str], FetchedResponse]
+
+
+class CrawlAgentProtocol(Protocol):
+    def crawl(self, source_url: str) -> list[RawJobRecord]: ...
 
 # Expected fields that every adapter should produce in structured_data.
 # If these are missing and zero jobs were found, it signals parse drift.
@@ -89,12 +94,6 @@ def _parse_body(body: str) -> object:
         except (JSONDecodeError, ValueError):
             return body
     return body
-
-
-def _content_hash(structured_data: dict[str, str]) -> str:
-    """Deterministic SHA-256 hex digest of the structured data payload."""
-    canonical = json.dumps(structured_data, sort_keys=True, ensure_ascii=True).encode("utf-8")
-    return hashlib.sha256(canonical).hexdigest()
 
 
 # Default provenance/parser_version when a raw record carries no explicit tag.
@@ -153,6 +152,9 @@ class CrawlCounters:
     discovered: int = 0
     updated: int = 0
     failed: int = 0
+    canonical_job_ids: set[UUID] = dataclasses.field(
+        default_factory=lambda: set[UUID]()
+    )
 
 
 async def ingest_crawled_records(
@@ -191,6 +193,11 @@ async def ingest_crawled_records(
             counters.discovered += 1
         elif result.get("is_new_version"):
             counters.updated += 1
+        canonical_job_id = result.get("canonical_job_id")
+        if canonical_job_id and (
+            result.get("is_new_posting") or result.get("is_new_version")
+        ):
+            counters.canonical_job_ids.add(UUID(str(canonical_job_id)))
     return counters
 
 
@@ -211,11 +218,13 @@ class RealCrawlActivitySink:
         fetcher: FetcherFn | None = None,
         engine: Engine | None = None,
         browser_executor: EgoBrowserExecutor | None = None,
-        agent: object | None = None,
+        agent: CrawlAgentProtocol | None = None,
+        public_ats_fetcher: FetcherFn | None = None,
     ) -> None:
         self._adapters = adapters or dict(_ADAPTER_REGISTRY)
         # Allow injecting a fake fetcher for tests.
         self._fetch: FetcherFn = fetcher or fetch
+        self._public_ats_fetch = public_ats_fetcher
         self._engine = engine
         self._browser = browser_executor
         # Tier 2 multi-step agent (CrawlAgent). When set, ego sources are
@@ -225,8 +234,22 @@ class RealCrawlActivitySink:
         # ``.crawl(url) -> list[RawJobRecord]``.
         self._agent = agent
 
+    @property
+    def tier2_agent(self) -> CrawlAgentProtocol | None:
+        """Return the canonical Tier 2 agent attached by the stack factory."""
+        return self._agent
+
+    def supports_source_type(self, source_type: str) -> bool:
+        """Return whether Tier 1 has a structured adapter for the source."""
+        return source_type in self._adapters
+
     def _fetch_for_request(self, request: CrawlJobSourceInput, url: str) -> FetchedResponse:
         if request.executor_mode == "http":
+            if (
+                request.source_type in {"greenhouse", "lever", "ashby"}
+                and self._public_ats_fetch is not None
+            ):
+                return self._public_ats_fetch(url)
             return self._fetch(url)
         if request.executor_mode == "ego":
             if self._browser is None:
@@ -245,12 +268,15 @@ class RealCrawlActivitySink:
         fetched_at = resp.fetched_at.isoformat()
         postings: list[CrawledPostingRecord] = []
 
-        # For Greenhouse: fetch detail endpoint for each job to get description (content).
-        # Greenhouse list API does not include the JD body.
+        # Greenhouse's list endpoint includes the JD body when called with
+        # ``content=true``.  Fetch details only for records where the body is
+        # actually absent.
         detail_cache: dict[str, str] = {}
         if request.source_type == "greenhouse":
             detail_cache = self._fetch_greenhouse_details(
-                request.base_url, result.jobs, executor_mode=request.executor_mode
+                request.base_url,
+                tuple(record for record in result.jobs if not record.description),
+                executor_mode=request.executor_mode,
             )
 
         for record in result.jobs:
@@ -320,11 +346,14 @@ class RealCrawlActivitySink:
         fetched_at = resp.fetched_at.isoformat()
         postings: list[CrawledPostingRecord] = []
 
-        # For Greenhouse: fetch detail endpoint for each job to get description.
+        # Avoid thousands of duplicate detail requests when ``content=true``
+        # already supplied the full description in the list response.
         detail_cache: dict[str, str] = {}
         if request.source_type == "greenhouse":
             detail_cache = self._fetch_greenhouse_details(
-                request.base_url, result.jobs, executor_mode=request.executor_mode
+                request.base_url,
+                tuple(record for record in result.jobs if not record.description),
+                executor_mode=request.executor_mode,
             )
 
         for record in result.jobs:
@@ -388,7 +417,9 @@ class RealCrawlActivitySink:
         downstream ``ingest_posting`` writes it to ``job_posting_versions``.
         """
         fetched_at = datetime.now(tz=UTC)
-        raw_records = self._agent.crawl(request.base_url)  # type: ignore[union-attr]
+        if self._agent is None:
+            return CrawlSourceResult(postings=())
+        raw_records = self._agent.crawl(request.base_url)
         postings = tuple(
             _to_crawled_posting(raw, request.source_id, request.base_url, fetched_at)
             for raw in raw_records
@@ -416,7 +447,12 @@ class RealCrawlActivitySink:
         detail_adapter = GreenhouseDetailAdapter()
         descriptions: dict[str, str] = {}
 
-        # Process in batches to stay within timeout
+        # Detail URLs must be built from the list endpoint path, not from its
+        # query string (``...?content=true/123`` is invalid).
+        parts = urlsplit(base_url)
+        list_endpoint = urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+
+        # Process in batches to stay within timeout.
         job_list = list(jobs)
         for i in range(0, len(job_list), batch_size):
             batch = job_list[i : i + batch_size]
@@ -424,7 +460,7 @@ class RealCrawlActivitySink:
                 ext_id = record.external_id
                 if not ext_id:
                     continue
-                detail_url = f"{base_url.rstrip('/')}/{ext_id}"
+                detail_url = f"{list_endpoint.rstrip('/')}/{ext_id}"
                 detail_description = ""
                 try:
                     detail_request = CrawlJobSourceInput(
@@ -455,104 +491,60 @@ class RealCrawlActivitySink:
         *,
         crawl_run_id: UUID | None = None,
         plan_version_id: UUID | None = None,
-    ) -> dict[str, bool]:
-        """Insert into job_postings + job_posting_versions with idempotent dedup.
+    ) -> dict[str, bool | str]:
+        """Ingest a posting into the complete canonical job projection.
 
         Dedup rules:
         - Posting: unique on (source_id, external_id).
         - Version: unique on (job_posting_id, content_hash).
+        - Canonical job: deterministic company/title/location fingerprint.
 
-        Returns ``is_new_posting`` / ``is_new_version`` flags matching the
-        workflow contract.
+        Returns the workflow flags plus the canonical job and version ids so
+        the crawl execution service can trigger matching and inbox projection.
 
         Section 5 provenance (tasks 5.1, 5.5, 5.6): when
         ``crawl_run_id`` / ``plan_version_id`` are supplied they are recorded
         on the version row so every ingested posting is traceable to the run
         and plan-version snapshot that produced it. Both are optional and
-        nullable so pre-Section-5 callers (Temporal M1 workflows) continue to
-        work unchanged. The idempotent ON CONFLICT DO NOTHING dedup logic is
-        NOT modified — provenance columns only appear in the VALUES clause.
+        nullable so non-run ingestion can still record a posting.
         """
         if self._engine is None:
             raise RuntimeError("ingest_posting requires an Engine")
 
         now = datetime.now(tz=UTC)
-        content_hash = _content_hash(record.structured_data)
         fetched_at = datetime.fromisoformat(record.fetched_at) if record.fetched_at else now
         source_id = UUID(record.source_id)
 
         with self._engine.begin() as conn:
-            # --- Upsert job_postings ---
-            insert_posting = (
-                pg_insert(job_postings)
-                .values(
-                    id=uuid4(),
-                    source_id=source_id,
-                    external_id=record.external_id,
-                    canonical_url=record.canonical_url,
-                    source_state="active",
-                    first_seen_at=fetched_at,
-                    last_seen_at=fetched_at,
+            source_row = conn.execute(
+                sa.select(
+                    job_sources.c.company_id,
+                    companies.c.name.label("company_name"),
                 )
-                .on_conflict_do_nothing(
-                    index_elements=[
-                        job_postings.c.source_id,
-                        job_postings.c.external_id,
-                    ],
-                )
-                .returning(job_postings.c.id)
-            )
-            row = conn.execute(insert_posting).first()
-            if row is not None:
-                is_new_posting = True
-                posting_id: UUID = row[0]
-            else:
-                is_new_posting = False
-                posting_id = conn.execute(
-                    sa.select(job_postings.c.id).where(
-                        job_postings.c.source_id == source_id,
-                        job_postings.c.external_id == record.external_id,
-                    )
-                ).scalar_one()
+                .join(companies, companies.c.id == job_sources.c.company_id)
+                .where(job_sources.c.id == source_id)
+            ).mappings().first()
+        if source_row is None:
+            raise RuntimeError(f"crawl source {source_id} has no company")
 
-            # --- Upsert job_posting_versions ---
-            # Provenance columns (crawl_run_id, plan_version_id) are added
-            # to the VALUES clause only when provided; they are nullable so
-            # existing callers that do not supply them continue to work.
-            version_values: dict[str, object] = {
-                "id": uuid4(),
-                "job_posting_id": posting_id,
-                "content_hash": content_hash,
-                "source_url": record.source_url,
-                "parser_version": record.parser_version,
-                "structured_data": record.structured_data,
-                "captured_at": fetched_at,
-            }
-            if crawl_run_id is not None:
-                version_values["crawl_run_id"] = crawl_run_id
-            if plan_version_id is not None:
-                version_values["plan_version_id"] = plan_version_id
-
-            insert_version = (
-                pg_insert(job_posting_versions)
-                .values(**version_values)
-                .on_conflict_do_nothing(
-                    index_elements=[
-                        job_posting_versions.c.job_posting_id,
-                        job_posting_versions.c.content_hash,
-                    ],
-                )
-                .returning(job_posting_versions.c.id)
-            )
-            version_row = conn.execute(insert_version).first()
-            is_new_version = version_row is not None
-
-            # Touch last_seen_at on every visit.
-            if not is_new_posting:
-                conn.execute(
-                    sa.update(job_postings)
-                    .where(job_postings.c.id == posting_id)
-                    .values(last_seen_at=fetched_at)
-                )
-
-        return {"is_new_posting": is_new_posting, "is_new_version": is_new_version}
+        service = JobIngestionService(PostgresJobReadRepository(self._engine))
+        result = service.ingest_posting(
+            source_id=source_id,
+            external_id=record.external_id,
+            canonical_url=record.canonical_url,
+            structured_data=dict(record.structured_data),
+            source_url=record.source_url,
+            parser_version=record.parser_version,
+            company_name=str(source_row["company_name"]),
+            company_id=UUID(str(source_row["company_id"])),
+            now=fetched_at,
+            crawl_run_id=crawl_run_id,
+            plan_version_id=plan_version_id,
+        )
+        return {
+            "is_new_posting": result.is_new_posting,
+            "is_new_version": result.is_new_version,
+            "canonical_job_id": str(result.canonical_job_id),
+            "posting_id": str(result.posting_id),
+            "version_id": str(result.version_id),
+        }

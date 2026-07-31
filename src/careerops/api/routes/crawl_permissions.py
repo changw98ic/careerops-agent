@@ -5,7 +5,7 @@ Every route resolves the candidate SERVER-SIDE via ``require_candidate_id``
 (Iron Rule 2) and pulls the ``CrawlPermissionService`` from ``app.state``.
 
 Endpoints:
-- GET    /api/v1/crawl-permissions                     -- list all permission requests (ownership-scoped)
+- GET    /api/v1/crawl-permissions                     -- list ownership-scoped requests
 - GET    /api/v1/crawl-permissions/{permission_id}     -- get one permission
 - GET    /api/v1/crawl-sources/{source_id}/permissions  -- list permissions for a source
 - POST   /api/v1/crawl-sources/{source_id}/permissions  -- request permission (pauses source)
@@ -17,7 +17,7 @@ Endpoints:
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -27,11 +27,14 @@ from careerops.api.auth_dependency import require_candidate_id
 from careerops.api.capability_dependency import require_repository
 from careerops.api.errors import InvalidStateError, NotFoundError
 from careerops.application.crawl_permission_service import CrawlPermissionService
+from careerops.application.crawl_plan_service import CrawlSourceService
+from careerops.domain.crawl_attempts import CrawlPermissionState
 
 router = APIRouter(
     prefix="/api/v1",
     tags=["crawl-permissions"],
 )
+_LOGIN_TOOLS: dict[str, object] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -53,10 +56,13 @@ class PermissionResponse(BaseModel):
     expires_at: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
+    session_ref: str | None = None
 
 
 class PermissionListResponse(BaseModel):
-    items: list[PermissionResponse] = Field(default_factory=list)
+    items: list[PermissionResponse] = Field(
+        default_factory=lambda: list[PermissionResponse]()
+    )
     total: int = 0
 
 
@@ -72,6 +78,12 @@ class DecisionRequest(BaseModel):
     """Body for grant / deny / revoke decisions."""
 
     reason: str = ""
+    session_ref: str = ""
+
+
+class LoginSessionResponse(BaseModel):
+    opened: bool
+    session_ref: str
 
 
 # ---------------------------------------------------------------------------
@@ -139,14 +151,49 @@ def grant_permission(
     permission_id: UUID,
     candidate_id: Annotated[UUID, Depends(require_candidate_id)],
     service: Annotated[CrawlPermissionService, Depends(_service)],
+    body: DecisionRequest | None = None,
 ) -> PermissionResponse:
     try:
-        perm = service.grant(candidate_id, permission_id)
+        session_ref = body.session_ref if body is not None else ""
+        perm = service.grant(candidate_id, permission_id, session_ref=session_ref)
     except ValueError as exc:
         raise InvalidStateError(str(exc)) from exc
     except Exception as exc:
         raise NotFoundError("crawl permission not found") from exc
     return _to_response(perm)
+
+
+@router.post(
+    "/crawl-permissions/{permission_id}/open-login",
+    response_model=LoginSessionResponse,
+)
+def open_login_session(
+    permission_id: UUID,
+    request: Request,
+    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    service: Annotated[CrawlPermissionService, Depends(_service)],
+) -> LoginSessionResponse:
+    """Open the approved source in its isolated persistent browser session."""
+    perm = service.get_permission(candidate_id, permission_id)
+    if perm.state is not CrawlPermissionState.GRANTED or not perm.session_ref:
+        raise InvalidStateError("grant permission before opening a login session")
+    source_service = cast(
+        "CrawlSourceService",
+        require_repository(request, "crawl_source_service"),
+    )
+    source = source_service.get_source(candidate_id, perm.source_id)
+
+    from careerops.infrastructure.playwright_tool import PlaywrightTool
+
+    existing = _LOGIN_TOOLS.get(perm.session_ref)
+    if existing is None:
+        try:
+            tool = PlaywrightTool(headless=False, session_ref=perm.session_ref)
+            tool.navigate(source.base_url, wait_s=1.0)
+        except Exception as exc:
+            raise InvalidStateError(f"cannot open login browser: {exc}") from exc
+        _LOGIN_TOOLS[perm.session_ref] = tool
+    return LoginSessionResponse(opened=True, session_ref=perm.session_ref)
 
 
 @router.post(
@@ -258,6 +305,7 @@ def _to_response(perm: object) -> PermissionResponse:
         expires_at=_iso(perm.expires_at),  # type: ignore[attr-defined]
         created_at=_iso(perm.created_at),  # type: ignore[attr-defined]
         updated_at=_iso(perm.updated_at),  # type: ignore[attr-defined]
+        session_ref=getattr(perm, "session_ref", None),
     )
 
 

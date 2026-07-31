@@ -316,6 +316,7 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
         "/api/v1/crawl-permissions/{permission_id}/grant",
         "/api/v1/crawl-permissions/{permission_id}/deny",
         "/api/v1/crawl-permissions/{permission_id}/revoke",
+        "/api/v1/crawl-permissions/{permission_id}/open-login",
         "/api/v1/crawl-sources/{source_id}/permissions",
         # Phase 9: notification routes (SSE stream + recovery).
         "/api/v1/notifications",

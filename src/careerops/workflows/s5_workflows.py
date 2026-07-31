@@ -45,7 +45,12 @@ from careerops.workflows.s5_contracts import (
 )
 
 # Activity timeouts.
-_EXECUTE_TIMEOUT = timedelta(minutes=10)
+# A single public ATS board can legitimately contain several thousand jobs.
+# In production the activity persists and projects every posting, so ten
+# minutes is not a safe upper bound for large boards (Anduril alone currently
+# exposes more than two thousand postings). Temporal keeps the activity
+# durable while the client/acceptance process may disconnect.
+_EXECUTE_TIMEOUT = timedelta(minutes=45)
 _CREATE_RUN_TIMEOUT = timedelta(seconds=30)
 
 # Retry policy for create_scheduled_run (transient DB errors).
@@ -115,7 +120,10 @@ class CrawlScheduledWorkflow:
         # Step 1: create (or reuse) a PENDING run.
         create_result: CreateScheduledRunResult = await workflow.execute_activity(
             CREATE_SCHEDULED_RUN_ACTIVITY,
-            CreateScheduledRunInput(owner_id=request.owner_id),
+            CreateScheduledRunInput(
+                owner_id=request.owner_id,
+                source_id=request.source_id,
+            ),
             result_type=CreateScheduledRunResult,
             start_to_close_timeout=_CREATE_RUN_TIMEOUT,
             retry_policy=_CREATE_RUN_RETRY,

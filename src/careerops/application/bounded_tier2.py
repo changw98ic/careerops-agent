@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -46,26 +47,24 @@ from typing import Protocol
 from uuid import UUID
 
 from careerops.adapters.job_sources import RawJobRecord
-from careerops.application.tier2_budget import Tier2Budget, Tier2Lease
+from careerops.application.crawl_agent import CrawlAgentRunResult
+from careerops.application.tier2_budget import Tier2Lease
 from careerops.domain.crawl import CrawlDecision
 from careerops.domain.crawl_attempts import (
     CrawlAttemptOutcome,
     CrawlPermissionRepository,
     CrawlPermissionState,
 )
-from careerops.infrastructure.temporal.m1_crawl_sink import (
-    CrawlSourceResult,
-    RealCrawlActivitySink,
-    _to_crawled_posting,
-)
+from careerops.infrastructure.temporal.m1_crawl_sink import RealCrawlActivitySink
 
 __all__ = [
     "BoundedTier2Orchestrator",
     "PermissionBasedSessionChecker",
+    "RepositoryPermissionChecker",
+    "Tier2RoutingDecision",
     "Tier2RunConfig",
     "Tier2RunResult",
     "Tier2StopReason",
-    "Tier2RoutingDecision",
 ]
 
 logger = logging.getLogger(__name__)
@@ -137,6 +136,7 @@ class Tier2RunResult:
     consecutive_empty_pages: int = 0
     duration_s: float = 0.0
     error: str = ""
+    canonical_job_ids: set[UUID] = field(default_factory=set)
 
 
 # ---------------------------------------------------------------------------
@@ -145,14 +145,9 @@ class Tier2RunResult:
 
 
 class SessionChecker(Protocol):
-    """Checks whether a source-scoped authenticated session is valid.
+    """Resolve a currently valid source-scoped authenticated session."""
 
-    Phase 6.6 will implement this against persisted session references.
-    Until then, the orchestrator uses a mock that always returns False
-    (fail-closed: no session = no authenticated crawl).
-    """
-
-    def is_session_valid(self, source_id: str) -> bool: ...
+    def get_session_ref(self, owner_id: UUID, source_id: str) -> str | None: ...
 
 
 class PermissionChecker(Protocol):
@@ -175,6 +170,30 @@ class CaptchaDetector(Protocol):
     def has_captcha_signal(self, body_prefix: str) -> bool: ...
 
 
+class Tier2BudgetCoordinator(Protocol):
+    def acquire(self, source_id: str) -> Tier2Lease | None: ...
+
+    def release(self, lease: Tier2Lease) -> None: ...
+
+    def consume(self, count: int = 1) -> int: ...
+
+    @property
+    def daily_remaining(self) -> int: ...
+
+
+class Tier2Agent(Protocol):
+    def crawl_bounded(
+        self,
+        source_url: str,
+        *,
+        max_actions: int,
+        max_duration_s: float,
+        max_consecutive_empty: int,
+        session_ref: str | None,
+        consume_action: Callable[[], bool] | None,
+    ) -> CrawlAgentRunResult: ...
+
+
 # ---------------------------------------------------------------------------
 # Default implementations
 # ---------------------------------------------------------------------------
@@ -186,41 +205,65 @@ class _MockSessionChecker:
     Phase 6.6 will replace this with a real session-reference check.
     """
 
-    def is_session_valid(self, source_id: str) -> bool:
-        return False
+    def get_session_ref(self, owner_id: UUID, source_id: str) -> str | None:
+        del owner_id, source_id
+        return None
 
 
 class PermissionBasedSessionChecker:
     """Checks session validity via the crawl permission grant state.
 
     A source's "session" is considered valid when it has a GRANTED permission
-    that has not expired.  This is the Phase 7.3 proxy for the full
-    Phase 6.6 session-reference check (which will additionally store and
-    validate an opaque session reference).
+    that has not expired AND carries an opaque session_ref (Phase 6.6).
+    The session_ref requirement ensures that authorization (permission grant)
+    is not conflated with authentication (a real logged-in session).
     """
 
     def __init__(
         self,
         permission_repo: CrawlPermissionRepository,
-        owner_id: UUID,
     ) -> None:
         self._repo = permission_repo
-        self._owner_id = owner_id
 
-    def is_session_valid(self, source_id: str) -> bool:
+    def get_session_ref(self, owner_id: UUID, source_id: str) -> str | None:
         from datetime import UTC, datetime
 
         try:
             source_uuid = UUID(source_id)
         except ValueError:
-            return False
-        perms = self._repo.list_for_source(self._owner_id, source_uuid, limit=10)
+            return None
+        perms = self._repo.list_for_source(owner_id, source_uuid, limit=10)
         now = datetime.now(tz=UTC)
         for p in perms:
-            if p.state is CrawlPermissionState.GRANTED:
-                if p.expires_at is None or p.expires_at > now:
-                    return True
-        return False
+            if (
+                p.state is CrawlPermissionState.GRANTED
+                and (p.expires_at is None or p.expires_at > now)
+                and p.session_ref == f"careerops-login-{source_uuid}"
+            ):
+                return p.session_ref
+        return None
+
+
+class RepositoryPermissionChecker:
+    """Checks granted, unexpired permission state in the durable repository."""
+
+    def __init__(self, permission_repo: CrawlPermissionRepository) -> None:
+        self._repo = permission_repo
+
+    def is_permission_granted(
+        self, owner_id: UUID, source_id: UUID
+    ) -> bool:
+        now = datetime.now(tz=UTC)
+        return any(
+            permission.state is CrawlPermissionState.GRANTED
+            and (
+                permission.expires_at is None
+                or permission.expires_at > now
+            )
+            for permission in self._repo.list_for_source(
+                owner_id, source_id, limit=10
+            )
+        )
 
 
 class _BodyPrefixCaptchaDetector:
@@ -281,13 +324,13 @@ class BoundedTier2Orchestrator:
     def __init__(
         self,
         sink: RealCrawlActivitySink,
-        budget: Tier2Budget,
+        budget: Tier2BudgetCoordinator,
         *,
         permission_checker: PermissionChecker | None = None,
         policy_evaluator: PolicyEvaluator | None = None,
         session_checker: SessionChecker | None = None,
         captcha_detector: CaptchaDetector | None = None,
-        agent: object | None = None,
+        agent: Tier2Agent | None = None,
         extractor: object | None = None,
         permission_repo: CrawlPermissionRepository | None = None,
         owner_id: UUID | None = None,
@@ -298,8 +341,8 @@ class BoundedTier2Orchestrator:
         self._policy = policy_evaluator
         if session_checker is not None:
             self._session = session_checker
-        elif permission_repo is not None and owner_id is not None:
-            self._session = PermissionBasedSessionChecker(permission_repo, owner_id)
+        elif permission_repo is not None:
+            self._session = PermissionBasedSessionChecker(permission_repo)
         else:
             self._session = _MockSessionChecker()
         self._captcha = captcha_detector or _BodyPrefixCaptchaDetector()
@@ -334,8 +377,7 @@ class BoundedTier2Orchestrator:
                 return Tier2RoutingDecision.DENY
             if not self._permission_checker.is_permission_granted(owner_id, source_id):
                 return Tier2RoutingDecision.DENY
-            if not self._session.is_session_valid(str(source_id)):
-                # 7.3: session absent or expired -> deny (6.6 not done yet)
+            if self._session.get_session_ref(owner_id, str(source_id)) is None:
                 return Tier2RoutingDecision.DENY
             return Tier2RoutingDecision.SKIP_AUTHENTICATED
 
@@ -367,6 +409,37 @@ class BoundedTier2Orchestrator:
                     error=f"policy decision: {decision.value}",
                 )
 
+        session_ref: str | None = None
+        if config.authenticated:
+            source_uuid = UUID(config.source_id)
+            if (
+                self._permission_checker is None
+                or not self._permission_checker.is_permission_granted(
+                    config.owner_id, source_uuid
+                )
+            ):
+                return Tier2RunResult(
+                    source_id=config.source_id,
+                    stop_reason=Tier2StopReason.PERMISSION_REVOKED,
+                    error="source-specific crawl permission is not granted",
+                )
+            session_ref = self._session.get_session_ref(
+                config.owner_id, config.source_id
+            )
+            if session_ref is None:
+                return Tier2RunResult(
+                    source_id=config.source_id,
+                    stop_reason=Tier2StopReason.SESSION_EXPIRED,
+                    error="source-scoped authenticated session is absent or expired",
+                )
+
+        if self._budget.daily_remaining <= 0:
+            return Tier2RunResult(
+                source_id=config.source_id,
+                stop_reason=Tier2StopReason.ACTION_LIMIT,
+                error="daily browser-action budget exhausted",
+            )
+
         # Pre-flight: acquire concurrent slot (7.1)
         lease = self._budget.acquire(config.source_id)
         if lease is None:
@@ -377,7 +450,7 @@ class BoundedTier2Orchestrator:
             )
 
         try:
-            return await self._execute(config, lease)
+            return await self._execute(config, lease, session_ref=session_ref)
         finally:
             self._budget.release(lease)
 
@@ -385,6 +458,8 @@ class BoundedTier2Orchestrator:
         self,
         config: Tier2RunConfig,
         lease: Tier2Lease,
+        *,
+        session_ref: str | None,
     ) -> Tier2RunResult:
         """Inner execution with limit enforcement."""
         start = time.monotonic()
@@ -395,59 +470,39 @@ class BoundedTier2Orchestrator:
         postings_updated = 0
         stop_reason = Tier2StopReason.NO_POSTINGS
         error = ""
-
-        # Consume initial action budget for the navigation.
-        nav_budget = self._budget.consume(1)
-        if nav_budget == 0:
-            return Tier2RunResult(
-                source_id=config.source_id,
-                stop_reason=Tier2StopReason.ACTION_LIMIT,
-                error="daily browser-action budget exhausted",
-            )
-        action_count += 1
-
-        # Check time limit.
-        elapsed = time.monotonic() - start
-        if elapsed >= config.max_duration_s:
-            return Tier2RunResult(
-                source_id=config.source_id,
-                stop_reason=Tier2StopReason.TIME_LIMIT,
-                action_count=action_count,
-                duration_s=elapsed,
-            )
+        canonical_job_ids: set[UUID] = set()
 
         # Run the browser agent.
         raw_records: list[RawJobRecord] = []
         try:
-            if self._agent is not None:
-                raw_records = self._agent.crawl(config.base_url)  # type: ignore[union-attr]
-                # Consume one budget unit per record found (capped at
-                # remaining per-source limit). This replaces the hardcoded
-                # estimate and scales with actual work done.
-                records_count = len(raw_records)
-                remaining_actions = config.max_actions - action_count
-                to_consume = max(1, min(records_count, remaining_actions))
-                action_count += to_consume
-                consumed = self._budget.consume(to_consume)
-                if consumed == 0 and not raw_records:
-                    return Tier2RunResult(
-                        source_id=config.source_id,
-                        stop_reason=Tier2StopReason.ACTION_LIMIT,
-                        action_count=action_count,
-                        duration_s=time.monotonic() - start,
-                        error="daily browser-action budget exhausted during crawl",
-                    )
-                # Track consecutive empty pages for 7.4 stop condition.
-                if records_count == 0:
-                    consecutive_empty += 1
-                else:
-                    consecutive_empty = 0
+            if self._agent is None:
+                raise RuntimeError("Tier 2 browser agent is not configured")
+            run_result = self._agent.crawl_bounded(
+                config.base_url,
+                max_actions=config.max_actions,
+                max_duration_s=config.max_duration_s,
+                max_consecutive_empty=config.max_consecutive_empty,
+                session_ref=session_ref,
+                consume_action=lambda: self._budget.consume(1) == 1,
+            )
+            raw_records = list(run_result.records)
+            action_count = run_result.action_count
+            consecutive_empty = run_result.consecutive_empty_pages
+            stop_reason = {
+                "action_limit": Tier2StopReason.ACTION_LIMIT,
+                "time_limit": Tier2StopReason.TIME_LIMIT,
+                "duplicate_stop": Tier2StopReason.DUPLICATE_STOP,
+                "session_expired": Tier2StopReason.SESSION_EXPIRED,
+            }.get(run_result.stop_reason, Tier2StopReason.NO_POSTINGS)
         except Exception as exc:
             error = str(exc)
             # Check if the error indicates CAPTCHA or account risk.
             if self._captcha.has_captcha_signal(error):
                 stop_reason = Tier2StopReason.CAPTCHA
-            elif isinstance(self._captcha, _BodyPrefixCaptchaDetector) and self._captcha.has_account_risk_signal(error):
+            elif (
+                isinstance(self._captcha, _BodyPrefixCaptchaDetector)
+                and self._captcha.has_account_risk_signal(error)
+            ):
                 stop_reason = Tier2StopReason.ACCOUNT_RISK
             else:
                 stop_reason = Tier2StopReason.NO_POSTINGS
@@ -461,22 +516,31 @@ class BoundedTier2Orchestrator:
 
         elapsed = time.monotonic() - start
 
-        # Check per-source limits after the crawl (7.4).
-        if action_count >= config.max_actions:
+        # Defensive post-checks complement the agent's per-operation checks.
+        if stop_reason is Tier2StopReason.ACTION_LIMIT or action_count >= config.max_actions:
             stop_reason = Tier2StopReason.ACTION_LIMIT
-        elif elapsed >= config.max_duration_s:
+        elif stop_reason is Tier2StopReason.TIME_LIMIT or elapsed >= config.max_duration_s:
             stop_reason = Tier2StopReason.TIME_LIMIT
-        elif consecutive_empty >= config.max_consecutive_empty:
+        elif (
+            stop_reason is Tier2StopReason.DUPLICATE_STOP
+            or consecutive_empty >= config.max_consecutive_empty
+        ):
             stop_reason = Tier2StopReason.DUPLICATE_STOP
 
         # Stop signal check: re-validate permission (7.5 — may have been
         # revoked mid-run).
         if self._permission_checker is not None and config.authenticated:
             if not self._permission_checker.is_permission_granted(
-                config.owner_id, UUID(config.source_id) if len(config.source_id) == 36 else UUID(int=0)
+                config.owner_id,
+                UUID(config.source_id) if len(config.source_id) == 36 else UUID(int=0),
             ):
                 stop_reason = Tier2StopReason.PERMISSION_REVOKED
                 error = "permission revoked during crawl"
+            elif self._session.get_session_ref(
+                config.owner_id, config.source_id
+            ) is None:
+                stop_reason = Tier2StopReason.SESSION_EXPIRED
+                error = "authenticated session expired during crawl"
 
         # Ingest valid records through the canonical path (7.7).
         # Skip ingest only if a hard stop signal was raised (7.5: CAPTCHA,
@@ -507,6 +571,7 @@ class BoundedTier2Orchestrator:
                 postings_found = counters.discovered + counters.updated
                 postings_new = counters.discovered
                 postings_updated = counters.updated
+                canonical_job_ids = counters.canonical_job_ids
                 if postings_found > 0:
                     stop_reason = Tier2StopReason.COMPLETED
             except Exception as exc:
@@ -523,6 +588,7 @@ class BoundedTier2Orchestrator:
             consecutive_empty_pages=consecutive_empty,
             duration_s=time.monotonic() - start,
             error=error,
+            canonical_job_ids=canonical_job_ids,
         )
 
     # ------------------------------------------------------------------

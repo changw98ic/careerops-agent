@@ -2902,6 +2902,8 @@ crawl_source_permissions = sa.Table(
     sa.Column("expired_at", sa.DateTime(timezone=True)),
     # Configured grant deadline (distinct from expired_at = when it lapsed).
     sa.Column("expires_at", sa.DateTime(timezone=True)),
+    # Opaque session reference for authenticated Tier 2 crawl (Phase 6.6).
+    sa.Column("session_ref", sa.Text(), nullable=True),
     sa.Column(
         "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     ),
@@ -4029,4 +4031,32 @@ tier2_budget_leases = sa.Table(
 sa.Index(
     "ix_tier2_budget_leases_source",
     tier2_budget_leases.c.source_id,
+)
+
+# Durable notification recovery outbox.
+notification_outbox = sa.Table(
+    "notification_outbox",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "candidate_id",
+        sa.Uuid(),
+        sa.ForeignKey(f"{DATABASE_SCHEMA}.candidates.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column("event_type", sa.String(64), nullable=False),
+    sa.Column(
+        "payload",
+        postgresql.JSONB(astext_type=sa.Text()),
+        server_default=sa.text("'{}'::jsonb"),
+        nullable=False,
+    ),
+    sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+    sa.Column("delivered_at", sa.DateTime(timezone=True)),
+)
+sa.Index(
+    "ix_notification_outbox_candidate_pending",
+    notification_outbox.c.candidate_id,
+    notification_outbox.c.created_at,
+    postgresql_where=notification_outbox.c.delivered_at.is_(None),
 )

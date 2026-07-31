@@ -35,6 +35,7 @@ from careerops.application.bounded_tier2 import (
     _BodyPrefixCaptchaDetector,
     _MockSessionChecker,
 )
+from careerops.application.crawl_agent import CrawlAgentRunResult
 from careerops.application.llm_job_extraction import (
     EXTRACTION_PROVENANCE,
     LLMJobExtractor,
@@ -145,12 +146,24 @@ class _FakeAgent:
         self._raise = raise_on_crawl
         self._captcha = captcha_error
 
-    def crawl(self, source_url: str) -> list[RawJobRecord]:
+    def crawl_bounded(
+        self,
+        source_url: str,
+        *,
+        consume_action: object = None,
+        **kwargs: object,
+    ) -> CrawlAgentRunResult:
+        del source_url, kwargs
         if self._raise:
             raise RuntimeError("network error")
         if self._captcha:
             raise RuntimeError("captcha detected on page")
-        return self._records
+        if callable(consume_action) and not consume_action():
+            return CrawlAgentRunResult(stop_reason="action_limit")
+        return CrawlAgentRunResult(
+            records=tuple(self._records),
+            action_count=1,
+        )
 
 
 class _FakeSink:
@@ -350,8 +363,11 @@ class TestTier2Routing:
 
     def test_auth_required_with_granted_and_valid_session_routes(self) -> None:
         class _ValidSession:
-            def is_session_valid(self, source_id: str) -> bool:
-                return True
+            def get_session_ref(
+                self, owner_id: UUID, source_id: str
+            ) -> str | None:
+                del owner_id, source_id
+                return f"careerops-login-{_SOURCE_ID}"
 
         orch = BoundedTier2Orchestrator(
             sink=_FakeSink(),
@@ -776,7 +792,7 @@ class TestCaptchaDetector:
 class TestMockSessionChecker:
     def test_always_returns_false(self) -> None:
         checker = _MockSessionChecker()
-        assert checker.is_session_valid("any-source") is False
+        assert checker.get_session_ref(_OWNER_ID, "any-source") is None
 
 
 # ===================================================================
@@ -812,3 +828,74 @@ class TestConcurrentBudgetIntegration:
         assert budget.consume(3) == 3  # source 2
         assert budget.consume(4) == 2  # source 3 gets partial
         assert budget.daily_remaining == 0
+
+
+# ===================================================================
+# 7.8: Concurrent acquire — threading safety
+# ===================================================================
+
+
+class TestConcurrentAcquire:
+    def test_threaded_acquire_respects_max_slots(self) -> None:
+        """Multiple threads acquiring slots must not exceed max_concurrent_slots.
+
+        Exercises the in-memory locking in Tier2Budget.acquire() under
+        concurrent access.  Each thread races through a barrier to maximize
+        the chance of a TOCTOU violation.
+        """
+        max_slots = 2
+        contenders = 4
+        budget = Tier2Budget(max_concurrent_slots=max_slots, daily_action_budget=999)
+        results: list[bool] = []
+        barrier = threading.Barrier(contenders)
+
+        def try_acquire(source_id: str) -> None:
+            barrier.wait()  # all threads start simultaneously
+            lease = budget.acquire(source_id)
+            results.append(lease is not None)
+            # Don't release — we want to verify the cap.
+
+        threads = [
+            threading.Thread(target=try_acquire, args=(f"src-{i}",))
+            for i in range(contenders)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5)
+
+        assert len(results) == contenders
+        assert sum(results) == max_slots, (
+            f"expected exactly {max_slots} acquisitions, got {sum(results)}"
+        )
+
+    def test_threaded_acquire_release_cycle(self) -> None:
+        """Acquire-release cycles under concurrency stay within bounds."""
+        max_slots = 3
+        budget = Tier2Budget(max_concurrent_slots=max_slots, daily_action_budget=999)
+        errors: list[str] = []
+        barrier = threading.Barrier(6)
+
+        def acquire_release(idx: int) -> None:
+            barrier.wait()
+            lease = budget.acquire(f"src-{idx}")
+            if lease is not None:
+                # Simulate some work.
+                budget.release(lease)
+            else:
+                # If we couldn't acquire, that's fine — slots were full.
+                pass
+
+        threads = [
+            threading.Thread(target=acquire_release, args=(i,))
+            for i in range(6)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5)
+
+        # After all releases, no slots should be held.
+        assert budget.active_slots == 0, (
+            f"expected 0 active slots after release, got {budget.active_slots}"
+        )

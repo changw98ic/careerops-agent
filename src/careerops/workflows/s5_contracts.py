@@ -62,6 +62,7 @@ class CreateScheduledRunInput:
     """
 
     owner_id: str
+    source_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +106,7 @@ class ScheduledCrawlWorkflowInput:
     """
 
     owner_id: str
+    source_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

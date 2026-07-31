@@ -1,14 +1,15 @@
 """Phase-0 contract freeze tests (OpenSpec change
 ``end-to-end-career-application-loop`` task 1.6).
 
-These tests prove the system stays default-deny under the default configuration
-(Iron Rule 1): Google OAuth, external writes, and auto-send remain disabled;
-the capability resolver releases crawl-plan management only, hard-denies
-auto-send regardless of flag state, and fails-closed on unknown capabilities;
-business error codes map to their intended HTTP statuses; and the application /
-crawl-run state transition tables accept legal moves and reject illegal ones.
-Preview, manual tracking, and deterministic matching remain usable because the
-crawl-plan management capability stays released by default.
+These tests pin the capability contract after the single-user autonomous-loop
+teardown (real-autonomous-career-loop): the external-effect flags
+(google_oauth / external_writes / auto_send) are now honored at startup and
+default OFF; the capability resolver denies GMAIL_READ / SYSTEM_MANAGED_SEND /
+AUTO_SEND when their flag is off and releases them when it is on; it still
+fails-closed on unknown capabilities. Business error codes map to their
+intended HTTP statuses; application / crawl-run transition tables accept legal
+moves and reject illegal ones. Preview, manual tracking, and deterministic
+matching remain usable because crawl-plan management stays released by default.
 
 These are pure contract tests — no database, no provider, no FastAPI app
 instance. They import only the typed enum / dataclass / exception contracts.
@@ -103,20 +104,19 @@ def test_default_settings_keep_preview_and_manual_paths_usable(
         "auto_send_enabled",
     ],
 )
-def test_settings_validator_rejects_prohibited_flag_enabled(flag: str) -> None:
-    """Enabling any prohibited flag at construction MUST raise — Phase 0 has
-    not opened the M4 / M5A / M7 gates and the validator fails-closed.
-
-    The other two prohibited flags are pinned False so the rejection is
-    provably caused by the target flag, not by a leaked env var."""
+def test_settings_validator_accepts_capability_flag_enabled(flag: str) -> None:
+    """The M4/M5A/M7 startup rejection is torn down for the single-user
+    autonomous loop: enabling any capability flag at construction is now
+    accepted (the flag flows to the resolver / kernel). Defaults stay off
+    (see test_default_settings_keep_prohibited_capabilities_off)."""
     base = {
         "google_oauth_enabled": False,
         "external_writes_enabled": False,
         "auto_send_enabled": False,
     }
     base[flag] = True
-    with pytest.raises(ValueError):
-        Settings.model_validate(base)
+    settings = Settings.model_validate(base)
+    assert getattr(settings, flag) is True
 
 
 # ---------------------------------------------------------------------------
@@ -144,31 +144,30 @@ def test_resolver_denies_system_managed_send_under_default_settings(
     assert decision.reason
 
 
-def test_resolver_permanently_denies_auto_send_under_default_settings(
+def test_resolver_denies_auto_send_under_default_settings(
     default_settings: Settings,
 ) -> None:
-    """Auto-send is permanently denied regardless of flag state — the human
-    confirmation gate is load-bearing (design Decision 11; Iron Rule 1)."""
+    """Auto-send is denied when its operator flag is off (default). The
+    permanent hard-deny was torn down for the single-user autonomous loop;
+    AUTO_SEND now follows the flag like the other capabilities."""
     decision = SettingsCapabilityResolver(default_settings).decide(CapabilityKind.AUTO_SEND)
     assert isinstance(decision, CapabilityDecision)
     assert decision.released is False
     assert decision.reason
 
 
-def test_resolver_denies_auto_send_even_when_flag_forced_on(
+def test_resolver_releases_auto_send_when_flag_on(
     default_settings: Settings,
 ) -> None:
-    """AUTO_SEND is denied UNCONDITIONALLY, not merely because the flag is
-    default-False. ``model_copy`` skips the Settings validator (which rejects
-    ``auto_send_enabled=True`` at construction), so this pins the structural
-    permanent-deny independently of the flag value and survives any regression
-    that makes AUTO_SEND flag-gated like SYSTEM_MANAGED_SEND
-    (design Decision 11; Iron Rule 1)."""
+    """AUTO_SEND follows the operator flag: released when on, denied when off.
+    The permanent hard-deny was torn down for the single-user autonomous loop
+    (real-autonomous-career-loop); autonomy is bounded downstream by the
+    autonomous-action policy, not by a permanent capability denial."""
     forced = default_settings.model_copy(update={"auto_send_enabled": True})
     assert forced.auto_send_enabled is True  # sanity: the flag really is on
     decision = SettingsCapabilityResolver(forced).decide(CapabilityKind.AUTO_SEND)
     assert isinstance(decision, CapabilityDecision)
-    assert decision.released is False
+    assert decision.released is True
     assert decision.reason
 
 

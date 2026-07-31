@@ -84,6 +84,9 @@ EXPECTED_TABLES = {
     "send_attempts",
     "send_receipts",
     "side_effect_attempts",
+    "tier2_budget_daily",
+    "tier2_budget_leases",
+    "notification_outbox",
 }
 
 EXPECTED_APPEND_ONLY = {

@@ -12,8 +12,11 @@ MagicMock cannot satisfy; full integration is tested separately).
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
+import time
 from datetime import UTC, datetime
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
@@ -22,6 +25,7 @@ from temporalio.testing import ActivityEnvironment
 
 from careerops.api.errors import InvalidStateError
 from careerops.infrastructure.temporal.s5_activities import (
+    CrawlExecutor,
     NoOpCrawlExecutor,
     NoOpScheduledRunCreator,
     S5CrawlExecutionActivities,
@@ -217,6 +221,33 @@ class TestExecuteCrawlRunActivity:
         call_args = executor.execute.call_args
         assert call_args[0][0] == UUID(_OWNER_ID)
         assert call_args[0][1] == UUID(_RUN_ID)
+
+    @pytest.mark.asyncio
+    async def test_blocking_executor_does_not_block_worker_event_loop(self) -> None:
+        """Synchronous DB work inside the executor must run off the worker loop."""
+
+        class _BlockingExecutor:
+            async def execute(self, _owner_id: UUID, _run_id: UUID) -> object:
+                time.sleep(0.15)
+                return _fake_run()
+
+        activities = S5CrawlExecutionActivities(
+            executor=cast("CrawlExecutor", _BlockingExecutor())
+        )
+        env = ActivityEnvironment()
+        started_at = time.perf_counter()
+        activity_task = asyncio.create_task(
+            env.run(
+                activities.execute_crawl_run,
+                CrawlRunExecuteInput(owner_id=_OWNER_ID, run_id=_RUN_ID),
+            )
+        )
+
+        await asyncio.sleep(0.02)
+        event_loop_delay = time.perf_counter() - started_at
+        await activity_task
+
+        assert event_loop_delay < 0.08
 
 
 # ---------------------------------------------------------------------------

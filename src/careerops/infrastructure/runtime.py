@@ -157,6 +157,7 @@ class RuntimeResources:
             PostgresContactRepository,
         )
         from careerops.infrastructure.database.postgres_crawl_repo import (
+            PostgresCrawlAttemptRepository,
             PostgresCrawlPermissionRepository,
             PostgresCrawlPlanRepository,
             PostgresCrawlRunRepository,
@@ -202,6 +203,16 @@ class RuntimeResources:
         self.crawl_plan_repo = PostgresCrawlPlanRepository(self.database)
         self.crawl_run_repo = PostgresCrawlRunRepository(self.database)
         self.crawl_permission_repo = PostgresCrawlPermissionRepository(self.database)
+        self.crawl_attempt_repo = PostgresCrawlAttemptRepository(self.database)
+        from careerops.infrastructure.database.agent_console_repo import (
+            AgentActionRepository,
+        )
+        from careerops.infrastructure.database.postgres_notification_repo import (
+            PostgresNotificationRepository,
+        )
+
+        self.agent_action_repo = AgentActionRepository(self.database)
+        self.notification_repo = PostgresNotificationRepository(self.database)
 
         from careerops.application.agent_runtime import AgentRuntime
         from careerops.application.agent_services import (
@@ -244,6 +255,27 @@ class RuntimeResources:
         )
 
         self.inbox_repo = PostgresInboxRepository(self.database)
+        from careerops.application.crawl_downstream import CrawlDownstreamService
+        from careerops.application.inbox_service import InboxProjectionService
+        from careerops.application.matching import MatchOrchestrator
+
+        self.match_orchestrator = MatchOrchestrator(
+            data_repository=self.matching_read_repo,
+            result_repository=self.matching_read_repo,
+        )
+        self.inbox_service = InboxProjectionService(
+            inbox_repo=self.inbox_repo,
+            profile_repo=self.profile_repo,
+            evidence_repo=self.evidence_repo,
+            job_data_repo=self.matching_read_repo,
+            capability_resolver=self.capability_resolver,
+            model_client=self.model_client,
+        )
+        self.crawl_downstream_service = CrawlDownstreamService(
+            self.match_orchestrator,
+            self.inbox_service,
+            self.matching_read_repo,
+        )
 
         # Section-12 mail-intelligence repos (tasks 12.5 / 12.3). Durable
         # EmailEventProposal store + minimized message reader. Same
@@ -280,22 +312,17 @@ class RuntimeResources:
         # execution service is what Temporal activities (task 5.4) or a direct
         # in-process call invokes to run a PENDING crawl run through to
         # terminal state.
-        from careerops.adapters.http_fetcher import fetch
+        from careerops.adapters.http_fetcher import fetch, fetch_public_ats
         from careerops.application.crawl_execution import CrawlExecutionService
         from careerops.infrastructure.temporal.crawl_stack import build_real_crawl_sink
 
         crawl_sink = build_real_crawl_sink(
             self.database,
             fetcher=fetch,
+            public_ats_fetcher=fetch_public_ats,
             model_client=self.model_client,
         )
-        self.crawl_execution_service = CrawlExecutionService(
-            run_repository=self.crawl_run_repo,
-            plan_repository=self.crawl_plan_repo,
-            source_repository=self.crawl_source_repo,
-            sink=crawl_sink,
-        )
-
+        self.crawl_sink = crawl_sink
         # Phase 7.1: Tier 2 budget coordinator (Postgres-backed, durable across
         # worker restarts).  Injected into BoundedTier2Orchestrator when the
         # remaining Tier 2 dependencies (session checker, eligibility checker)
@@ -306,6 +333,60 @@ class RuntimeResources:
         )
 
         self.tier2_budget: PostgresTier2Budget = PostgresTier2Budget(self.database)
+
+        # Phase 7: Bounded Tier 2 orchestrator — wires budget, permission
+        # checker, session checker, and policy into a single entry point
+        # for the crawl execution loop.
+        from careerops.application.bounded_tier2 import (
+            BoundedTier2Orchestrator,
+            RepositoryPermissionChecker,
+            Tier2Agent,
+        )
+        from careerops.application.crawl_permission_service import (
+            CrawlPermissionService,
+        )
+        from careerops.application.source_queue import SourceQueueService
+        from careerops.infrastructure.database.audit import PostgresAuditWriterEngine
+        from careerops.infrastructure.database.permission_attention import (
+            PostgresPermissionAttentionSink,
+            PostgresPermissionAuditSink,
+        )
+        self.crawl_permission_service = CrawlPermissionService(
+            self.crawl_permission_repo,
+            self.crawl_source_repo,
+            audit_sink=PostgresPermissionAuditSink(
+                PostgresAuditWriterEngine(self.database)
+            ),
+            attention_sink=PostgresPermissionAttentionSink(
+                self.agent_action_repo,
+                self.notification_repo,
+            ),
+        )
+        self.source_queue_service = SourceQueueService(
+            self.crawl_source_repo,
+            self.crawl_attempt_repo,
+        )
+
+        self.bounded_tier2 = BoundedTier2Orchestrator(
+            sink=crawl_sink,
+            budget=self.tier2_budget,
+            permission_checker=RepositoryPermissionChecker(
+                self.crawl_permission_repo
+            ),
+            permission_repo=self.crawl_permission_repo,
+            agent=cast("Tier2Agent", crawl_sink.tier2_agent),
+        )
+
+        self.crawl_execution_service = CrawlExecutionService(
+            run_repository=self.crawl_run_repo,
+            plan_repository=self.crawl_plan_repo,
+            source_repository=self.crawl_source_repo,
+            sink=crawl_sink,
+            source_queue=self.source_queue_service,
+            permission_service=self.crawl_permission_service,
+            tier2=self.bounded_tier2,
+            downstream_projector=self.crawl_downstream_service,
+        )
 
     async def check(self) -> ReadinessReport:
         if self._closed:
@@ -325,6 +406,10 @@ class RuntimeResources:
         if self._closed:
             return
         self._closed = True
+        tier2_agent = self.crawl_sink.tier2_agent
+        close_agent = getattr(tier2_agent, "close", None)
+        if callable(close_agent):
+            await asyncio.to_thread(close_agent)
         await self.redis.aclose(close_connection_pool=True)
         await asyncio.to_thread(self.redis_sync.close)
         await asyncio.to_thread(self.database.dispose)

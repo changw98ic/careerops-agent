@@ -62,13 +62,19 @@ def test_trigger_workflow_module_does_not_import_activities() -> None:
     for mod in list(sys.modules):
         if mod.startswith("careerops.workflows.loop_trigger_workflows"):
             del sys.modules[mod]
+    activities_name = "careerops.infrastructure.temporal.activities"
+    previously_loaded_activities = sys.modules.pop(activities_name, None)
 
-    import careerops.workflows.loop_trigger_workflows as ltw  # noqa: F401
+    try:
+        import careerops.workflows.loop_trigger_workflows as ltw  # noqa: F401
 
-    assert "careerops.infrastructure.temporal.activities" not in sys.modules, (
-        "loop_trigger_workflows pulled in the activities module -- this breaks "
-        "the Temporal workflow sandbox at execution time"
-    )
+        assert activities_name not in sys.modules, (
+            "loop_trigger_workflows pulled in the activities module -- this breaks "
+            "the Temporal workflow sandbox at execution time"
+        )
+    finally:
+        if previously_loaded_activities is not None:
+            sys.modules[activities_name] = previously_loaded_activities
 
 
 def test_build_worker_registers_trigger_workflows(monkeypatch) -> None:

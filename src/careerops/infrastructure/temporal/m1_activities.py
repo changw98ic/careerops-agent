@@ -31,7 +31,9 @@ class CrawlActivitySink(Protocol):
 
     async def crawl_source(self, request: CrawlJobSourceInput) -> list[CrawledPostingRecord]: ...
 
-    async def ingest_posting(self, record: CrawledPostingRecord) -> dict[str, bool]: ...
+    async def ingest_posting(
+        self, record: CrawledPostingRecord
+    ) -> dict[str, bool | str]: ...
 
 
 class PurgeActivitySink(Protocol):
@@ -53,7 +55,9 @@ class NoOpCrawlSink:
     async def crawl_source(self, request: CrawlJobSourceInput) -> list[CrawledPostingRecord]:
         return []
 
-    async def ingest_posting(self, record: CrawledPostingRecord) -> dict[str, bool]:
+    async def ingest_posting(
+        self, record: CrawledPostingRecord
+    ) -> dict[str, bool | str]:
         return {"is_new_posting": True, "is_new_version": True}
 
 
@@ -86,7 +90,9 @@ class M1CrawlActivities:
         return await self._sink.crawl_source(request)
 
     @activity.defn(name=INGEST_POSTING_ACTIVITY)
-    async def ingest_posting(self, record: CrawledPostingRecord) -> dict[str, bool]:
+    async def ingest_posting(
+        self, record: CrawledPostingRecord
+    ) -> dict[str, bool | str]:
         activity.logger.info("ingesting posting %s", record.external_id)
         return await self._sink.ingest_posting(record)
 

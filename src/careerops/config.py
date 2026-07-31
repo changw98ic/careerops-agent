@@ -58,6 +58,8 @@ class Settings(BaseSettings):
         "localhost:8000",
     )
     console_allowed_origins: tuple[str, ...] = (
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
         "http://127.0.0.1:8000",
         "http://localhost:8000",
     )
@@ -129,12 +131,13 @@ class Settings(BaseSettings):
                 raise ValueError(
                     f"model_provider='{self.model_provider}' requires: {', '.join(missing)}"
                 )
-        if self.google_oauth_enabled:
-            raise ValueError("Google OAuth is unavailable before the M4 integration gate")
-        if self.external_writes_enabled:
-            raise ValueError("external writes are unavailable before the M5A side-effect gate")
-        if self.auto_send_enabled:
-            raise ValueError("Auto-send is unavailable before M7 Release Qualification")
+        # The M4/M5A/M7 release gates are torn down for the single-user
+        # autonomous loop (real-autonomous-career-loop). google_oauth_enabled,
+        # external_writes_enabled and auto_send_enabled are now honored at
+        # startup and flow through to the capability resolver and the
+        # side-effect kernel. The autonomous-action policy bounds them
+        # downstream (reversible categories auto-act; irreversible commitments
+        # still blocked). No startup rejection here.
         return self
 
 

@@ -35,6 +35,7 @@ _KIND_TITLES: dict[ActionKind, str] = {
     ActionKind.JOB_MATCHING: "Review Job Matches",
     ActionKind.INTERVIEW_PREPARATION: "Prepare for Interview",
     ActionKind.SMART_FORM_INTAKE: "Complete Smart Form",
+    ActionKind.CRAWL_PERMISSION: "Authorize Job Source Login",
 }
 
 # Mapping from ActionKind to target route.
@@ -43,6 +44,7 @@ _KIND_ROUTES: dict[ActionKind, str] = {
     ActionKind.JOB_MATCHING: "/inbox",
     ActionKind.INTERVIEW_PREPARATION: "/agent-console",
     ActionKind.SMART_FORM_INTAKE: "/smart-intake",
+    ActionKind.CRAWL_PERMISSION: "/crawl-plans",
 }
 
 

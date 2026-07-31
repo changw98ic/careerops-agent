@@ -9,19 +9,23 @@ Proves no API / model / parser path can:
    :class:`SideEffectKernel` -> outbox -> provider chain, gated by policy +
    approval + capability release;
 3. bypass the default-deny capability layer — ``GMAIL_READ``,
-   ``SYSTEM_MANAGED_SEND``, and ``AUTO_SEND`` stay DENIED in the production
-   resolver, and the three prohibited runtime flags (``google_oauth_enabled``,
-   ``external_writes_enabled``, ``auto_send_enabled``) are rejected at
-   ``Settings`` construction.
+   ``SYSTEM_MANAGED_SEND``, and ``AUTO_SEND`` are DENIED when their operator
+   flag is off and released when it is on; the three runtime flags
+   (``google_oauth_enabled``, ``external_writes_enabled``, ``auto_send_enabled``)
+   are honored at ``Settings`` construction (the M4/M5A/M7 startup gates were
+   torn down for the single-user autonomous loop) and default OFF.
 
 Iron rules honored:
-- Default-deny (Iron Rule 7): the capability layer hard-denies the prohibited
-  capabilities regardless of flag state.
+- Default-deny (Iron Rule 7): the capability layer denies the external-effect
+  capabilities when their operator flag is off (the default). The permanent
+  hard-deny was torn down for the single-user autonomous loop; AUTO_SEND now
+  follows the flag.
 - Model review-only (Iron Rule 2): model output never reaches the provider call
   path (untrusted_claims are ignored; the provider target/payload come from
   trusted business state).
-- No external-write flag (Iron Rule 1/Phase-3): the fake provider is the ONLY
-  provider wired in this change.
+- Provider isolation: the fake provider is the only concrete provider wired
+  into the runtime in this change; real Gmail provider wiring is a separate
+  pending task.
 
 Run::
 
@@ -292,8 +296,9 @@ class TestNoDirectProviderWrite:
 
 
 class TestCapabilityDefaultDeny:
-    """The production resolver hard-denies GMAIL_READ, SYSTEM_MANAGED_SEND, and
-    AUTO_SEND regardless of flag state."""
+    """The production resolver denies GMAIL_READ, SYSTEM_MANAGED_SEND, and
+    AUTO_SEND when their operator flag is off (the default), and releases them
+    when the flag is on."""
 
     @pytest.fixture()
     def resolver(self) -> SettingsCapabilityResolver:
@@ -316,10 +321,10 @@ class TestCapabilityDefaultDeny:
         decision = resolver.decide(CapabilityKind.SYSTEM_MANAGED_SEND)
         assert decision.released is False
 
-    def test_auto_send_permanently_denied(self, resolver: SettingsCapabilityResolver) -> None:
+    def test_auto_send_denied_when_flag_off(self, resolver: SettingsCapabilityResolver) -> None:
         decision = resolver.decide(CapabilityKind.AUTO_SEND)
         assert decision.released is False
-        assert "permanently" in decision.reason or "denied" in decision.reason
+        assert decision.reason
 
     def test_model_tailoring_denied_by_default(self, resolver: SettingsCapabilityResolver) -> None:
         decision = resolver.decide(CapabilityKind.MODEL_TAILORING)
@@ -333,18 +338,19 @@ class TestCapabilityDefaultDeny:
             ("auto_send_enabled", CapabilityKind.AUTO_SEND),
         ],
     )
-    def test_prohibited_runtime_flags_rejected_at_settings_construction(
+    def test_capability_flag_releases_capability_when_on(
         self, flag: str, kind: CapabilityKind
     ) -> None:
-        # The three prohibited runtime flags cannot be enabled at all in this
-        # change — Settings construction raises.
-        with pytest.raises(ValueError):
-            Settings(
-                environment=RuntimeEnvironment.TEST,
-                database_url=SecretStr("postgresql+psycopg://u@127.0.0.1:5432/careerops"),
-                redis_url=SecretStr("redis://127.0.0.1:6379/0"),
-                **{flag: True},  # type: ignore[arg-type]
-            )
+        # The M4/M5A/M7 startup rejection is torn down: each flag is now settable
+        # at construction, and the resolver releases the matching capability.
+        settings = Settings(
+            environment=RuntimeEnvironment.TEST,
+            database_url=SecretStr("postgresql+psycopg://u@127.0.0.1:5432/careerops"),
+            redis_url=SecretStr("redis://127.0.0.1:6379/0"),
+            **{flag: True},  # type: ignore[arg-type]
+        )
+        decision = SettingsCapabilityResolver(settings).decide(kind)
+        assert decision.released is True
 
 
 # ---------------------------------------------------------------------------
@@ -374,14 +380,15 @@ class TestNoLiveProviderWired:
         assert hasattr(provider, "reconcile")
         assert provider.provider_name == "fake"
 
-    def test_settings_rejects_google_oauth_so_no_live_path_constructs(self) -> None:
-        # Because google_oauth_enabled is rejected at construction, no code
-        # path that gates on it can construct a live Gmail client in this
-        # change. We assert the gate exists and fails.
-        with pytest.raises(ValueError, match="Google OAuth"):
-            Settings(
-                environment=RuntimeEnvironment.TEST,
-                database_url=SecretStr("postgresql+psycopg://u@127.0.0.1:5432/careerops"),
-                redis_url=SecretStr("redis://127.0.0.1:6379/0"),
-                google_oauth_enabled=True,
-            )
+    def test_google_oauth_flag_is_settable(self) -> None:
+        # The M4 startup rejection is torn down for the single-user autonomous
+        # loop: google_oauth_enabled is honored at construction (it gates the
+        # read path downstream), not rejected. The fake provider remains the
+        # only concrete provider wired into the runtime in this change.
+        settings = Settings(
+            environment=RuntimeEnvironment.TEST,
+            database_url=SecretStr("postgresql+psycopg://u@127.0.0.1:5432/careerops"),
+            redis_url=SecretStr("redis://127.0.0.1:6379/0"),
+            google_oauth_enabled=True,
+        )
+        assert settings.google_oauth_enabled is True

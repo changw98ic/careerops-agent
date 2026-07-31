@@ -88,7 +88,7 @@ class TestLLMExtractionProvenance:
         client = _FakeModelClient(enabled=True, result={"jobs": _JOBS_PAYLOAD})
         extractor = LLMJobExtractor(client)
 
-        records = extractor.extract("<html>careers</html>", source_url=_SOURCE_URL)
+        records = extractor.extract("<html>Senior Engineer Platform Engineer careers</html>", source_url=_SOURCE_URL)
 
         assert len(records) == len(_JOBS_PAYLOAD)
         for raw, record in zip(_JOBS_PAYLOAD, records, strict=True):
@@ -111,7 +111,7 @@ class TestLLMExtractionProvenance:
         )
         extractor = LLMJobExtractor(client)
 
-        records = extractor.extract("<html>careers</html>", source_url=_SOURCE_URL)
+        records = extractor.extract("<html>Staff Engineer NYC careers</html>", source_url=_SOURCE_URL)
 
         assert len(records) == 1
         record = records[0]
@@ -153,7 +153,7 @@ class TestLLMExtractionProvenance:
         source_id = uuid4()
         now = datetime.now(tz=UTC)
 
-        records = extractor.extract("<html>careers</html>", source_url=_SOURCE_URL)
+        records = extractor.extract("<html>Senior Engineer Platform Engineer careers</html>", source_url=_SOURCE_URL)
         assert records  # sanity
 
         posting = _to_crawled_posting(records[0], source_id, _SOURCE_URL, now)

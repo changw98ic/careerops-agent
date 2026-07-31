@@ -32,6 +32,7 @@ def build_real_crawl_sink(
     engine: object,
     *,
     fetcher: _Fetcher,
+    public_ats_fetcher: _Fetcher | None = None,
     model_client: object | None = None,
     browser_executor: EgoBrowserExecutor | None = None,
     browser_tool: object | None = None,
@@ -41,6 +42,8 @@ def build_real_crawl_sink(
     Args:
         engine: SQLAlchemy engine used by ``ingest_posting``.
         fetcher: HTTP fetch callable (the structured Tier 1 path).
+        public_ats_fetcher: larger bounded-payload fetcher used only for
+            confirmed Greenhouse, Lever, and Ashby JSON adapters.
         model_client: structured model client. When present and enabled, a
             ``CrawlAgent`` + ``LLMJobExtractor`` are built and attached so the
             sink's ego branch can fall back to multi-step extraction. ``None``
@@ -48,7 +51,7 @@ def build_real_crawl_sink(
         browser_executor: optional single-shot ego executor (defaults to a new
             ``EgoBrowserExecutor``).
         browser_tool: optional multi-step browser tool for the agent (defaults
-            to a new ``EgoBrowserTool``). Tests inject a fake here.
+            to a new ``PlaywrightTool``). Tests inject a fake here.
 
     Returns:
         A ``RealCrawlActivitySink`` (with ``agent`` set when Tier 2 is wired).
@@ -62,14 +65,15 @@ def build_real_crawl_sink(
         # factory, or a structured-only deployment).
         from careerops.application.crawl_agent import CrawlAgent
         from careerops.application.llm_job_extraction import LLMJobExtractor
-        from careerops.infrastructure.ego_tool import EgoBrowserTool
+        from careerops.infrastructure.playwright_tool import PlaywrightTool
 
-        tool = browser_tool or EgoBrowserTool()
+        tool = browser_tool or PlaywrightTool()
         extractor = LLMJobExtractor(model_client)  # type: ignore[arg-type]
         agent = CrawlAgent(tool, extractor, model_client=model_client)  # type: ignore[arg-type]
 
     return RealCrawlActivitySink(
         fetcher=fetcher,
+        public_ats_fetcher=public_ats_fetcher,
         engine=engine,  # type: ignore[arg-type]
         browser_executor=ego,
         agent=agent,

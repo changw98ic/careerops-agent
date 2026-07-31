@@ -28,7 +28,7 @@ crawl → extract_contacts → resume → filter → dedup → match → draft �
 
 | 层 | 技术 | 状态 |
 |---|---|---|
-| Web/API | FastAPI + Jinja2 + HTMX | ✅ |
+| Web/API | FastAPI versioned API + separate Vue frontend proxy | ✅ |
 | 工作流编排 | Temporal（持久化后台任务） | ✅ 已通电（M1 workflows + RealCrawlActivitySink） |
 | Agent 编排 | LangGraph（状态图 + HITL） | ✅ 9 节点 StateGraph + review_gate interrupt |
 | 数据 | PostgreSQL（业务）+ Redis（缓存/限流） | ✅ |
@@ -196,7 +196,7 @@ make verify-db  : 34 passed, 0 failed, 4 skipped (env-dependent)
 | `src/careerops/infrastructure/temporal/__init__.py` | 导出 `LoggingInternalEventSink` |
 | `src/careerops/infrastructure/temporal/internal_event_sink.py` | **新增** — Logging-only InternalEventSink for outbox audit |
 | `src/careerops/infrastructure/memory_repos.py` | **新增** — InMemory{Matching,Job,Contact,Application}Repository for API routes |
-| `src/careerops/api/app.py` | 新增 Protocol adapter（_ResumeRepoAdapter 等）；RuntimeResources wiring for API routes；matching_ui_router 加 auth |
+| `src/careerops/api/app.py` | 新增 Protocol adapter（_ResumeRepoAdapter 等）；RuntimeResources wiring for API routes；前端与 API 分离并由 frontend 转发 `/api/*` |
 | `src/careerops/adapters/http_fetcher.py` | `198.18.0.0/15` SSRF 放行（本地 DNS proxy 常见） |
 | `src/careerops/integrations/gmail_sender.py` | 小改 |
 | `src/careerops/model_gateway/anthropic_compat.py` | 加 `nosec B310` 注释 |

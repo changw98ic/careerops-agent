@@ -126,6 +126,8 @@ class JobIngestionService:
         company_name: str,
         now: datetime,
         company_id: UUID | None = None,
+        crawl_run_id: UUID | None = None,
+        plan_version_id: UUID | None = None,
     ) -> IngestResult:
         # company_id defaults to source_id for backward compatibility, but
         # callers should pass the actual companies.id when available.
@@ -152,6 +154,8 @@ class JobIngestionService:
                 company_name=company_name,
                 fingerprint=fingerprint,
                 effective_company_id=effective_company_id,
+                crawl_run_id=crawl_run_id,
+                plan_version_id=plan_version_id,
             )
 
         return self._handle_new_posting(
@@ -167,6 +171,8 @@ class JobIngestionService:
             fingerprint=fingerprint,
             now=now,
             effective_company_id=effective_company_id,
+            crawl_run_id=crawl_run_id,
+            plan_version_id=plan_version_id,
         )
 
     def _handle_existing_posting(
@@ -183,6 +189,8 @@ class JobIngestionService:
         company_name: str,
         fingerprint: str,
         effective_company_id: UUID,
+        crawl_run_id: UUID | None,
+        plan_version_id: UUID | None,
     ) -> IngestResult:
         self._repository.update_posting_last_seen(posting.id, now)
 
@@ -219,6 +227,8 @@ class JobIngestionService:
             structured_data=structured_data,
             changed_fields=changed_fields,
             captured_at=now,
+            crawl_run_id=crawl_run_id,
+            plan_version_id=plan_version_id,
         )
         self._repository.save_version(version)
 
@@ -257,6 +267,8 @@ class JobIngestionService:
         fingerprint: str,
         now: datetime,
         effective_company_id: UUID,
+        crawl_run_id: UUID | None,
+        plan_version_id: UUID | None,
     ) -> IngestResult:
         posting_id = uuid4()
         posting = JobPosting(
@@ -280,6 +292,8 @@ class JobIngestionService:
             structured_data=structured_data,
             changed_fields=(),
             captured_at=now,
+            crawl_run_id=crawl_run_id,
+            plan_version_id=plan_version_id,
         )
         self._repository.save_version(version)
 
@@ -308,32 +322,17 @@ class JobIngestionService:
                 is_new_canonical=False,
             )
 
-        canonical_id = uuid4()
-        normalized = normalize_title(title)
-        canonical_job = CanonicalJob(
-            id=canonical_id,
-            company_id=effective_company_id,
-            canonical_title=title,
-            normalized_title=normalized,
-            aggregate_state=AggregateState.ACTIVE,
-            primary_posting_id=posting_id,
-        )
-        self._repository.save_canonical_job(canonical_job)
-
-        decision_id = uuid4()
-        decision = JobMergeDecision(
-            id=decision_id,
-            job_posting_id=posting_id,
-            to_canonical_job_id=canonical_id,
-            decision_kind=MergeDecisionKind.MERGE,
+        canonical_id = self._create_canonical_for_posting(
+            posting_id,
+            title,
+            location,
+            "",
+            fingerprint,
+            effective_company_id,
+            now,
             rule="new_canonical",
             reason="First posting for this fingerprint",
-            score=1.0,
-            actor_type=ActorType.RULE,
-            algorithm_version="dedup-v1",
         )
-        self._repository.save_merge_decision(decision)
-        self._repository.save_posting_assignment(posting_id, canonical_id, decision_id)
 
         return IngestResult(
             posting_id=posting_id,
@@ -353,6 +352,9 @@ class JobIngestionService:
         fingerprint: str,
         company_id: UUID,
         now: datetime,
+        *,
+        rule: str = "fingerprint_exact",
+        reason: str | None = None,
     ) -> UUID:
         """Create a canonical job for a posting that has no assignment yet.
 
@@ -390,8 +392,8 @@ class JobIngestionService:
             job_posting_id=posting_id,
             to_canonical_job_id=canonical_id,
             decision_kind=MergeDecisionKind.MERGE,
-            rule="fingerprint_exact",
-            reason=f"Fingerprint match: {fingerprint[:16]}",
+            rule=rule,
+            reason=reason or f"Fingerprint match: {fingerprint[:16]}",
             score=1.0,
             actor_type=ActorType.RULE,
             algorithm_version="dedup-v1",

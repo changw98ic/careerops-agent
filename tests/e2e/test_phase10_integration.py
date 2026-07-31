@@ -242,19 +242,16 @@ class TestInboundMailAutonomousReplyE2E:
             created_by="ab_reviewer",
             target={"to": context.recipient},
             payload={"subject": result.subject, "body": result.body},
-            evidence_refs=(),
+            evidence_refs=("inbound-mail:interview-invitation",),
             trusted_facts={
                 "capability_released": True,
                 "target_allowlisted": True,
                 "ab_approved": True,
                 "ab_rounds": result.rounds,
+                "auto_send_approved": True,
             },
         )
         prop_result = kernel.propose(proposal, now=now)
-        approval = kernel.request_approval(
-            prop_result.intent.id, requested_for="agent", now=now
-        )
-        kernel.approve(approval.id, now=now)
         exec_outcome = kernel.execute(prop_result.intent.id, now=now)
 
         assert exec_outcome.status is IntentStatus.CONFIRMED

@@ -97,6 +97,7 @@ class ActionKind(StrEnum):
     JOB_MATCHING = "job_matching"
     INTERVIEW_PREPARATION = "interview_preparation"
     SMART_FORM_INTAKE = "smart_form_intake"
+    CRAWL_PERMISSION = "crawl_permission"
 
 
 class ModelOperation(StrEnum):
@@ -130,6 +131,7 @@ class SourceRefType(StrEnum):
     RESUME = "resume"
     PROFILE = "profile"
     EVIDENCE = "evidence"
+    CRAWL_SOURCE = "crawl_source"
 
 
 class DismissReasonCode(StrEnum):

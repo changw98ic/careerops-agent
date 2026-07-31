@@ -91,6 +91,25 @@ class PermissionAuditSink(Protocol):
     def record(self, event: PermissionAuditEvent) -> None: ...
 
 
+@runtime_checkable
+class PermissionAttentionSink(Protocol):
+    """Persist and resolve user attention created by a permission request."""
+
+    def pending(
+        self,
+        permission: CrawlSourcePermission,
+        *,
+        source_name: str,
+    ) -> None: ...
+
+    def resolved(
+        self,
+        permission: CrawlSourcePermission,
+        *,
+        decision: PermissionDecision,
+    ) -> None: ...
+
+
 class ListPermissionAuditSink:
     """In-memory audit sink for test assertions."""
 
@@ -135,11 +154,13 @@ class CrawlPermissionService:
         source_repository: CrawlSourceRepository,
         *,
         audit_sink: PermissionAuditSink | None = None,
+        attention_sink: PermissionAttentionSink | None = None,
         grant_ttl: timedelta = _DEFAULT_GRANT_TTL,
     ) -> None:
         self._permissions = permission_repository
         self._sources = source_repository
         self._audit = audit_sink or LoggingPermissionAuditSink()
+        self._attention = attention_sink
         self._grant_ttl = grant_ttl
 
     # -- Request ---------------------------------------------------------------
@@ -191,6 +212,9 @@ class CrawlPermissionService:
             terms.setdefault("login_evidence", login_evidence)
         terms.setdefault("purpose", "read-only job listing extraction")
         terms.setdefault("frequency", "periodic (configurable per source)")
+        terms.setdefault("max_browser_actions", 30)
+        terms.setdefault("max_duration_seconds", 300)
+        terms.setdefault("max_consecutive_empty_pages", 3)
 
         permission = CrawlSourcePermission(
             id=uuid4(),
@@ -218,6 +242,8 @@ class CrawlPermissionService:
                 occurred_at=ts,
             )
         )
+        if self._attention is not None:
+            self._attention.pending(saved, source_name=source.source_identifier)
         return saved
 
     # -- Decisions -------------------------------------------------------------
@@ -227,6 +253,7 @@ class CrawlPermissionService:
         owner_id: UUID,
         permission_id: UUID,
         *,
+        session_ref: str = "",
         now: datetime | None = None,
     ) -> CrawlSourcePermission:
         """Grant a pending permission request.
@@ -234,10 +261,18 @@ class CrawlPermissionService:
         Transitions PENDING -> GRANTED, sets ``expires_at`` to the configured
         grant TTL, and re-enables + un-pauses the source so Tier 2 can use
         the authenticated session (Phase 7).
+
+        Args:
+            session_ref: opaque reference to the authenticated session
+                (Phase 6.6). Stored on the permission row so the
+                SessionChecker can validate it later.
         """
         ts = now or datetime.now(tz=UTC)
         current = self._permissions.get_by_id(owner_id, permission_id)
         _assert_transition(current.state, CrawlPermissionState.GRANTED)
+        expected_session_ref = f"careerops-login-{current.source_id}"
+        if session_ref and session_ref != expected_session_ref:
+            raise ValueError("session reference does not match the approved source")
 
         updated = self._permissions.transition(
             owner_id, permission_id, to=CrawlPermissionState.GRANTED, now=ts
@@ -259,6 +294,7 @@ class CrawlPermissionService:
             expires_at=expires_at,
             created_at=updated.created_at,
             updated_at=updated.updated_at,
+            session_ref=expected_session_ref,
         )
         updated = self._permissions.save(owner_id, updated)
 
@@ -288,6 +324,8 @@ class CrawlPermissionService:
                 occurred_at=ts,
             )
         )
+        if self._attention is not None:
+            self._attention.resolved(updated, decision=PermissionDecision.GRANTED)
         return updated
 
     def deny(
@@ -322,6 +360,8 @@ class CrawlPermissionService:
                 occurred_at=ts,
             )
         )
+        if self._attention is not None:
+            self._attention.resolved(updated, decision=PermissionDecision.DENIED)
         return updated
 
     def revoke(
@@ -371,6 +411,8 @@ class CrawlPermissionService:
                 occurred_at=ts,
             )
         )
+        if self._attention is not None:
+            self._attention.resolved(updated, decision=PermissionDecision.REVOKED)
         return updated
 
     def expire(
@@ -419,6 +461,8 @@ class CrawlPermissionService:
                 occurred_at=ts,
             )
         )
+        if self._attention is not None:
+            self._attention.resolved(updated, decision=PermissionDecision.EXPIRED)
         return updated
 
     # -- Queries ---------------------------------------------------------------

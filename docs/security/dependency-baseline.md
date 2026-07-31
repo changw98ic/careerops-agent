@@ -18,7 +18,6 @@
 | Temporalio | 1.30.0 | MIT | Deterministic workflow/Activity boundary plus replay and worker-restart verification |
 | Redis | 6.4.0 | MIT | Readiness, bounded shared coordination, and cross-process authentication throttling; never the business state authority |
 | Argon2-cffi | 25.1.0 | MIT | Argon2id password hashing for the single-user console |
-| Jinja2 | 3.1.6 | BSD classifier | Server-rendered, autoescaped console templates; no untrusted template source is loaded |
 | Python Multipart | 0.0.32 | Apache-2.0 | Bounded console form parsing; the M0 API does not accept file uploads |
 | Uvicorn | 0.51.0 | BSD-3-Clause | Loopback ASGI server without optional native extras |
 | Bandit | 1.9.4 | Apache-2.0 | Development-only Python security linting |

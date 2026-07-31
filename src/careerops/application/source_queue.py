@@ -216,3 +216,37 @@ class SourceQueueService:
         )
 
         return self._attempts.record(owner_id, attempt)
+
+    def record_tier2_attempt(
+        self,
+        owner_id: UUID,
+        source_id: UUID,
+        *,
+        outcome: CrawlAttemptOutcome,
+        action_count: int,
+        crawl_run_id: UUID | None,
+        evidence_summary: dict[str, object],
+        now: datetime | None = None,
+    ) -> CrawlSourceAttempt:
+        """Persist the measured terminal outcome of one Tier 2 run."""
+        ts = now or datetime.now(tz=UTC)
+        next_eligible_at: datetime | None = None
+        if outcome not in TERMINAL_STOP_OUTCOMES:
+            next_eligible_at = ts + _DEFAULT_COOLDOWN.get(
+                outcome, timedelta(hours=1)
+            )
+        attempt = CrawlSourceAttempt(
+            id=uuid4(),
+            source_id=source_id,
+            owner_id=owner_id,
+            attempt_no=self._attempts.next_attempt_no(owner_id, source_id),
+            outcome=outcome,
+            crawl_run_id=crawl_run_id,
+            executor_mode=CrawlExecutorMode.EGO,
+            action_count=action_count,
+            evidence_summary=evidence_summary,
+            started_at=ts,
+            finished_at=ts,
+            next_eligible_at=next_eligible_at,
+        )
+        return self._attempts.record(owner_id, attempt)

@@ -42,6 +42,7 @@ import dataclasses
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from typing import Protocol
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -53,14 +54,24 @@ from careerops.application.backoff_policy import (
     BackoffState,
     SourceFetchOutcome,
 )
+from careerops.application.bounded_tier2 import (
+    BoundedTier2Orchestrator,
+    Tier2RoutingDecision,
+    Tier2RunConfig,
+)
+from careerops.application.crawl_permission_service import CrawlPermissionService
 from careerops.application.crawl_policy import evaluate_crawl_policy
+from careerops.application.outcome_classifier import ClassificationInput, classify_outcome
+from careerops.application.source_queue import SourceQueueService
 from careerops.domain.crawl import (
     CrawlDecision,
     CrawlPolicyDecision,
     CrawlPolicyInput,
     CrawlRunState,
 )
+from careerops.domain.crawl_attempts import CrawlAttemptOutcome
 from careerops.domain.crawl_plans import (
+    CrawlExecutorMode,
     CrawlPlanRepository,
     CrawlRun,
     CrawlRunCounters,
@@ -68,7 +79,10 @@ from careerops.domain.crawl_plans import (
     CrawlSourceRepository,
     CrawlSourceState,
 )
-from careerops.infrastructure.temporal.m1_crawl_sink import RealCrawlActivitySink
+from careerops.infrastructure.temporal.m1_crawl_sink import (
+    CrawlSourceResult,
+    RealCrawlActivitySink,
+)
 from careerops.workflows.m1_contracts import CrawlJobSourceInput
 
 logger = logging.getLogger(__name__)
@@ -79,8 +93,20 @@ __all__ = ["CrawlExecutionService"]
 # work. These bounds keep an accidentally incomplete plan from turning into an
 # unbounded network or ingest operation.
 DEFAULT_MAX_POSTINGS_PER_SOURCE = 500
-DEFAULT_MAX_SOURCES = 50
+DEFAULT_MAX_SOURCES = 200
 DEFAULT_TIMEOUT_SECONDS = 600
+
+
+class CrawlDownstreamProjector(Protocol):
+    """Persist matching and inbox projections for changed canonical jobs."""
+
+    def project(
+        self,
+        candidate_id: UUID,
+        canonical_job_ids: set[UUID],
+        *,
+        now: datetime,
+    ) -> int: ...
 
 
 def _extract_domain(url: str) -> str:
@@ -114,6 +140,10 @@ class CrawlExecutionService:
         *,
         policy_fn: Callable[[CrawlPolicyInput], CrawlPolicyDecision] | None = None,
         backoff_policy: BackoffPolicy | None = None,
+        source_queue: SourceQueueService | None = None,
+        permission_service: CrawlPermissionService | None = None,
+        tier2: BoundedTier2Orchestrator | None = None,
+        downstream_projector: CrawlDownstreamProjector | None = None,
     ) -> None:
         self._runs = run_repository
         self._plans = plan_repository
@@ -121,6 +151,10 @@ class CrawlExecutionService:
         self._sink = sink
         self._policy_fn = policy_fn or evaluate_crawl_policy
         self._backoff = backoff_policy or BackoffPolicy()
+        self._source_queue = source_queue
+        self._permission_service = permission_service
+        self._tier2 = tier2
+        self._downstream = downstream_projector
 
     async def execute(
         self,
@@ -191,6 +225,7 @@ class CrawlExecutionService:
         timed_out = False
         # Per-domain backoff state for this run.
         domain_backoff: dict[str, BackoffState] = {}
+        changed_canonical_job_ids: set[UUID] = set()
 
         try:
             # Step 3: iterate the run's immutable source snapshot. The
@@ -293,7 +328,9 @@ class CrawlExecutionService:
                     company_name="",  # not needed for fetch
                     source_type=source.source_type.value,
                     base_url=source.base_url,
-                    executor_mode=source.executor_mode.value,
+                    # Tier 1 is always an unauthenticated public probe. Tier 2
+                    # is entered only after the recorded outcome is eligible.
+                    executor_mode=CrawlExecutorMode.HTTP.value,
                 )
                 try:
                     remaining = (deadline - datetime.now(tz=UTC)).total_seconds()
@@ -302,11 +339,37 @@ class CrawlExecutionService:
                     async with asyncio.timeout(remaining):
                         result = await self._sink.crawl_source_with_signals(crawl_input)
                 except TimeoutError:
+                    if self._source_queue is not None:
+                        self._source_queue.record_attempt(
+                            owner_id,
+                            source_id,
+                            CrawlSourceResult(postings=(), status_code=0),
+                            policy_decision=policy_result.decision,
+                            has_adapter=self._sink.supports_source_type(
+                                source.source_type.value
+                            ),
+                            timed_out=True,
+                            crawl_run_id=run.id,
+                            now=started_at,
+                        )
                     timed_out = True
                     error_category = "run_timeout"
                     break
                 except Exception:
                     logger.exception("crawl_source failed for source %s", source_id)
+                    if self._source_queue is not None:
+                        self._source_queue.record_attempt(
+                            owner_id,
+                            source_id,
+                            CrawlSourceResult(postings=(), status_code=0),
+                            policy_decision=policy_result.decision,
+                            has_adapter=self._sink.supports_source_type(
+                                source.source_type.value
+                            ),
+                            transport_error=True,
+                            crawl_run_id=run.id,
+                            now=started_at,
+                        )
                     counters = dataclasses.replace(counters, failed=counters.failed + 1)
                     if not error_category:
                         error_category = "source_fetch_error"
@@ -318,6 +381,136 @@ class CrawlExecutionService:
                     )
                     domain_backoff[domain] = backoff_state
                     continue
+
+                # A configured ego source whose public structured probe
+                # produced no postings is dynamic evidence, not VERIFIED_EMPTY.
+                if (
+                    source.executor_mode is CrawlExecutorMode.EGO
+                    and not result.postings
+                    and result.status_code == 200
+                    and not result.expected_fields_missing
+                ):
+                    result = CrawlSourceResult(
+                        postings=result.postings,
+                        status_code=result.status_code,
+                        body_prefix=result.body_prefix,
+                        expected_fields_missing=("dynamic_rendering_required",),
+                    )
+
+                # Record the Tier 1 outcome before any Tier 2 escalation.
+                tier1_outcome = classify_outcome(
+                    ClassificationInput(
+                        result=result,
+                        policy_decision=policy_result.decision,
+                        has_adapter=self._sink.supports_source_type(
+                            source.source_type.value
+                        ),
+                    )
+                )
+                if self._source_queue is not None:
+                    self._source_queue.record_attempt(
+                        owner_id,
+                        source_id,
+                        result,
+                        policy_decision=policy_result.decision,
+                        has_adapter=self._sink.supports_source_type(
+                            source.source_type.value
+                        ),
+                        crawl_run_id=run.id,
+                        now=started_at,
+                    )
+
+                if tier1_outcome in (
+                    CrawlAttemptOutcome.AUTH_REQUIRED,
+                    CrawlAttemptOutcome.DYNAMIC_OR_UNSUPPORTED,
+                ):
+                    routing = (
+                        self._tier2.should_enter_tier2(
+                            owner_id,
+                            source_id,
+                            tier1_outcome=tier1_outcome,
+                        )
+                        if self._tier2 is not None
+                        else Tier2RoutingDecision.DENY
+                    )
+
+                    if (
+                        tier1_outcome is CrawlAttemptOutcome.AUTH_REQUIRED
+                        and routing is Tier2RoutingDecision.DENY
+                        and self._permission_service is not None
+                    ):
+                        self._permission_service.request_permission(
+                            owner_id,
+                            source_id,
+                            login_evidence=result.body_prefix[:1000],
+                            domain_scope=domain,
+                            disclosed_terms={
+                                "purpose": "read-only job discovery",
+                                "frequency": f"every {plan_version.interval_seconds} seconds",
+                                "max_browser_actions": 30,
+                                "max_duration_seconds": 300,
+                                "max_consecutive_empty_pages": 3,
+                            },
+                            now=started_at,
+                        )
+                        counters = dataclasses.replace(
+                            counters, failed=counters.failed + 1
+                        )
+                        continue
+
+                    if routing is not Tier2RoutingDecision.DENY and self._tier2 is not None:
+                        tier2_result = await self._tier2.run_source(
+                            Tier2RunConfig(
+                                source_id=str(source_id),
+                                base_url=source.base_url,
+                                owner_id=owner_id,
+                                crawl_run_id=run.id,
+                                plan_version_id=plan_version.id,
+                                authenticated=(
+                                    routing
+                                    is Tier2RoutingDecision.SKIP_AUTHENTICATED
+                                ),
+                            )
+                        )
+                        counters = dataclasses.replace(
+                            counters,
+                            discovered=(
+                                counters.discovered + tier2_result.postings_new
+                            ),
+                            updated=(
+                                counters.updated + tier2_result.postings_updated
+                            ),
+                            failed=(
+                                counters.failed
+                                + (1 if tier2_result.error else 0)
+                            ),
+                        )
+                        changed_canonical_job_ids.update(
+                            tier2_result.canonical_job_ids
+                        )
+                        if self._source_queue is not None:
+                            self._source_queue.record_tier2_attempt(
+                                owner_id,
+                                source_id,
+                                outcome=self._tier2.outcome_for_stop_reason(
+                                    tier2_result.stop_reason,
+                                    tier2_result.postings_found,
+                                ),
+                                action_count=tier2_result.action_count,
+                                crawl_run_id=run.id,
+                                evidence_summary={
+                                    "stop_reason": tier2_result.stop_reason.value,
+                                    "duration_seconds": tier2_result.duration_s,
+                                    "consecutive_empty_pages": (
+                                        tier2_result.consecutive_empty_pages
+                                    ),
+                                    "authenticated": (
+                                        routing
+                                        is Tier2RoutingDecision.SKIP_AUTHENTICATED
+                                    ),
+                                },
+                            )
+                        continue
 
                 # Evaluate backoff/stop signals from the fetch outcome.
                 fetch_outcome = SourceFetchOutcome(
@@ -405,6 +598,12 @@ class CrawlExecutionService:
                         counters = dataclasses.replace(counters, discovered=counters.discovered + 1)
                     elif ingest_result.get("is_new_version"):
                         counters = dataclasses.replace(counters, updated=counters.updated + 1)
+                    canonical_job_id = ingest_result.get("canonical_job_id")
+                    if canonical_job_id and (
+                        ingest_result.get("is_new_posting")
+                        or ingest_result.get("is_new_version")
+                    ):
+                        changed_canonical_job_ids.add(UUID(str(canonical_job_id)))
 
                 if timed_out:
                     break
@@ -413,6 +612,16 @@ class CrawlExecutionService:
             # counters and bounded category; a budget exhaustion is distinct
             # from a source failure so callers can offer a safe retry action.
             ended_at = datetime.now(tz=UTC)
+            if (
+                not timed_out
+                and changed_canonical_job_ids
+                and self._downstream is not None
+            ):
+                self._downstream.project(
+                    owner_id,
+                    changed_canonical_job_ids,
+                    now=ended_at,
+                )
             run = self._runs.update_terminal(
                 owner_id,
                 run_id,

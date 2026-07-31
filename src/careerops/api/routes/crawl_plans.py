@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated, Any, cast
 from uuid import UUID
 
@@ -372,7 +372,8 @@ def get_plan_version(
 
 
 @router.post("/versions", status_code=201)
-def create_plan_version(
+async def create_plan_version(
+    request: Request,
     body: CrawlPlanWriteRequest,
     candidate_id: Annotated[UUID, Depends(require_candidate_id)],
     service: Annotated[CrawlPlanService, Depends(_plan_service)],
@@ -387,11 +388,16 @@ def create_plan_version(
     _validate_interval_bounds(body.interval_seconds)
     preferences = _to_preferences(body)
     version = service.create_version(candidate_id, preferences, activate=body.activate)
+    if body.activate:
+        await _reconcile_crawl_schedules(
+            request, candidate_id, version, paused=False
+        )
     return _to_response(version)
 
 
 @router.post("/versions/{version_id}/activate")
-def activate_plan_version(
+async def activate_plan_version(
+    request: Request,
     version_id: UUID,
     candidate_id: Annotated[UUID, Depends(require_candidate_id)],
     service: Annotated[CrawlPlanService, Depends(_plan_service)],
@@ -399,28 +405,41 @@ def activate_plan_version(
     """Activate an existing version (deactivates the prior active one). The
     schedule is re-validated against current bounds so a version created under
     an older rules-version cannot become active with an invalid schedule."""
-    return _to_response(service.activate_version(candidate_id, version_id))
+    version = service.activate_version(candidate_id, version_id)
+    await _reconcile_crawl_schedules(
+        request, candidate_id, version, paused=False
+    )
+    return _to_response(version)
 
 
 @router.post("/pause")
-def pause_plan(
+async def pause_plan(
+    request: Request,
     candidate_id: Annotated[UUID, Depends(require_candidate_id)],
     service: Annotated[CrawlPlanService, Depends(_plan_service)],
 ) -> CrawlPlanHeadResponse:
     """Idempotent: deactivate the active version so the scheduler fires no new
     runs. Prior versions / postings / evidence / run history are preserved."""
-    service.pause(candidate_id)
+    version = service.pause(candidate_id)
+    if version is not None:
+        await _reconcile_crawl_schedules(
+            request, candidate_id, version, paused=True
+        )
     return _head_response(candidate_id, service)
 
 
 @router.post("/resume")
-def resume_plan(
+async def resume_plan(
+    request: Request,
     candidate_id: Annotated[UUID, Depends(require_candidate_id)],
     service: Annotated[CrawlPlanService, Depends(_plan_service)],
 ) -> CrawlPlanHeadResponse:
     """Idempotent: re-activate the latest version. Raises ``INVALID_STATE`` if
     there is no version to resume or the schedule has become invalid."""
-    service.resume(candidate_id)
+    version = service.resume(candidate_id)
+    await _reconcile_crawl_schedules(
+        request, candidate_id, version, paused=False
+    )
     return _head_response(candidate_id, service)
 
 
@@ -763,6 +782,63 @@ async def _start_run_workflow(request: Request, owner_id: UUID, run_id: UUID) ->
             "crawl workflow enqueue unavailable for run %s: %s",
             run_id,
             type(exc).__name__,
+        )
+
+
+async def _reconcile_crawl_schedules(
+    request: Request,
+    owner_id: UUID,
+    version: object,
+    *,
+    paused: bool,
+) -> None:
+    """Create/update the real per-source Temporal schedules for a plan."""
+    probe = getattr(request.app.state, "readiness_probe", None)
+    get_client = getattr(probe, "get_temporal_client", None)
+    if not callable(get_client):
+        return
+    runtime = cast("Any", probe)
+
+    if not paused:
+        from careerops.application.crawl_readiness import check_crawl_readiness
+
+        budget = runtime.tier2_budget
+        readiness = check_crawl_readiness(
+            runtime.database,
+            budget_max_concurrent_slots=budget.max_concurrent_slots,
+            budget_daily_action_budget=budget.daily_action_budget,
+            permission_repository=runtime.crawl_permission_repo,
+        )
+        if not readiness.ready:
+            raise InvalidStateError(
+                "crawl schedules are not ready: " + "; ".join(readiness.failures)
+            )
+
+    from careerops.application.crawl_activation import TemporalScheduleActivator
+    from careerops.infrastructure.temporal.schedule_manager import ScheduleManager
+
+    client = await cast("Callable[[], Awaitable[Any]]", get_client)()
+    activator = TemporalScheduleActivator(
+        ScheduleManager(client),
+        task_queue=request.app.state.settings.temporal_task_queue,
+    )
+    source_ids = tuple(getattr(version, "sources", ()))
+    plan_interval = max(1, int(getattr(version, "interval_seconds", 3600)))
+    for source_id in source_ids:
+        source = runtime.crawl_source_repo.get_by_id(owner_id, source_id)
+        configured = source.last_run_metadata.get("interval_seconds")
+        interval_seconds = (
+            int(configured)
+            if isinstance(configured, int) and configured > 0
+            else plan_interval
+        )
+        if source.executor_mode.value == "ego":
+            interval_seconds = max(interval_seconds, 2 * 60 * 60)
+        await activator.activate_source_schedule(
+            source_id,
+            timedelta(seconds=interval_seconds),
+            paused=paused,
+            owner_id=owner_id,
         )
 
 

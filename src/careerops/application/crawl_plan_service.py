@@ -630,14 +630,22 @@ class CrawlRunService:
         self._plans.get_by_id(owner_id, plan_version_id)
         return self._runs.list_for_plan(owner_id, plan_version_id, limit=limit)
 
-    def find_non_terminal_run(self, owner_id: UUID, plan_version_id: UUID) -> CrawlRun | None:
+    def find_non_terminal_run(
+        self,
+        owner_id: UUID,
+        plan_version_id: UUID,
+        *,
+        source_set: tuple[UUID, ...] | None = None,
+    ) -> CrawlRun | None:
         """Return the most recent PENDING/RUNNING run for the plan version, or
         ``None``. This is the overlap detector (task 4.6): the scheduler asks
         this before firing; a non-``None`` answer means the trigger MUST
         coalesce/skip rather than start a second crawl."""
         runs = self._runs.list_for_plan(owner_id, plan_version_id, limit=50)
         for run in runs:
-            if _is_non_terminal(run.state):
+            if _is_non_terminal(run.state) and (
+                source_set is None or run.source_set == source_set
+            ):
                 return run
         return None
 
@@ -647,6 +655,7 @@ class CrawlRunService:
         self,
         owner_id: UUID,
         *,
+        source_ids: tuple[UUID, ...] | None = None,
         now: datetime | None = None,
     ) -> CrawlRun:
         """Create (or return the existing) PENDING run for the active plan.
@@ -671,14 +680,25 @@ class CrawlRunService:
             )
         # Overlap/idempotency: a PENDING/RUNNING run for THIS plan version is
         # the existing in-flight attempt — return it (task 4.5 idempotency).
-        existing = self.find_non_terminal_run(owner_id, active.id)
-        if existing is not None:
-            return existing
         source_set = self._resolve_eligible_sources(owner_id, active.sources)
+        if source_ids is not None:
+            requested = set(source_ids)
+            source_set = tuple(
+                source_id
+                for source_id in source_set
+                if source_id in requested
+            )
         if not source_set:
             raise InvalidStateError(
                 "crawl plan has no eligible sources; enable at least one active source"
             )
+        existing = self.find_non_terminal_run(
+            owner_id,
+            active.id,
+            source_set=source_set,
+        )
+        if existing is not None:
+            return existing
         run_identity = self._mint_identity(active.id, source_set, owner_id)
         run = CrawlRun(
             id=uuid4(),

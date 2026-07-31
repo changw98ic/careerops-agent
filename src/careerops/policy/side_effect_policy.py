@@ -91,6 +91,15 @@ class SideEffectPolicyDecider:
         if not policy_input.evidence_refs:
             return SideEffectPolicyDecision(SideEffectPolicyOutcome.DENY, ("EVIDENCE_REQUIRED",))
 
+        # Auto-send bypass: when the caller asserts the trusted fact
+        # ``auto_send_approved`` (set by the send path only after the four-layer
+        # gate + category rules pass), the human approval gate is skipped
+        # (real-autonomous-career-loop). Default-deny for unknown actions and
+        # the capability/target/evidence checks above are unchanged; only the
+        # final "require human approval" step is bypassed for auto-approved sends.
+        if bool(policy_input.trusted_facts.get("auto_send_approved", False)):
+            return SideEffectPolicyDecision(SideEffectPolicyOutcome.ALLOW, ("AUTO_SEND_APPROVED",))
+
         return SideEffectPolicyDecision(
             SideEffectPolicyOutcome.REQUIRE_APPROVAL,
             ("EXTERNAL_WRITE_REQUIRES_APPROVAL",),

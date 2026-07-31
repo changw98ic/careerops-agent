@@ -29,7 +29,7 @@ CareerOps 是一个**安全优先、人工监督**的单用户求职运营助理
 
 | 层 | 技术 | 职责 | 状态 |
 |----|------|------|------|
-| Web/API | FastAPI + Jinja2 + HTMX | 服务端渲染控制台、REST API | ✅ 已落地 |
+| Web/API | FastAPI versioned API + Vue frontend proxy | REST API、独立前端和同源 `/api/*` 转发 | ✅ 已落地 |
 | 工作流编排 | Temporal | 当前唯一在跑的编排引擎；持久化、可恢复的后台工作流 | ✅ 已落地 |
 | Agent 编排 | LangGraph | 多 Agent 状态图编排、human-in-the-loop 审核门 | 🎯 目标（未引入，见 §8 / §9） |
 | 数据 | PostgreSQL（业务真源）+ Redis（缓存/限流/租约） | 状态持久化 | ✅ 已落地 |

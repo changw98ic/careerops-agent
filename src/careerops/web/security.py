@@ -9,7 +9,7 @@ from starlette.responses import Response
 
 CSP = (
     "default-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; "
-    "object-src 'none'; script-src 'none'; style-src 'self'; img-src 'self'; "
+    "object-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; "
     "connect-src 'self'"
 )
 

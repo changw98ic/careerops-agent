@@ -14,10 +14,12 @@ Tables (migration 0033):
 
 from __future__ import annotations
 
-import time
 from datetime import UTC, date, datetime
+from threading import RLock
+from uuid import uuid4
 
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 
 from careerops.application.tier2_budget import Tier2Lease
@@ -27,6 +29,9 @@ from careerops.infrastructure.database.schema import (
 )
 
 __all__ = ["PostgresTier2Budget"]
+
+_SLOT_LOCK_KEY = 0x434F5053  # "COPS"; shared by every worker/database session.
+_fallback_lock = RLock()
 
 
 class PostgresTier2Budget:
@@ -55,6 +60,14 @@ class PostgresTier2Budget:
         self._daily_budget = daily_action_budget
         self._stale_timeout = stale_lease_timeout_s
 
+    def _lock_slots(self, conn: sa.Connection) -> None:
+        """Serialize slot-count changes across PostgreSQL worker processes."""
+        if conn.dialect.name == "postgresql":
+            conn.execute(
+                sa.text("SELECT pg_advisory_xact_lock(:lock_key)"),
+                {"lock_key": _SLOT_LOCK_KEY},
+            )
+
     # ------------------------------------------------------------------
     # Slot management
     # ------------------------------------------------------------------
@@ -66,17 +79,17 @@ class PostgresTier2Budget:
         are occupied.  Atomic via ``SELECT ... FOR UPDATE`` on the leases table.
         """
         now = datetime.now(tz=UTC)
-        lease_id = f"t2-{source_id}-{int(time.monotonic() * 1000)}"
+        lease_id = f"t2-{uuid4()}"
 
-        with self._engine.begin() as conn:
-            # Ensure daily counter row exists and reset if new day.
+        with _fallback_lock, self._engine.begin() as conn:
+            self._lock_slots(conn)
             self._ensure_daily_row(conn, now)
 
-            # Count active leases under FOR UPDATE to prevent races.
+            # The transaction-scoped advisory lock serializes this count+insert
+            # across every worker, including when the table is initially empty.
             active = conn.execute(
                 sa.select(sa.func.count())
                 .select_from(tier2_budget_leases)
-                .with_for_update()
             ).scalar() or 0
 
             if active >= self._max_slots:
@@ -98,7 +111,8 @@ class PostgresTier2Budget:
 
     def release(self, lease: Tier2Lease) -> None:
         """Release a previously acquired slot.  Idempotent."""
-        with self._engine.begin() as conn:
+        with _fallback_lock, self._engine.begin() as conn:
+            self._lock_slots(conn)
             conn.execute(
                 tier2_budget_leases.delete().where(
                     tier2_budget_leases.c.lease_id == lease.lease_id
@@ -107,10 +121,19 @@ class PostgresTier2Budget:
 
     @property
     def active_slots(self) -> int:
-        with self._engine.begin() as conn:
+        with _fallback_lock, self._engine.begin() as conn:
+            self._lock_slots(conn)
             return conn.execute(
                 sa.select(sa.func.count()).select_from(tier2_budget_leases)
             ).scalar() or 0
+
+    @property
+    def max_concurrent_slots(self) -> int:
+        return self._max_slots
+
+    @property
+    def daily_action_budget(self) -> int:
+        return self._daily_budget
 
     @property
     def available_slots(self) -> int:
@@ -226,11 +249,18 @@ class PostgresTier2Budget:
     def _ensure_daily_row(self, conn: sa.Connection, now: datetime) -> None:
         """Ensure today's daily counter row exists. Reset if stale."""
         today = now.date()
+        if conn.dialect.name == "postgresql":
+            conn.execute(
+                pg_insert(tier2_budget_daily)
+                .values(day=today, consumed=0)
+                .on_conflict_do_nothing(
+                    index_elements=[tier2_budget_daily.c.day]
+                )
+            )
+            return
         row = conn.execute(
             sa.select(tier2_budget_daily.c.day)
             .where(tier2_budget_daily.c.day == today)
         ).first()
         if row is None:
-            conn.execute(
-                tier2_budget_daily.insert().values(day=today, consumed=0)
-            )
+            conn.execute(tier2_budget_daily.insert().values(day=today, consumed=0))

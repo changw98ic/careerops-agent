@@ -23,6 +23,7 @@ or mock sinks.  The concrete ``CrawlExecutionService`` and
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Protocol
@@ -44,6 +45,16 @@ from careerops.workflows.s5_contracts import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _execute_crawl_in_fresh_event_loop(
+    executor: CrawlExecutor,
+    owner_id: UUID,
+    run_id: UUID,
+) -> CrawlRun:
+    """Keep blocking database work out of Temporal's worker event loop."""
+
+    return asyncio.run(executor.execute(owner_id, run_id))
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +81,7 @@ class ScheduledRunCreator(Protocol):
         self,
         owner_id: UUID,
         *,
+        source_ids: tuple[UUID, ...] | None = None,
         now: datetime | None = None,
     ) -> CrawlRun: ...
 
@@ -104,9 +116,11 @@ class NoOpScheduledRunCreator:
         self,
         owner_id: UUID,
         *,
+        source_ids: tuple[UUID, ...] | None = None,
         now: datetime | None = None,
     ) -> CrawlRun:
         from uuid import uuid4
+        del source_ids
 
         return CrawlRun(
             id=uuid4(),
@@ -137,9 +151,10 @@ class _UnavailableScheduledRunCreator:
         self,
         owner_id: UUID,
         *,
+        source_ids: tuple[UUID, ...] | None = None,
         now: datetime | None = None,
     ) -> CrawlRun:
-        del owner_id, now
+        del owner_id, source_ids, now
         raise RuntimeError("scheduled run creator is not wired")
 
 
@@ -188,7 +203,12 @@ class S5CrawlExecutionActivities:
         activity.logger.info("executing crawl run %s for owner %s", run_id, owner_id)
 
         try:
-            run = await self._executor.execute(owner_id, run_id)
+            run = await asyncio.to_thread(
+                _execute_crawl_in_fresh_event_loop,
+                self._executor,
+                owner_id,
+                run_id,
+            )
         except InvalidStateError as exc:
             # Non-retryable: run is not PENDING (already RUNNING/terminal).
             activity.logger.warning("crawl run %s not executable: %s", run_id, exc)
@@ -245,7 +265,16 @@ class S5CrawlExecutionActivities:
         activity.logger.info("creating scheduled run for owner %s", owner_id)
 
         try:
-            run = self._run_creator.run_now(owner_id)
+            source_ids = (
+                (UUID(request.source_id),)
+                if request.source_id is not None
+                else None
+            )
+            run = await asyncio.to_thread(
+                self._run_creator.run_now,
+                owner_id,
+                source_ids=source_ids,
+            )
         except InvalidStateError as exc:
             # Plan paused, no eligible sources, etc. — skip, don't retry.
             activity.logger.info("scheduled run skipped for owner %s: %s", owner_id, exc)

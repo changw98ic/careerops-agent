@@ -10,10 +10,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from temporalio.client import (
+    Client,
     Schedule,
     ScheduleState,
     ScheduleUpdate,
@@ -28,7 +29,6 @@ from careerops.infrastructure.temporal.schedule_manager import (
     gmail_token_refresh_schedule_id,
     mail_sync_schedule_id,
 )
-
 
 # Minimal stubs matching the temporalio client surface ScheduleManager uses.
 
@@ -104,7 +104,7 @@ class _FakeClient:
 
 def _manager() -> tuple[ScheduleManager, _FakeClient]:
     client = _FakeClient()
-    return ScheduleManager(client), client
+    return ScheduleManager(cast(Client, client)), client
 
 
 # A workflow type name (string) avoids needing a registered Temporal workflow
@@ -129,6 +129,22 @@ class TestEnsureSchedule:
         handle = client.schedules["mail-sync:acc-1"]
         assert handle.schedule.state.paused is True
         assert handle.schedule.spec.intervals[0].every == timedelta(minutes=5)
+
+    @pytest.mark.asyncio
+    async def test_creates_with_deterministic_interval_offset(self) -> None:
+        mgr, client = _manager()
+        await mgr.ensure_schedule(
+            schedule_id="crawl:source-1",
+            workflow=_WORKFLOW,
+            arg={"source_id": "source-1"},
+            interval=timedelta(hours=1),
+            offset=timedelta(seconds=137),
+            task_queue="q",
+        )
+
+        interval = client.schedules["crawl:source-1"].schedule.spec.intervals[0]
+        assert interval.every == timedelta(hours=1)
+        assert interval.offset == timedelta(seconds=137)
 
     @pytest.mark.asyncio
     async def test_updates_when_present(self) -> None:

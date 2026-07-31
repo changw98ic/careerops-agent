@@ -40,6 +40,9 @@ class FetchError(Exception):
     """A fetch was rejected or failed for a deterministic, known reason."""
 
 
+PUBLIC_ATS_RESPONSE_SIZE_LIMIT = 64 * 1024 * 1024
+
+
 class SSRFError(FetchError):
     """A URL or redirect target violated the SSRF policy."""
 
@@ -100,6 +103,13 @@ _BLOCKED_NETWORKS: Final[tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ..
     ipaddress.ip_network("fe80::/10"),
 )
 _METADATA_HOST: Final[str] = "169.254.169.254"
+_DESKTOP_DNS_PROXY_V4: Final[ipaddress.IPv4Network] = cast(
+    "ipaddress.IPv4Network", ipaddress.ip_network("198.18.0.0/15")
+)
+_DESKTOP_DNS_PROXY_V6: Final[ipaddress.IPv6Network] = cast(
+    "ipaddress.IPv6Network",
+    ipaddress.ip_network("fdfe:dcba:9876::/64"),
+)
 _USER_AGENT: Final[str] = "careerops-http-fetcher/1.0"
 _CHUNK_SIZE: Final[int] = 8192
 
@@ -214,7 +224,35 @@ def _validate_url(url: str) -> None:
     if _host_allowlist is not None and host not in _host_allowlist:
         raise SSRFError(f"host {host!r} is not in the allowlist")
     resolved = _resolve_host(host)
-    for ip_str in resolved:
+    parsed_addresses = tuple(ipaddress.ip_address(ip_str) for ip_str in resolved)
+    desktop_proxy_resolution = (
+        any(
+            isinstance(ip, ipaddress.IPv4Address) and ip in _DESKTOP_DNS_PROXY_V4
+            for ip in parsed_addresses
+        )
+        and all(
+            (
+                isinstance(ip, ipaddress.IPv4Address)
+                and ip in _DESKTOP_DNS_PROXY_V4
+            )
+            or (
+                isinstance(ip, ipaddress.IPv6Address)
+                and ip in _DESKTOP_DNS_PROXY_V6
+            )
+            for ip in parsed_addresses
+        )
+    )
+    for ip_str, ip in zip(resolved, parsed_addresses, strict=True):
+        # Docker Desktop represents the same public hostname with a paired
+        # RFC-2544 IPv4 proxy and a fixed ULA IPv6 proxy. Validate the IPv4
+        # proxy and ignore only that exact paired IPv6 representation. Literal
+        # ULA URLs and mixed private/public DNS answers remain blocked.
+        if (
+            desktop_proxy_resolution
+            and isinstance(ip, ipaddress.IPv6Address)
+            and ip in _DESKTOP_DNS_PROXY_V6
+        ):
+            continue
         _reject_if_blocked(ip_str, host=host)
     # DNS-rebinding re-check: reject if resolved IPs changed between calls.
     current = frozenset(resolved)
@@ -330,3 +368,14 @@ def fetch(url: str, *, timeout: float = 30.0, size_limit: int = 1_000_000) -> Fe
         response_hash=hashlib.sha256(body_bytes).hexdigest(),
         body=body_bytes.decode("utf-8", errors="replace"),
     )
+
+
+def fetch_public_ats(url: str) -> FetchedResponse:
+    """Fetch a confirmed public ATS JSON feed with a larger bounded payload.
+
+    Large employers can publish tens of megabytes of job descriptions in one
+    Greenhouse response. This limit applies only after a source is registered
+    as a supported public ATS; generic web pages keep :func:`fetch`'s 1 MB
+    default.
+    """
+    return fetch(url, size_limit=PUBLIC_ATS_RESPONSE_SIZE_LIMIT)

@@ -59,6 +59,7 @@ class FakeScheduleActivator:
         interval: timedelta,
         *,
         paused: bool = False,
+        owner_id: UUID | None = None,
     ) -> bool:
         self.activated.append((source_id, interval, paused))
         return True
@@ -686,36 +687,3 @@ class TestHundredSourceCapacity:
         assert result2.schedules_activated == 10
         # Total calls = 20 (idempotent at the ScheduleManager level).
 
-
-# ---------------------------------------------------------------------------
-# 8.6 -- real-source smoke test (optional / manual)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.skip(reason="requires real network access and API credentials")
-class TestRealSourceSmoke:
-    """8.6: explicit opt-in real-source smoke test.
-
-    One structured + one public dynamic + one user-authorized login source.
-    Records receipts without storing credentials or raw session material.
-
-    Run manually: pytest tests/unit/test_crawl_activation.py -k real_source --run-skip
-    """
-
-    @pytest.mark.asyncio
-    async def test_structured_source_smoke(self) -> None:
-        """Smoke test a structured (ATS) source."""
-        # Placeholder: would call real Greenhouse/Lever API.
-        pass
-
-    @pytest.mark.asyncio
-    async def test_public_dynamic_source_smoke(self) -> None:
-        """Smoke test a public dynamic source."""
-        # Placeholder: would call real careers page.
-        pass
-
-    @pytest.mark.asyncio
-    async def test_login_source_smoke(self) -> None:
-        """Smoke test a user-authorized login source."""
-        # Placeholder: would use real session reference.
-        pass

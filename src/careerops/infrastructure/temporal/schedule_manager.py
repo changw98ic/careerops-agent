@@ -1,6 +1,6 @@
 """Idempotent lifecycle management for Temporal Schedules (Phase 2.4).
 
-The career loop is meant to self-drive: inbound mail polled every ~5–10 min,
+The career loop is meant to self-drive: inbound mail polled every ~5-10 min,
 crawl on each source's interval, the Gmail token refreshed hourly. Temporal is
 already the durable-execution backbone, so registering *Schedules* (not cron,
 not in-process loops) gives resumable, crash-safe auto-advancement and finally
@@ -92,6 +92,8 @@ class ScheduleManager:
         paused: bool = False,
         note: str = "",
         workflow_id: str | None = None,
+        offset: timedelta | None = None,
+        jitter: timedelta | None = None,
     ) -> bool:
         """Create the schedule if absent, otherwise reconcile its spec/state.
 
@@ -111,7 +113,8 @@ class ScheduleManager:
             id=workflow_id or schedule_id,
         )
         spec = ScheduleSpec(
-            intervals=[ScheduleIntervalSpec(every=interval)],
+            intervals=[ScheduleIntervalSpec(every=interval, offset=offset)],
+            jitter=jitter,
         )
         desired = Schedule(
             action=action,

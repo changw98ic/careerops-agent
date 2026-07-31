@@ -92,6 +92,7 @@ CAREEROPS_REDIS_PASSWORD=<pick-a-redis-password>
 
 # Local port overrides (optional, defaults shown)
 CAREEROPS_API_PORT=8000
+CAREEROPS_FRONTEND_PORT=5173
 CAREEROPS_TEMPORAL_UI_PORT=8233
 ```
 
@@ -107,16 +108,7 @@ make setup
 # uv sync
 # (creates venv/ directory)
 
-# 2. Build the Vue frontend
-cd frontend && npm ci && npm run build && cd ..
-# vite v8.x.x building for production...
-# ...
-# dist/index.html                   0.46 kB │ gzip: 0.30 kB
-# dist/assets/index-XXXXX.css      12.34 kB │ gzip:  3.45 kB
-# dist/assets/index-XXXXX.js      145.67 kB │ gzip: 42.89 kB
-# ✓ built in 1.23s
-
-# 3. Start the full stack
+# 2. Start the full stack; the frontend image builds the Vue app separately
 docker compose up --build --wait
 # [+] Building ... Done
 # [+] Running 6/6
@@ -132,46 +124,20 @@ After `docker compose up` succeeds, the stack is:
 
 | Service | URL | Notes |
 |---------|-----|-------|
-| API | http://127.0.0.1:8000 | Loopback only |
+| Frontend | http://127.0.0.1:5173 | Browser entrypoint; forwards `/api/*` to the API |
+| API | http://127.0.0.1:8000 | API/health diagnostics; not the browser UI |
 | Temporal UI | http://127.0.0.1:8233 | Loopback only |
 
 ---
 
-## Bootstrap (one-time account creation)
+## Bootstrap and login
 
-The first and only user account is created through the `/bootstrap` endpoint. This is a
-one-time operation; the endpoint disables itself after the account exists.
+The Vue SPA owns both account setup and login. Open `http://127.0.0.1:5173/bootstrap` in both
+development and Compose. The frontend keeps browser requests same-origin and forwards only
+`/api/*` to the backend. The one-time bootstrap token disables itself after the account exists.
+The backend exposes APIs and does not serve frontend HTML.
 
-```bash
-# Open in browser:
-#   http://127.0.0.1:8000/bootstrap
-
-# Or use curl:
-curl -s http://127.0.0.1:8000/bootstrap | head -5
-# <!doctype html>
-# <html lang="en">
-#   <head>
-#     <meta charset="UTF-8" />
-#     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-```
-
-Complete the form to set your email and password. The password is hashed with Argon2id.
-
----
-
-## Login
-
-```bash
-# Open in browser:
-#   http://127.0.0.1:8000/login
-
-# Or verify the endpoint responds:
-curl -s http://127.0.0.1:8000/login | grep -o '<title>[^<]*</title>'
-# <title>CareerOps</title>
-```
-
-After login you are redirected to the Vue SPA dashboard at `/dashboard`. The frontend routes
-are:
+After login, the SPA dashboard is available at `/dashboard`. The frontend routes are:
 
 | Route | Description |
 |-------|-------------|
@@ -284,11 +250,13 @@ make verify-compose
 # docker compose config --quiet
 # docker compose up --build --wait
 # curl --fail http://127.0.0.1:8000/api/v1/health/ready
-# curl --fail http://127.0.0.1:8000/login | grep -q 'CareerOps</title>'
+# curl --fail http://127.0.0.1:5173/ | grep -q '<div id="app"></div>'
+# curl --fail http://127.0.0.1:5173/api/v1/health/live
 # docker compose down --volumes --remove-orphans
 ```
 
-Starts the full stack, checks health and login page, then tears down.
+Starts the full stack, checks API health, the frontend shell, and same-origin API forwarding,
+then tears down.
 
 ### M0 acceptance
 
@@ -366,19 +334,19 @@ docker compose up migration
 CAREEROPS_DATABASE_URL="$CAREEROPS_DB_OWNER_URL" make migrate
 ```
 
-### "Vue SPA not served" health check failure
+### Frontend or API proxy unavailable
 
-The frontend was not built before starting Compose.
+Check that both the API and frontend services are healthy.
 
 ```bash
-# Fix:
-cd frontend && npm ci && npm run build && cd ..
-docker compose restart api
+docker compose ps api frontend
+docker compose logs frontend --tail=30
+docker compose up --build --wait frontend
 ```
 
 ### "BOOTSTRAP_ALREADY_COMPLETED" or bootstrap page unavailable
 
-The account has already been created. Use `/login` instead.
+The account has already been created. Open the SPA `/login` page instead.
 
 ### Redis connection refused
 

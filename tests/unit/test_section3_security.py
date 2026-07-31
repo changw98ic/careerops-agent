@@ -935,7 +935,7 @@ class TestRouteDependencyNotReady:
 
     def test_profile_route_503_when_service_missing(self) -> None:
         _app, client, _services = _build_app(wire_services=False)
-        resp = client.get("/api/v1/profile")
+        resp = client.get(f"/api/v1/candidates/{CANDIDATE}/profile")
         assert resp.status_code == 503
         assert resp.json()["error"]["code"] == "DEPENDENCY_NOT_READY"
 
@@ -956,15 +956,18 @@ class TestRouteDependencyNotReady:
 
     def test_evidence_route_503_when_service_missing(self) -> None:
         _app, client, _services = _build_app(wire_services=False)
-        resp = client.get("/api/v1/evidence")
+        resp = client.get(f"/api/v1/candidates/{CANDIDATE}/evidence")
         assert resp.status_code == 503
         assert resp.json()["error"]["code"] == "DEPENDENCY_NOT_READY"
 
     def test_missing_principal_is_403(self) -> None:
         """No server-resolved candidate -> 403, not 503 and never a silent
-        unscoped read."""
+        unscoped read. Profile/evidence now take candidate_id from the path
+        (no session principal), so this 403 is pinned against the resumes
+        router which still resolves its candidate server-side via
+        require_candidate_id."""
         _app, client, _services = _build_app(candidate_id=None)
-        resp = client.get("/api/v1/profile")
+        resp = client.get("/api/v1/resumes")
         assert resp.status_code == 403
         assert resp.json()["error"]["code"] == "CANDIDATE_PROFILE_REQUIRED"
 
@@ -983,8 +986,9 @@ class TestRouteDependencyNotReady:
         _app, client, services = _build_app()
         evidence_repo: InMemoryEvidenceRepository = services["_evidence_repo"]  # type: ignore[assignment]
         evidence_id = _seed_evidence(evidence_repo)
-        _app.dependency_overrides[require_candidate_id] = lambda: OTHER
-        resp = client.post(f"/api/v1/evidence/{evidence_id}/confirm")
+        # Evidence belongs to CANDIDATE; confirming under OTHER's path scope
+        # yields 404 (ownership is the path-supplied candidate_id).
+        resp = client.post(f"/api/v1/candidates/{OTHER}/evidence/{evidence_id}/confirm")
         assert resp.status_code == 404
 
 

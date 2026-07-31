@@ -155,14 +155,16 @@ class TestRouteWiring:
     def test_missing_service_is_503(self) -> None:
         _app, client, _services = _build_app(wire_services=False)
         # No profile_service on app.state -> 503, never a silent empty 200.
-        resp = client.get("/api/v1/profile")
+        resp = client.get(f"/api/v1/candidates/{CANDIDATE}/profile")
         assert resp.status_code == 503
         assert resp.json()["error"]["code"] == "DEPENDENCY_NOT_READY"
 
     def test_missing_principal_is_403(self) -> None:
-        # candidate_id None -> CandidateProfileRequiredError (403).
+        # Profile/evidence now take candidate_id from the path (no session
+        # principal), so this 403 is pinned against the resumes router which
+        # still resolves its candidate server-side via require_candidate_id.
         _app, client, _services = _build_app(candidate_id=None)
-        resp = client.get("/api/v1/profile")
+        resp = client.get("/api/v1/resumes")
         assert resp.status_code == 403
         assert resp.json()["error"]["code"] == "CANDIDATE_PROFILE_REQUIRED"
 
@@ -175,7 +177,7 @@ class TestRouteWiring:
 class TestProfileRoutes:
     def test_get_active_returns_404_when_absent(self) -> None:
         _app, client, _services = _build_app()
-        resp = client.get("/api/v1/profile")
+        resp = client.get(f"/api/v1/candidates/{CANDIDATE}/profile")
         assert resp.status_code == 404
 
     def test_create_then_get_active(self) -> None:
@@ -186,13 +188,13 @@ class TestProfileRoutes:
             "remote_rules": {"remote_allowed": True},
             "compensation": {"currency": "CNY", "amount_min": 100, "amount_max": 200},
         }
-        resp = client.post("/api/v1/profile", json=body)
+        resp = client.post(f"/api/v1/candidates/{CANDIDATE}/profile", json=body)
         assert resp.status_code == 201, resp.text
         created = resp.json()
         assert created["version"] == 1
         assert created["is_active"] is True
 
-        active = client.get("/api/v1/profile").json()
+        active = client.get(f"/api/v1/candidates/{CANDIDATE}/profile").json()
         assert active["id"] == created["id"]
         assert active["target_roles"][0]["title"] == "Backend Engineer"
 
@@ -205,13 +207,13 @@ class TestProfileRoutes:
                 {"name": "NYC", "kind": "excluded"},
             ],
         }
-        resp = client.post("/api/v1/profile", json=body)
+        resp = client.post(f"/api/v1/candidates/{CANDIDATE}/profile", json=body)
         assert resp.status_code == 409
         assert resp.json()["error"]["code"] == "INVALID_STATE"
 
     def client_candidate_substitution_in_body_is_ignored(self) -> None:
         # A client-supplied candidate_id in the body MUST NOT be honored; the
-        # server-resolved id always owns the new version. The body schema
+        # path-supplied id always owns the new version. The body schema
         # doesn't even declare candidate_id, so any stray field is dropped by
         # Pydantic. Pin that behavior.
         _app, client, _services = _build_app()
@@ -220,10 +222,10 @@ class TestProfileRoutes:
             "locations": [{"name": "Chengdu", "kind": "required"}],
             "candidate_id": str(OTHER),  # stray field — must be ignored.
         }
-        resp = client.post("/api/v1/profile", json=body)
+        resp = client.post(f"/api/v1/candidates/{CANDIDATE}/profile", json=body)
         assert resp.status_code == 201
-        # The created version belongs to the server-resolved candidate.
-        active = client.get("/api/v1/profile").json()
+        # The created version belongs to the path-supplied candidate.
+        active = client.get(f"/api/v1/candidates/{CANDIDATE}/profile").json()
         assert active["candidate_id"] == str(CANDIDATE)
 
     def test_version_history_and_activate(self) -> None:
@@ -232,22 +234,24 @@ class TestProfileRoutes:
             "target_roles": [{"title": "A"}],
             "locations": [{"name": "Chengdu", "kind": "required"}],
         }
-        first = client.post("/api/v1/profile", json=body).json()
+        first = client.post(f"/api/v1/candidates/{CANDIDATE}/profile", json=body).json()
         body2 = {
             "target_roles": [{"title": "B"}],
             "locations": [{"name": "Chengdu", "kind": "required"}],
         }
-        client.post("/api/v1/profile", json=body2)
+        client.post(f"/api/v1/candidates/{CANDIDATE}/profile", json=body2)
 
-        history = client.get("/api/v1/profile/versions").json()
+        history = client.get(f"/api/v1/candidates/{CANDIDATE}/profile/versions").json()
         assert history["total"] == 2
         assert [v["version"] for v in history["items"]] == [2, 1]
 
         # Re-activate the first version.
-        resp = client.post(f"/api/v1/profile/versions/{first['id']}/activate")
+        resp = client.post(
+            f"/api/v1/candidates/{CANDIDATE}/profile/versions/{first['id']}/activate"
+        )
         assert resp.status_code == 200
         assert resp.json()["is_active"] is True
-        active = client.get("/api/v1/profile").json()
+        active = client.get(f"/api/v1/candidates/{CANDIDATE}/profile").json()
         assert active["id"] == first["id"]
 
     def test_get_other_candidate_version_is_404(self) -> None:
@@ -256,10 +260,10 @@ class TestProfileRoutes:
             "target_roles": [{"title": "A"}],
             "locations": [{"name": "Chengdu", "kind": "required"}],
         }
-        created = client.post("/api/v1/profile", json=body).json()
-        # Swap the resolved candidate; the version id is not owned by OTHER.
-        _app.dependency_overrides[require_candidate_id] = lambda: OTHER
-        resp = client.get(f"/api/v1/profile/versions/{created['id']}")
+        created = client.post(f"/api/v1/candidates/{CANDIDATE}/profile", json=body).json()
+        # The version belongs to CANDIDATE; requesting it under OTHER's path
+        # scope yields 404 (ownership is the path-supplied candidate_id).
+        resp = client.get(f"/api/v1/candidates/{OTHER}/profile/versions/{created['id']}")
         assert resp.status_code == 404
 
 
@@ -370,10 +374,12 @@ class TestEvidenceRoutes:
         evidence_id = _seed_evidence(services["evidence_service"])  # type: ignore[arg-type]
 
         first = client.post(
-            f"/api/v1/evidence/{evidence_id}/confirm", json={"source_reference": "r1"}
+            f"/api/v1/candidates/{CANDIDATE}/evidence/{evidence_id}/confirm",
+            json={"source_reference": "r1"},
         )
         second = client.post(
-            f"/api/v1/evidence/{evidence_id}/confirm", json={"source_reference": "r2"}
+            f"/api/v1/candidates/{CANDIDATE}/evidence/{evidence_id}/confirm",
+            json={"source_reference": "r2"},
         )
 
         assert first.status_code == 200
@@ -388,20 +394,21 @@ class TestEvidenceRoutes:
     def test_confirm_then_list_confirmed(self) -> None:
         _app, client, services = _build_app()
         evidence_id = _seed_evidence(services["evidence_service"])  # type: ignore[arg-type]
-        client.post(f"/api/v1/evidence/{evidence_id}/confirm")
-        confirmed = client.get("/api/v1/evidence?status=confirmed").json()
+        client.post(f"/api/v1/candidates/{CANDIDATE}/evidence/{evidence_id}/confirm")
+        confirmed = client.get(f"/api/v1/candidates/{CANDIDATE}/evidence?status=confirmed").json()
         assert confirmed["total"] == 1
         assert confirmed["items"][0]["id"] == evidence_id
 
     def test_confirm_other_candidate_is_404(self) -> None:
         _app, client, services = _build_app()
         evidence_id = _seed_evidence(services["evidence_service"])  # type: ignore[arg-type]
-        _app.dependency_overrides[require_candidate_id] = lambda: OTHER
-        resp = client.post(f"/api/v1/evidence/{evidence_id}/confirm")
+        # Evidence belongs to CANDIDATE; confirming under OTHER's path scope
+        # yields 404 (ownership is the path-supplied candidate_id).
+        resp = client.post(f"/api/v1/candidates/{OTHER}/evidence/{evidence_id}/confirm")
         assert resp.status_code == 404
 
     def test_unknown_status_filter_is_409(self) -> None:
         _app, client, _services = _build_app()
-        resp = client.get("/api/v1/evidence?status=bogus")
+        resp = client.get(f"/api/v1/candidates/{CANDIDATE}/evidence?status=bogus")
         assert resp.status_code == 409
         assert resp.json()["error"]["code"] == "INVALID_STATE"

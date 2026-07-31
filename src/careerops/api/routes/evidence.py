@@ -1,9 +1,11 @@
 """Evidence API routes (Section 3, task 3.6).
 
-Additive routes under ``/api/v1/evidence`` backed by :class:`EvidenceService`.
-Confirm/reject is idempotent and records an append-only audit event on the
-actual transition (Iron Rule 7). The actor id is taken from the authenticated
-principal (never the body) so the audit trail records who really decided.
+Additive routes under ``/api/v1/candidates/{candidate_id}/evidence`` backed by
+:class:`EvidenceService`. Confirm/reject is idempotent and records an
+append-only audit event on the actual transition (Iron Rule 7). The actor id
+is taken from the authenticated principal (never the body) so the audit trail
+records who really decided. Candidate identity comes from the URL path
+parameter.
 """
 
 # Pydantic ``Field(default_factory=list)`` and the ``object``-typed response
@@ -19,12 +21,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 
-from careerops.api.auth_dependency import require_api_auth, require_candidate_id
+from careerops.api.auth_dependency import require_api_auth
 from careerops.api.capability_dependency import require_repository
 from careerops.application.evidence_service import EvidenceReviewRequest, EvidenceService
 from careerops.auth.contracts import AuthenticatedPrincipal
 
-router = APIRouter(prefix="/api/v1/evidence", tags=["evidence"])
+router = APIRouter(prefix="/api/v1/candidates/{candidate_id}/evidence", tags=["evidence"])
 
 
 # ---------------------------------------------------------------------------
@@ -100,7 +102,7 @@ def _actor_id(
 
 @router.get("")
 def list_evidence(
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[EvidenceService, Depends(_evidence_service)],
     status: Annotated[str | None, Query(description="Filter by confirmation status")] = None,
     limit: int = 200,
@@ -128,7 +130,7 @@ def list_evidence(
 @router.get("/{evidence_id}")
 def get_evidence(
     evidence_id: UUID,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[EvidenceService, Depends(_evidence_service)],
 ) -> EvidenceItemResponse:
     item = service.get(candidate_id, evidence_id)
@@ -138,7 +140,7 @@ def get_evidence(
 @router.post("/{evidence_id}/confirm")
 def confirm_evidence(
     evidence_id: UUID,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     actor_id: Annotated[str, Depends(_actor_id)],
     service: Annotated[EvidenceService, Depends(_evidence_service)],
     body: EvidenceReviewBody | None = None,
@@ -162,7 +164,7 @@ def confirm_evidence(
 @router.post("/{evidence_id}/reject")
 def reject_evidence(
     evidence_id: UUID,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     actor_id: Annotated[str, Depends(_actor_id)],
     service: Annotated[EvidenceService, Depends(_evidence_service)],
     body: EvidenceReviewBody | None = None,

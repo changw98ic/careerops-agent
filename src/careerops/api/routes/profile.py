@@ -1,13 +1,14 @@
 """Profile API routes (Section 3, task 3.2).
 
-Additive routes under ``/api/v1/profile`` backed by :class:`ProfileService`.
-Every route resolves the candidate SERVER-SIDE via :func:`require_candidate_id`
-and pulls the service through :func:`require_repository` so a missing service
-surfaces as ``DependencyNotReadyError`` (503) rather than a silent empty
-response (Iron Rules 1 + 2).
+Additive routes under ``/api/v1/candidates/{candidate_id}/profile`` backed by
+:class:`ProfileService`. The candidate identity is supplied by the URL path
+parameter (post-auth single-tenant console) and the service is pulled through
+:func:`require_repository` so a missing service surfaces as
+``DependencyNotReadyError`` (503) rather than a silent empty response
+(Iron Rules 1 + 2).
 
-A client-supplied ``candidate_id`` in the body is NEVER honored for ownership
-scoping; the server-resolved id always wins.
+The path-supplied ``candidate_id`` always scopes ownership; a body never
+carries one.
 """
 
 # Pydantic ``Field(default_factory=list)`` and the ``object``-typed response
@@ -23,7 +24,6 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
-from careerops.api.auth_dependency import require_candidate_id
 from careerops.api.capability_dependency import require_repository
 from careerops.api.errors import NotFoundError
 from careerops.application.profile_service import ProfilePreferences, ProfileService
@@ -37,7 +37,7 @@ from careerops.domain.profiles import (
     TargetRole,
 )
 
-router = APIRouter(prefix="/api/v1/profile", tags=["profile"])
+router = APIRouter(prefix="/api/v1/candidates/{candidate_id}/profile", tags=["profile"])
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +177,7 @@ def _profile_service(request: Request) -> ProfileService:
 
 @router.get("", response_model=None)
 def get_active_profile(
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[ProfileService, Depends(_profile_service)],
 ) -> ProfileVersionResponse:
     """Return the active profile version for the authenticated candidate.
@@ -193,7 +193,7 @@ def get_active_profile(
 
 @router.get("/versions")
 def list_profile_versions(
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[ProfileService, Depends(_profile_service)],
     limit: int = 50,
 ) -> ProfileVersionListResponse:
@@ -207,7 +207,7 @@ def list_profile_versions(
 @router.get("/versions/{version_id}")
 def get_profile_version(
     version_id: UUID,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[ProfileService, Depends(_profile_service)],
 ) -> ProfileVersionResponse:
     version = service.get_version(candidate_id, version_id)
@@ -217,7 +217,7 @@ def get_profile_version(
 @router.post("", status_code=201)
 def create_profile_version(
     body: ProfileWriteRequest,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[ProfileService, Depends(_profile_service)],
 ) -> ProfileVersionResponse:
     """Validate, persist, and (by default) activate a new profile version.
@@ -234,7 +234,7 @@ def create_profile_version(
 @router.post("/versions/{version_id}/activate")
 def activate_profile_version(
     version_id: UUID,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[ProfileService, Depends(_profile_service)],
 ) -> ProfileVersionResponse:
     """Activate an existing version (re-validated against current rules)."""

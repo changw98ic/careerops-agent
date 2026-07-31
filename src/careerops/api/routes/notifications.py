@@ -2,8 +2,10 @@
 
 Provides per-candidate notification endpoints under
 ``/api/v1/candidates/{candidate_id}/notifications``:
-- ``GET .../notifications/stream`` — SSE endpoint (cookie auth, no CSRF).
+- ``GET .../notifications/stream`` — SSE endpoint.
 - ``GET .../notifications`` — recovery endpoint for missed events.
+
+Both are public: the session/CSRF auth layer was removed (auth-rm Task 9).
 """
 
 from __future__ import annotations
@@ -32,10 +34,8 @@ async def stream_notifications(
 ) -> StreamingResponse:
     """SSE endpoint for real-time notifications.
 
-    Uses cookie-based auth (``require_api_auth`` at the app-level mount).
-    EventSource in the browser sends cookies automatically; no CSRF header
-    is needed for this GET-only endpoint. ``candidate_id`` comes from the
-    request path.
+    Public endpoint (the session/CSRF auth layer was removed — auth-rm
+    Task 9). ``candidate_id`` comes from the request path.
     """
     notification_service = getattr(request.app.state, "notification_service", None)
     if notification_service is None:

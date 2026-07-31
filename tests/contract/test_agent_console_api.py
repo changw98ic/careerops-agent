@@ -2,8 +2,9 @@
 
 Covers:
 - Success cases for all new endpoints
-- 401/403/404/409/422/503 error paths
-- CSRF + Idempotency-Key validation
+- 404/409/422/503 error paths (the session/CSRF auth layer was removed —
+  auth-rm Task 9, so there is no 401 gate anymore)
+- Idempotency-Key validation
 - Cache-Control: no-store headers
 - Cursor bounds and signing
 - No forbidden POST /api/v1/crawl-plans root mutation
@@ -21,10 +22,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from careerops.api.app import create_app
-from careerops.api.auth_dependency import require_api_auth
 from careerops.api.routes.agent_console import _idempotency_store
 from careerops.application.ports.readiness import ReadinessReport, ReadinessState
-from careerops.auth.contracts import AuthenticatedPrincipal
 from careerops.config import RuntimeEnvironment, Settings
 
 # ---------------------------------------------------------------------------
@@ -49,29 +48,11 @@ class _FixedReadinessProbe:
         return None
 
 
-def _make_auth_principal() -> AuthenticatedPrincipal:
-    return AuthenticatedPrincipal(
-        user_id=UUID("11111111-1111-1111-1111-111111111111"),
-        username="testuser",
-        session_id=UUID("22222222-2222-2222-2222-222222222222"),
-        csrf_token_hash="test-csrf-hash",
-        absolute_expires_at=datetime.now(UTC) + timedelta(hours=1),
-        candidate_id=CANDIDATE_ID,
-    )
-
-
 def _make_client() -> httpx2.Client:
     settings = Settings.model_validate({"environment": RuntimeEnvironment.TEST})
     probe = _FixedReadinessProbe()
 
     app = create_app(settings, readiness_probe=probe)
-
-    # Override the auth dependency to return a mock principal
-    async def _mock_api_auth() -> AuthenticatedPrincipal:
-        return _make_auth_principal()
-
-    app.dependency_overrides[require_api_auth] = _mock_api_auth
-
     return cast("httpx2.Client", TestClient(app))
 
 
@@ -125,27 +106,6 @@ class TestActionQueue:
         # Valid limit within bounds works
         response = client.get(f"/api/v1/candidates/{CANDIDATE_ID}/agent-console/actions?limit=3")
         assert response.status_code == 200
-
-    def test_list_actions_rejects_unauthenticated(self) -> None:
-        """Without a session cookie the router-level auth gate returns 401."""
-        settings = Settings.model_validate({"environment": RuntimeEnvironment.TEST})
-        app = create_app(settings, readiness_probe=_FixedReadinessProbe())
-
-        class _StubAuth:
-            def authenticate(self, token: str, *, now: datetime) -> AuthenticatedPrincipal:
-                raise ValueError("no session")
-
-            def validate_csrf(self, principal: AuthenticatedPrincipal, token: str) -> None:
-                return None
-
-        # With auth configured, candidate_id is path-supplied and the
-        # require_api_auth gate at the router mount rejects the request.
-        app.state.auth_service = _StubAuth()
-        app.state.web_settings = object()
-        client = cast("httpx2.Client", TestClient(app))
-        response = client.get(f"/api/v1/candidates/{CANDIDATE_ID}/agent-console/actions")
-        assert response.status_code == 401
-
 
 # ---------------------------------------------------------------------------
 # 2. POST /api/v1/candidates/{candidate_id}/agent-console/actions/{action_key}/accept

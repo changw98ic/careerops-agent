@@ -3,9 +3,9 @@
 Additive routes under ``/api/v1/candidates/{candidate_id}/evidence`` backed by
 :class:`EvidenceService`. Confirm/reject is idempotent and records an
 append-only audit event on the actual transition (Iron Rule 7). The actor id
-is taken from the authenticated principal (never the body) so the audit trail
-records who really decided. Candidate identity comes from the URL path
-parameter.
+is a fixed local actor (the console login was removed; there is no session
+principal) and is never taken from the body. Candidate identity comes from the
+URL path parameter.
 """
 
 # Pydantic ``Field(default_factory=list)`` and the ``object``-typed response
@@ -21,10 +21,13 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 
-from careerops.api.auth_dependency import require_api_auth
 from careerops.api.capability_dependency import require_repository
 from careerops.application.evidence_service import EvidenceReviewRequest, EvidenceService
-from careerops.auth.contracts import AuthenticatedPrincipal
+
+# Audit actor for the local single-user console (post login-removal). The
+# audit trail records who decided; with no session there is exactly one local
+# operator, so the actor is a constant.
+AUDIT_ACTOR = "local"
 
 router = APIRouter(prefix="/api/v1/candidates/{candidate_id}/evidence", tags=["evidence"])
 
@@ -79,22 +82,6 @@ def _evidence_service(request: Request) -> EvidenceService:
     return require_repository(request, "evidence_service")  # type: ignore[return-value]
 
 
-def _actor_id(
-    principal: Annotated[AuthenticatedPrincipal | None, Depends(require_api_auth)],
-) -> str:
-    """Resolve the audit actor id from the authenticated principal.
-
-    The actor is taken from the session (``user_id``), never from the request
-    body, so the audit trail records the real decision-maker. When auth is not
-    configured (dev/test with no auth service), the actor is recorded as
-    ``"system"``. FastAPI caches ``require_api_auth`` per request, so this does
-    not re-run authentication.
-    """
-    if principal is None:
-        return "system"
-    return str(principal.user_id)
-
-
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -141,7 +128,6 @@ def get_evidence(
 def confirm_evidence(
     evidence_id: UUID,
     candidate_id: UUID,
-    actor_id: Annotated[str, Depends(_actor_id)],
     service: Annotated[EvidenceService, Depends(_evidence_service)],
     body: EvidenceReviewBody | None = None,
 ) -> EvidenceDecisionResponse:
@@ -154,7 +140,7 @@ def confirm_evidence(
         candidate_id,
         EvidenceReviewRequest(
             evidence_id=evidence_id,
-            actor_id=actor_id,
+            actor_id=AUDIT_ACTOR,
             source_reference=(body.source_reference if body else ""),
         ),
     )
@@ -165,7 +151,6 @@ def confirm_evidence(
 def reject_evidence(
     evidence_id: UUID,
     candidate_id: UUID,
-    actor_id: Annotated[str, Depends(_actor_id)],
     service: Annotated[EvidenceService, Depends(_evidence_service)],
     body: EvidenceReviewBody | None = None,
 ) -> EvidenceDecisionResponse:
@@ -174,7 +159,7 @@ def reject_evidence(
         candidate_id,
         EvidenceReviewRequest(
             evidence_id=evidence_id,
-            actor_id=actor_id,
+            actor_id=AUDIT_ACTOR,
             source_reference=(body.source_reference if body else ""),
         ),
     )

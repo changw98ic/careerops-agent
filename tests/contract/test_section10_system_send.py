@@ -39,7 +39,6 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from careerops.api.auth_dependency import require_api_auth
 from careerops.api.errors import install_error_handlers
 from careerops.api.routes.system_send import router as system_send_router
 from careerops.application.side_effect_kernel import SideEffectKernel
@@ -47,7 +46,6 @@ from careerops.application.system_managed_send import (
     SystemManagedSendService,
     SystemSendDeniedError,
 )
-from careerops.auth.contracts import AuthenticatedPrincipal
 from careerops.config import Settings
 from careerops.domain.applications import (
     Application,
@@ -711,17 +709,6 @@ class TestIntegrationSlice:
 # ===========================================================================
 
 
-def _principal() -> AuthenticatedPrincipal:
-    return AuthenticatedPrincipal(
-        user_id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
-        username="owner",
-        session_id=uuid4(),
-        csrf_token_hash="hash",
-        absolute_expires_at=datetime.now(tz=UTC),
-        candidate_id=CANDIDATE,
-    )
-
-
 def _build_route_app(
     *,
     service: SystemManagedSendService | None = None,
@@ -735,10 +722,8 @@ def _build_route_app(
     # require_capability reads app.state.capability_resolver; absent -> 503.
     if resolver_on_state is not None:
         app.state.capability_resolver = resolver_on_state
-    # candidate_id is now supplied by the URL path (auth-rm migration); the
-    # principal override is retained only to satisfy require_api_auth at the
-    # app-level gate (the routes themselves no longer read it for ownership).
-    app.dependency_overrides[require_api_auth] = lambda: _principal()
+    # candidate_id is supplied by the URL path (auth-rm migration); there is
+    # no session/principal dependency anymore.
     return app
 
 

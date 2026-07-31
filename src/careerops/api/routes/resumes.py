@@ -1,12 +1,14 @@
 """Resume API routes (Section 3, tasks 3.3 / 3.4 / 3.5).
 
-Additive routes under ``/api/v1/resumes`` backed by :class:`ResumeService`.
-Registration accepts a multipart upload, validates media type + size, stores
-the resume content-addressed, runs the deterministic parse, and extracts
-unconfirmed evidence — all scoped to the server-resolved candidate.
+Additive routes under ``/api/v1/candidates/{candidate_id}/resumes`` backed by
+:class:`ResumeService`. Registration accepts a multipart upload, validates
+media type + size, stores the resume content-addressed, runs the deterministic
+parse, and extracts unconfirmed evidence — all scoped to the candidate in the
+URL path.
 
-Iron Rules 1 + 2: candidate resolved via :func:`require_candidate_id`; service
-pulled via :func:`require_repository` (missing → 503, never silent).
+Iron Rule 1 + 2: candidate identity comes from the path parameter (never a
+session or body field); service pulled via :func:`require_repository`
+(missing → 503, never silent).
 Iron Rule 3: only parsed + confirmed resumes surface from ``/eligible``.
 """
 
@@ -23,13 +25,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from pydantic import BaseModel, Field
 
-from careerops.api.auth_dependency import require_candidate_id
 from careerops.api.capability_dependency import require_repository
 from careerops.api.errors import PayloadTooLargeError
 from careerops.application.evidence_service import EvidenceService
 from careerops.application.resume_service import ResumeService
 
-router = APIRouter(prefix="/api/v1/resumes", tags=["resumes"])
+router = APIRouter(prefix="/api/v1/candidates/{candidate_id}/resumes", tags=["resumes"])
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +104,7 @@ def _evidence_service(request: Request) -> EvidenceService:
 
 @router.get("")
 def list_resumes(
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[ResumeService, Depends(_resume_service)],
     limit: int = 50,
 ) -> ResumeListResponse:
@@ -116,7 +117,7 @@ def list_resumes(
 
 @router.get("/eligible")
 def list_eligible_resumes(
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[ResumeService, Depends(_resume_service)],
 ) -> ResumeListResponse:
     """Parsed + confirmed resumes — the only ones eligible for packages."""
@@ -130,7 +131,7 @@ def list_eligible_resumes(
 @router.get("/{version_id}")
 def get_resume(
     version_id: UUID,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[ResumeService, Depends(_resume_service)],
 ) -> ResumeVersionResponse:
     version = service.get_version(candidate_id, version_id)
@@ -139,8 +140,8 @@ def get_resume(
 
 @router.post("", status_code=201)
 async def register_resume(
+    candidate_id: UUID,
     request: Request,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
     service: Annotated[ResumeService, Depends(_resume_service)],
     file: Annotated[UploadFile, File(description="Resume file upload")],
     target_type: Annotated[str, Form(description="Resume target type")] = "general",
@@ -185,7 +186,7 @@ async def register_resume(
 @router.post("/{version_id}/confirm")
 def confirm_resume_content(
     version_id: UUID,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     service: Annotated[ResumeService, Depends(_resume_service)],
 ) -> ResumeVersionResponse:
     """Mark a parsed resume's extracted content CONFIRMED by the user.
@@ -201,7 +202,7 @@ def confirm_resume_content(
 @router.get("/{version_id}/evidence")
 def list_resume_evidence(
     version_id: UUID,
-    candidate_id: Annotated[UUID, Depends(require_candidate_id)],
+    candidate_id: UUID,
     resume_service: Annotated[ResumeService, Depends(_resume_service)],
     evidence_service: Annotated[EvidenceService, Depends(_evidence_service)],
 ) -> EvidenceListResponse:

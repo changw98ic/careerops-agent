@@ -155,19 +155,12 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
     assert response.status_code == 200
     assert response.json()["info"]["title"] == "CareerOps API"
     # Declared route set covers health + global catalog (jobs/companies) +
-    # applications + auth (SPA session flow) + the per-candidate path-scoped
-    # routers (profile/evidence/crawl surface — auth-rm migration) + the
-    # remaining session-scoped routers (resumes, agent-console, mail, …).
-    # ErrorResponse business codes are validated separately by the Phase 0
-    # contract freeze tests.
+    # applications + the per-candidate path-scoped routers (profile/evidence/
+    # crawl surface — auth-rm migration) + the remaining routers. The console
+    # session/CSRF auth routes (/api/v1/auth/*, /api/v1/me) were removed with
+    # the auth layer (auth-rm Task 9). ErrorResponse business codes are
+    # validated separately by the Phase 0 contract freeze tests.
     assert set(response.json()["paths"]) == {
-        # Auth + console identity (SPA session flow).
-        "/api/v1/auth/login",
-        "/api/v1/auth/logout",
-        "/api/v1/auth/preauth",
-        "/api/v1/auth/bootstrap",
-        "/api/v1/auth/session",
-        "/api/v1/me",
         # Health.
         "/api/v1/health/live",
         "/api/v1/health/ready",
@@ -215,10 +208,11 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
         "/api/v1/candidates/{candidate_id}/crawl-permissions/{permission_id}/deny",
         "/api/v1/candidates/{candidate_id}/crawl-permissions/{permission_id}/revoke",
         "/api/v1/candidates/{candidate_id}/crawl-permissions/{permission_id}/open-login",
-        # Matching (global list + global/job-scoped match + compensation
-        # routes; the per-candidate evidence route is already path-scoped).
-        "/api/v1/matches",
-        "/api/v1/matches/run",
+        # Matching (per-candidate match list/run — auth-rm path-param
+        # migration; the job-scoped compensation/eligibility routes stay
+        # global).
+        "/api/v1/candidates/{candidate_id}/matches",
+        "/api/v1/candidates/{candidate_id}/matches/run",
         # Per-candidate inbox projection (auth-rm path-param migration).
         "/api/v1/candidates/{candidate_id}/inbox",
         "/api/v1/candidates/{candidate_id}/inbox/{job_id}",
@@ -260,14 +254,14 @@ def test_openapi_is_versioned_and_contains_only_declared_health_routes() -> None
         "/api/v1/candidates/{candidate_id}/follow-ups/{reminder_id}/reschedule",
         "/api/v1/candidates/{candidate_id}/follow-ups/{reminder_id}/cancel",
         "/api/v1/candidates/{candidate_id}/follow-ups/{reminder_id}/complete",
-        # Resumes (global resume-version router; still session-scoped) + bulk
-        # evidence import.
-        "/api/v1/resumes",
-        "/api/v1/resumes/eligible",
-        "/api/v1/resumes/{version_id}",
-        "/api/v1/resumes/{version_id}/confirm",
-        "/api/v1/resumes/{version_id}/evidence",
-        "/api/v1/evidence/import",
+        # Resumes + bulk evidence import (per-candidate; auth-rm path-param
+        # migration).
+        "/api/v1/candidates/{candidate_id}/resumes",
+        "/api/v1/candidates/{candidate_id}/resumes/eligible",
+        "/api/v1/candidates/{candidate_id}/resumes/{version_id}",
+        "/api/v1/candidates/{candidate_id}/resumes/{version_id}/confirm",
+        "/api/v1/candidates/{candidate_id}/resumes/{version_id}/evidence",
+        "/api/v1/candidates/{candidate_id}/evidence/import",
         # Recruiting-email intelligence (per-candidate Gmail sync + proposals;
         # auth-rm path-param migration).
         "/api/v1/candidates/{candidate_id}/mail/account",

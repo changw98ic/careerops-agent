@@ -1,14 +1,14 @@
 """Route tests for the Section-3 additive API (tasks 3.2 / 3.3 / 3.6).
 
-Builds a minimal FastAPI app with ONLY the Section-3 routers and overrides the
-``require_candidate_id`` / ``require_api_auth`` dependencies so the route logic
-is exercised without a live auth service. Pins:
+Builds a minimal FastAPI app with ONLY the Section-3 routers. Candidate
+identity comes from the URL path parameter (the console session auth was
+removed — auth-rm Task 9). Pins:
 
 - missing service on app.state -> 503 (Iron Rule 2, no silent fallback)
-- candidate ownership scoping (server-resolved id wins; client body never)
+- candidate ownership scoping (path-supplied id wins; client body never)
 - profile create/activate/get/version-history flows (3.2)
 - resume register (multipart) -> parse + evidence; dedupe; confirm (3.3)
-- evidence confirm/reject idempotency + actor-from-session (3.6)
+- evidence confirm/reject idempotency + fixed local audit actor (3.6)
 """
 
 from __future__ import annotations
@@ -18,15 +18,13 @@ from uuid import UUID, uuid4
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from careerops.api.auth_dependency import require_api_auth, require_candidate_id
 from careerops.api.errors import install_error_handlers
-from careerops.api.routes.evidence import router as evidence_router
+from careerops.api.routes.evidence import AUDIT_ACTOR, router as evidence_router
 from careerops.api.routes.profile import router as profile_router
 from careerops.api.routes.resumes import router as resumes_router
 from careerops.application.evidence_service import EvidenceService, ListEvidenceAuditSink
 from careerops.application.profile_service import ProfileService
 from careerops.application.resume_service import ResumeService
-from careerops.auth.contracts import AuthenticatedPrincipal
 from careerops.infrastructure.memory_repos import (
     InMemoryApplicationRepository,
     InMemoryEvidenceRepository,
@@ -34,7 +32,6 @@ from careerops.infrastructure.memory_repos import (
 )
 
 CANDIDATE = UUID("11111111-1111-1111-1111-111111111111")
-USER_ID = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 OTHER = UUID("22222222-2222-2222-2222-222222222222")
 
 
@@ -82,23 +79,9 @@ class _MemStore:
         return StorageDeleteResult.DELETED
 
 
-def _principal() -> AuthenticatedPrincipal:
-    from datetime import UTC, datetime
-
-    return AuthenticatedPrincipal(
-        user_id=USER_ID,
-        username="owner",
-        session_id=uuid4(),
-        csrf_token_hash="hash",
-        absolute_expires_at=datetime.now(tz=UTC),
-        candidate_id=CANDIDATE,
-    )
-
-
 def _build_app(
     *,
     wire_services: bool = True,
-    candidate_id: UUID | None = CANDIDATE,
 ) -> tuple[FastAPI, TestClient, dict[str, object]]:
     """Build a test app with the Section-3 routers and optional service wiring.
 
@@ -128,20 +111,6 @@ def _build_app(
             if not key.startswith("_"):
                 setattr(app.state, key, value)
 
-    # Override auth: server-resolved candidate id always wins. When the
-    # resolved id is None, mirror the real dependency's 403 behavior rather
-    # than handing the route a None owner.
-    from careerops.api.errors import CandidateProfileRequiredError
-
-    app.dependency_overrides[require_api_auth] = lambda: _principal()
-
-    def _resolve_candidate() -> UUID:
-        if candidate_id is None:
-            raise CandidateProfileRequiredError()
-        return candidate_id
-
-    app.dependency_overrides[require_candidate_id] = _resolve_candidate
-
     client = TestClient(app)
     return app, client, services
 
@@ -158,15 +127,6 @@ class TestRouteWiring:
         resp = client.get(f"/api/v1/candidates/{CANDIDATE}/profile")
         assert resp.status_code == 503
         assert resp.json()["error"]["code"] == "DEPENDENCY_NOT_READY"
-
-    def test_missing_principal_is_403(self) -> None:
-        # Profile/evidence now take candidate_id from the path (no session
-        # principal), so this 403 is pinned against the resumes router which
-        # still resolves its candidate server-side via require_candidate_id.
-        _app, client, _services = _build_app(candidate_id=None)
-        resp = client.get("/api/v1/resumes")
-        assert resp.status_code == 403
-        assert resp.json()["error"]["code"] == "CANDIDATE_PROFILE_REQUIRED"
 
 
 # ===========================================================================
@@ -279,10 +239,12 @@ _RESUME_TEXT = (
 
 
 class TestResumeRoutes:
+    _RESUMES = f"/api/v1/candidates/{CANDIDATE}/resumes"
+
     def test_register_multipart_parses_and_extracts(self) -> None:
         _app, client, _services = _build_app()
         resp = client.post(
-            "/api/v1/resumes",
+            self._RESUMES,
             files={"file": ("resume.txt", _RESUME_TEXT, "text/plain")},
             data={"target_type": "general", "source_reference": "upload"},
         )
@@ -294,17 +256,17 @@ class TestResumeRoutes:
         assert body["resume"]["confirmation_status"] == "unconfirmed"
 
         # Evidence linked to the resume.
-        ev = client.get(f"/api/v1/resumes/{body['resume']['id']}/evidence").json()
+        ev = client.get(f"{self._RESUMES}/{body['resume']['id']}/evidence").json()
         assert ev["total"] == body["extracted_evidence_count"]
 
     def test_register_dedupe_returns_existing(self) -> None:
         _app, client, _services = _build_app()
         first = client.post(
-            "/api/v1/resumes",
+            self._RESUMES,
             files={"file": ("r.txt", _RESUME_TEXT, "text/plain")},
         ).json()
         second = client.post(
-            "/api/v1/resumes",
+            self._RESUMES,
             files={"file": ("r.txt", _RESUME_TEXT, "text/plain")},
         ).json()
         assert second["deduplicated"] is True
@@ -313,7 +275,7 @@ class TestResumeRoutes:
     def test_register_rejects_unsupported_media(self) -> None:
         _app, client, _services = _build_app()
         resp = client.post(
-            "/api/v1/resumes",
+            self._RESUMES,
             files={"file": ("r.bin", b"x", "application/octet-stream")},
         )
         assert resp.status_code == 409
@@ -322,24 +284,27 @@ class TestResumeRoutes:
     def test_confirm_then_eligible(self) -> None:
         _app, client, _services = _build_app()
         rid = client.post(
-            "/api/v1/resumes",
+            self._RESUMES,
             files={"file": ("r.txt", _RESUME_TEXT, "text/plain")},
         ).json()["resume"]["id"]
         # Not eligible before confirm.
-        assert client.get("/api/v1/resumes/eligible").json()["total"] == 0
-        resp = client.post(f"/api/v1/resumes/{rid}/confirm")
+        assert client.get(f"{self._RESUMES}/eligible").json()["total"] == 0
+        resp = client.post(f"{self._RESUMES}/{rid}/confirm")
         assert resp.status_code == 200
         assert resp.json()["confirmation_status"] == "confirmed"
-        assert client.get("/api/v1/resumes/eligible").json()["total"] == 1
+        assert client.get(f"{self._RESUMES}/eligible").json()["total"] == 1
 
     def test_get_other_candidate_resume_is_404(self) -> None:
         _app, client, _services = _build_app()
         rid = client.post(
-            "/api/v1/resumes",
+            self._RESUMES,
             files={"file": ("r.txt", _RESUME_TEXT, "text/plain")},
         ).json()["resume"]["id"]
-        _app.dependency_overrides[require_candidate_id] = lambda: OTHER
-        assert client.get(f"/api/v1/resumes/{rid}").status_code == 404
+        # The resume belongs to CANDIDATE; requesting it under OTHER's path
+        # scope yields 404 (ownership is the path-supplied candidate_id).
+        assert (
+            client.get(f"/api/v1/candidates/{OTHER}/resumes/{rid}").status_code == 404
+        )
 
 
 # ===========================================================================
@@ -385,10 +350,10 @@ class TestEvidenceRoutes:
         assert first.status_code == 200
         assert first.json()["was_change"] is True
         assert second.json()["was_change"] is False
-        # Audit recorded the real actor (the session user id), once.
+        # Audit recorded the fixed local actor (post login-removal), once.
         sink: ListEvidenceAuditSink = services["_audit_sink"]  # type: ignore[assignment]
         assert len(sink.events) == 1
-        assert sink.events[0].actor_id == str(USER_ID)
+        assert sink.events[0].actor_id == AUDIT_ACTOR
         assert sink.events[0].source_reference == "r1"
 
     def test_confirm_then_list_confirmed(self) -> None:

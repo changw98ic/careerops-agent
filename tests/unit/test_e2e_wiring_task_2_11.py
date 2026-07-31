@@ -5,10 +5,10 @@ Asserts the contract the runtime/app wiring promises to Section-3+ routes:
 1. ``RuntimeResources`` constructs the new Section-2 repos
    (profile/evidence/application_cycle) from the DB engine and exposes a
    shared ``capability_resolver`` — NO in-memory fallback.
-2. ``require_candidate_id`` resolves the candidate SERVER-SIDE from the
-   authenticated principal and rejects absent/None candidate links with
-   ``CandidateProfileRequiredError`` (403); ``reject_candidate_substitution``
-   blocks client-supplied substitution attempts.
+2. Candidate ownership for Section-3+ routes is the path-supplied
+   ``candidate_id`` (the session auth / ``require_candidate_id`` /
+   ``reject_candidate_substitution`` dependencies were removed — auth-rm
+   Task 9).
 3. ``require_capability`` routes external-effect projections through the
    Phase-0 resolver with Iron-Rule-3 precedence: dependency-not-ready (503)
    wins over capability denial (403), and a missing resolver is 503 (never a
@@ -16,7 +16,7 @@ Asserts the contract the runtime/app wiring promises to Section-3+ routes:
 4. ``require_repository`` surfaces a missing repo as ``DependencyNotReadyError``
    (503) rather than letting the route degrade silently.
 5. ``create_app`` exposes the new repos + resolver on ``app.state`` when the
-   probe is ``RuntimeResources``, and the existing review/auth surface is not
+   probe is ``RuntimeResources``, and the existing service wiring is not
    disturbed.
 """
 
@@ -25,27 +25,20 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import MagicMock
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import pytest
 
 import careerops.infrastructure.runtime as runtime
 from careerops.api.app import create_app
-from careerops.api.auth_dependency import (
-    reject_candidate_substitution,
-    require_candidate_id,
-)
 from careerops.api.capability_dependency import (
     require_capability,
     require_repository,
 )
 from careerops.api.errors import (
-    CandidateProfileRequiredError,
     DeniedPolicyError,
     DependencyNotReadyError,
 )
-from careerops.auth.contracts import AuthenticatedPrincipal
 from careerops.config import RuntimeEnvironment, Settings
 from careerops.infrastructure.database.postgres_application_cycle_repo import (
     PostgresApplicationCycleRepository,
@@ -63,25 +56,11 @@ from careerops.orchestration.capability_resolver import (
 )
 
 CANDIDATE_A = UUID("11111111-1111-1111-1111-111111111111")
-CANDIDATE_B = UUID("22222222-2222-2222-2222-222222222222")
 
 
 # ---------------------------------------------------------------------------
 # Test scaffolding
 # ---------------------------------------------------------------------------
-
-
-def _principal(*, candidate_id: UUID | None = CANDIDATE_A) -> AuthenticatedPrincipal:
-    return AuthenticatedPrincipal(
-        user_id=uuid4(),
-        username="owner",
-        session_id=uuid4(),
-        csrf_token_hash="hash",
-        absolute_expires_at=__import__("datetime").datetime.now(
-            tz=__import__("datetime").timezone.utc
-        ),
-        candidate_id=candidate_id,
-    )
 
 
 def _request_with_state(state: SimpleNamespace) -> Any:
@@ -146,55 +125,6 @@ async def test_runtime_resources_constructs_section2_repos(
     )
 
     await resources.close()
-
-
-# ---------------------------------------------------------------------------
-# 2. Server-side candidate resolution
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_require_candidate_id_returns_server_resolved_id() -> None:
-    """The dependency returns the candidate linked to the session, ignoring
-    anything a client might try to supply alongside it."""
-
-    resolved = await require_candidate_id(principal=_principal(candidate_id=CANDIDATE_A))
-    assert resolved == CANDIDATE_A
-
-
-@pytest.mark.asyncio
-async def test_require_candidate_id_rejects_missing_principal() -> None:
-    with pytest.raises(CandidateProfileRequiredError):
-        await require_candidate_id(principal=None)
-
-
-@pytest.mark.asyncio
-async def test_require_candidate_id_rejects_unlinked_user() -> None:
-    """A session whose user has no candidate link is 403, not a silent None."""
-
-    with pytest.raises(CandidateProfileRequiredError):
-        await require_candidate_id(principal=_principal(candidate_id=None))
-
-
-def test_reject_candidate_substitution_allows_absent_client_value() -> None:
-    # No client value supplied -> not a substitution attempt.
-    reject_candidate_substitution(provided=None, resolved=CANDIDATE_A)
-    reject_candidate_substitution(provided="", resolved=CANDIDATE_A)
-
-
-def test_reject_candidate_substitution_allows_matching_value() -> None:
-    reject_candidate_substitution(provided=str(CANDIDATE_A), resolved=CANDIDATE_A)
-    reject_candidate_substitution(provided=CANDIDATE_A, resolved=CANDIDATE_A)
-
-
-def test_reject_candidate_substitution_blocks_mismatch() -> None:
-    with pytest.raises(CandidateProfileRequiredError):
-        reject_candidate_substitution(provided=CANDIDATE_B, resolved=CANDIDATE_A)
-
-
-def test_reject_candidate_substitution_blocks_invalid_uuid() -> None:
-    with pytest.raises(CandidateProfileRequiredError):
-        reject_candidate_substitution(provided="not-a-uuid", resolved=CANDIDATE_A)
 
 
 # ---------------------------------------------------------------------------
@@ -285,13 +215,13 @@ def test_create_app_exposes_section2_repos_and_resolver() -> None:
     # create_app() builds a real RuntimeResources; the repos are constructed
     # from the engine (lazy — no connection at construction). We only assert
     # the wiring surface, so we don't need a live DB.
-    app = create_app(console_auth_service=MagicMock())
+    app = create_app()
     assert hasattr(app.state, "profile_repository")
     assert hasattr(app.state, "evidence_repository")
     assert hasattr(app.state, "application_cycle_repository")
     assert hasattr(app.state, "capability_resolver")
     assert isinstance(app.state.capability_resolver, SettingsCapabilityResolver)
-    # Existing review/demo wiring is preserved.
+    # Existing service wiring is preserved.
     assert app.state.application_repository is not None
     assert app.state.application_service is not None
 

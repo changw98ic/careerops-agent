@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 from careerops.api.app import create_app
 
 
-def _openapi(auth_service: MagicMock | None = None) -> dict:
-    app = create_app(console_auth_service=auth_service)
+def _openapi() -> dict:
+    # The console_auth_service parameter was removed with the session/CSRF
+    # auth layer (auth-rm Task 9); the error-response OpenAPI machinery is
+    # independent of it.
+    app = create_app()
     return app.openapi()
 
 

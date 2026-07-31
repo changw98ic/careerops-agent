@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime
 from typing import cast
 from uuid import UUID, uuid4
 
@@ -12,7 +11,6 @@ from fastapi.testclient import TestClient
 
 from careerops.api.app import create_app
 from careerops.application.ports.readiness import ReadinessReport, ReadinessState
-from careerops.auth.contracts import AuthenticatedPrincipal
 from careerops.config import RuntimeEnvironment, Settings
 from careerops.orchestration.capability_resolver import SettingsCapabilityResolver
 
@@ -38,28 +36,10 @@ class FixedReadinessProbe:
 def make_client() -> httpx2.Client:
     settings = Settings.model_validate({"environment": RuntimeEnvironment.TEST})
     app = create_app(settings, readiness_probe=FixedReadinessProbe())
-
-    class _StubAuth:
-        def authenticate(self, token: str, *, now: datetime) -> AuthenticatedPrincipal:
-            return AuthenticatedPrincipal(
-                user_id=TEST_CANDIDATE_ID,
-                username="test-user",
-                session_id=uuid4(),
-                csrf_token_hash="test-hash",
-                absolute_expires_at=now,
-                candidate_id=TEST_CANDIDATE_ID,
-            )
-
-        def validate_csrf(self, principal: AuthenticatedPrincipal, token: str) -> None:
-            return None
-
-    app.state.auth_service = _StubAuth()
-    app.state.web_settings = object()
+    # No session/CSRF auth anymore (auth-rm Task 9); the capability resolver
+    # stays wired for capability-gated routes.
     app.state.capability_resolver = SettingsCapabilityResolver(settings)
-    client = cast("httpx2.Client", TestClient(app))
-    client.cookies.set("careerops_session", "test-token")
-    client.headers["X-CSRF-Token"] = "test-csrf"
-    return client
+    return cast("httpx2.Client", TestClient(app))
 
 
 class TestCandidatesAPI:
@@ -74,19 +54,22 @@ class TestCandidatesAPI:
         response = make_client().get("/api/v1/candidates")
         assert response.headers["cache-control"] == "no-store"
 
-    def test_list_candidate_evidence_returns_empty_without_repository(self) -> None:
+    def test_list_candidate_evidence_503_without_service(self) -> None:
+        # The evidence route is the canonical evidence.py handler, which fails
+        # closed (503) when evidence_service is not wired (auth-rm Task 9
+        # removed the matching.py shadow that returned a bare empty list).
         candidate_id = str(TEST_CANDIDATE_ID)
         response = make_client().get(f"/api/v1/candidates/{candidate_id}/evidence")
-        assert response.status_code == 200
-        assert response.json() == []
+        assert response.status_code == 503
+        body = response.json()
+        assert body["error"]["code"] == "DEPENDENCY_NOT_READY"
 
 
 class TestEvidenceImportAPI:
     def test_import_evidence_returns_503_without_service(self) -> None:
         response = make_client().post(
-            "/api/v1/evidence/import",
+            f"/api/v1/candidates/{TEST_CANDIDATE_ID}/evidence/import",
             json={
-                "candidate_id": str(TEST_CANDIDATE_ID),
                 "kind": "skill",
                 "name": "Python",
             },
@@ -96,7 +79,7 @@ class TestEvidenceImportAPI:
 
 class TestMatchesAPI:
     def test_list_matches_returns_empty_without_repository(self) -> None:
-        response = make_client().get("/api/v1/matches")
+        response = make_client().get(f"/api/v1/candidates/{TEST_CANDIDATE_ID}/matches")
         assert response.status_code == 200
         data = response.json()
         assert data["items"] == []
@@ -104,11 +87,8 @@ class TestMatchesAPI:
 
     def test_run_match_returns_503_without_orchestrator(self) -> None:
         response = make_client().post(
-            "/api/v1/matches/run",
-            json={
-                "candidate_id": str(TEST_CANDIDATE_ID),
-                "canonical_job_id": str(uuid4()),
-            },
+            f"/api/v1/candidates/{TEST_CANDIDATE_ID}/matches/run",
+            json={"canonical_job_id": str(uuid4())},
         )
         assert response.status_code == 503
 

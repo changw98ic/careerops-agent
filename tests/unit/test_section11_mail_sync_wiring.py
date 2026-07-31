@@ -38,7 +38,7 @@ def _default_settings() -> Settings:
 
 def test_create_app_exposes_section11_mail_sync_service() -> None:
     """RuntimeResources wires MailSyncService + the three repos on app.state."""
-    app = create_app(console_auth_service=MagicMock())
+    app = create_app()
     assert hasattr(app.state, "mail_sync_service")
     assert app.state.mail_sync_service is not None
     assert app.state.mail_account_repository is not None

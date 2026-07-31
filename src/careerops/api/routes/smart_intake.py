@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Literal, cast
+from typing import Literal, cast
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Request, Response
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -18,7 +18,6 @@ from pydantic import (
     model_validator,
 )
 
-from careerops.api.auth_dependency import require_api_auth
 from careerops.api.errors import (
     CSRFRejectedError,
     DependencyNotReadyError,
@@ -30,9 +29,12 @@ from careerops.application.smart_intake import (
     SmartIntakeService,
     SmartPreviewResult,
 )
-from careerops.auth.contracts import AuthenticatedPrincipal
 from careerops.orchestration.capability_resolver import CapabilityKind
 from careerops.web.security import OriginHostValidator, RequestOriginRejected
+
+# Audit actor for the local single-user console (post login-removal). There is
+# no session principal; the smart-intake audit trail records this constant.
+AUDIT_ACTOR = "local"
 
 router = APIRouter(
     prefix="/api/v1/candidates/{candidate_id}/smart-intake", tags=["smart-intake"]
@@ -199,7 +201,6 @@ async def create_preview(
     request: Request,
     response: Response,
     candidate_id: UUID,
-    principal: Annotated[AuthenticatedPrincipal | None, Depends(require_api_auth)],
 ) -> SmartIntakePreviewResponse:
     _authorize(request, candidate_id, consume_rate_limit=True)
     service = _service(request)
@@ -229,7 +230,7 @@ async def create_preview(
                 tuple(body.interview_refs.evidence_ids) if body.interview_refs is not None else ()
             ),
         ),
-        actor_id=str(principal.user_id) if principal is not None else str(candidate_id),
+        actor_id=AUDIT_ACTOR,
     )
     response.headers["Cache-Control"] = "no-store"
     return _to_response(result)
@@ -257,7 +258,6 @@ async def apply_preview(
     request: Request,
     response: Response,
     candidate_id: UUID,
-    principal: Annotated[AuthenticatedPrincipal | None, Depends(require_api_auth)],
 ) -> SmartIntakePreviewResponse:
     _authorize(request, candidate_id, consume_rate_limit=False)
     decisions = tuple(
@@ -276,7 +276,7 @@ async def apply_preview(
         context_digest=body.context_digest,
         decision_set_hash=body.decision_set_hash,
         decisions=decisions,
-        actor_id=str(principal.user_id) if principal is not None else str(candidate_id),
+        actor_id=AUDIT_ACTOR,
     )
     response.headers["Cache-Control"] = "no-store"
     return _to_response(result)

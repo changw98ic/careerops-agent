@@ -5,10 +5,9 @@ from contextlib import asynccontextmanager
 from typing import Any, cast
 from uuid import UUID
 
-from fastapi import Depends, FastAPI
+from fastapi import FastAPI
 
 from careerops import __version__
-from careerops.api.auth_dependency import require_api_auth
 from careerops.api.errors import install_error_handlers
 from careerops.api.metrics_middleware import MetricsMiddleware
 from careerops.api.middleware import RequestIdMiddleware
@@ -35,11 +34,9 @@ from careerops.api.routes.notifications import router as notifications_router
 from careerops.api.routes.profile import router as profile_router
 from careerops.api.routes.reply_drafts import router as reply_drafts_router
 from careerops.api.routes.resumes import router as resumes_router
-from careerops.api.routes.review import install_review_endpoint
 from careerops.api.routes.smart_intake import router as smart_intake_router
 from careerops.api.routes.system_send import router as system_send_router
 from careerops.application.ports.readiness import ReadinessProbe
-from careerops.auth.service import ConsoleAuthService
 from careerops.config import RuntimeEnvironment, Settings, get_settings
 from careerops.domain.applications import (
     ApplicationPackage,
@@ -47,7 +44,6 @@ from careerops.domain.applications import (
     ResumeVersion,
 )
 from careerops.domain.email_payloads import EmailAccountSummary
-from careerops.infrastructure.auth import create_console_auth_service
 from careerops.infrastructure.database.postgres_application_repo import (
     PostgresApplicationRepository,
 )
@@ -55,8 +51,6 @@ from careerops.infrastructure.memory_repos import InMemoryApplicationRepository
 from careerops.infrastructure.redis import RedisAuthRateLimiter
 from careerops.infrastructure.runtime import RuntimeResources
 from careerops.observability import Metrics
-from careerops.web import ConsoleWebSettings
-from careerops.web.security import ConsoleSecurityHeadersMiddleware
 
 # ---------------------------------------------------------------------------
 # Protocol adapters for InMemoryApplicationRepository
@@ -170,7 +164,6 @@ def create_app(
     settings: Settings | None = None,
     *,
     readiness_probe: ReadinessProbe | None = None,
-    console_auth_service: ConsoleAuthService | None = None,
 ) -> FastAPI:
     resolved = settings or get_settings()
     # Create metrics first so it can be wired into the runtime's graph
@@ -180,12 +173,6 @@ def create_app(
         probe = readiness_probe
     else:
         probe = RuntimeResources(resolved, metrics=metrics)
-    auth_service = console_auth_service
-    if auth_service is None and isinstance(probe, RuntimeResources):
-        auth_service = create_console_auth_service(
-            probe.database,
-            rate_limiter=RedisAuthRateLimiter(probe.redis_sync),
-        )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
@@ -216,7 +203,6 @@ def create_app(
     )
     app.state.settings = resolved
     app.state.readiness_probe = probe
-    app.state.auth_service = auth_service
     app.state.metrics = metrics
     app.state.career_loop_trace = metrics.trace
 
@@ -598,120 +584,77 @@ def create_app(
     install_error_handlers(app)
     app.include_router(health_router)
     app.include_router(metrics_router)
-    # auth-rm Task 2: global candidate CRUD routes (list / create / detail).
-    # Mounted without ``require_api_auth`` because the console login is being
-    # removed; the candidate surface is the new global management endpoint and
-    # fails closed (503) via ``_service`` when the service is not wired.
+    # auth-rm: global candidate CRUD routes (list / create / detail). The
+    # console login is removed, so no router carries a session/CSRF auth
+    # dependency; the candidate surface fails closed (503) via ``_service``
+    # when the service is not wired.
     app.include_router(candidates_router)
 
-    # Build the browser-origin settings once for the API auth and CSRF gates.
-    web_settings: ConsoleWebSettings | None = None
-    if auth_service is not None:
-        web_settings = ConsoleWebSettings(
-            allowed_hosts=frozenset(resolved.console_allowed_hosts),
-            allowed_origins=frozenset(resolved.console_allowed_origins),
-            cookie_secure=resolved.console_cookie_secure,
-        )
-        app.state.web_settings = web_settings
-        app.add_middleware(ConsoleSecurityHeadersMiddleware)
-
-    # Auth API for the separate Vue frontend (session/login/bootstrap/logout).
-    from careerops.web.api_auth import router as auth_router
-
-    app.include_router(auth_router)
-
-    # Protected API routers — require session cookie + CSRF header.
-    app.include_router(jobs_router, dependencies=[Depends(require_api_auth)])
-    app.include_router(matching_router, dependencies=[Depends(require_api_auth)])
-    app.include_router(applications_router, dependencies=[Depends(require_api_auth)])
+    # All routers are mounted WITHOUT the former ``require_api_auth`` guard —
+    # the console login / session / CSRF layer was removed (auth-rm Task 9).
+    # Per-candidate identity comes from the ``{candidate_id}`` path parameter;
+    # global routes (jobs, matches, contacts, candidates) are public API.
+    app.include_router(jobs_router)
+    app.include_router(matching_router)
+    app.include_router(applications_router)
     # Global recruiting-contact catalog (company-scoped, not per-candidate).
-    app.include_router(contacts_router, dependencies=[Depends(require_api_auth)])
-    # Section-3 additive routers (profile / resumes / evidence). Same auth
-    # guard as the existing v1 routers; candidate ownership is resolved
-    # server-side inside each handler via ``require_candidate_id``.
-    app.include_router(profile_router, dependencies=[Depends(require_api_auth)])
-    app.include_router(resumes_router, dependencies=[Depends(require_api_auth)])
-    app.include_router(smart_intake_router, dependencies=[Depends(require_api_auth)])
-    app.include_router(evidence_router, dependencies=[Depends(require_api_auth)])
-    # Section-4 additive routers (crawl sources / plans / runs). Same auth
-    # guard as the existing v1 routers; candidate ownership is resolved
-    # server-side inside each handler via ``require_candidate_id``. The
-    # CRAWL_PLAN_MANAGEMENT capability gate is composed inside each router.
-    app.include_router(crawl_sources_router, dependencies=[Depends(require_api_auth)])
-    app.include_router(crawl_plans_router, dependencies=[Depends(require_api_auth)])
-    app.include_router(crawl_runs_router, dependencies=[Depends(require_api_auth)])
-    app.include_router(crawl_permissions_router, dependencies=[Depends(require_api_auth)])
-    # Section-6 inbox router (tasks 6.7-6.8). Per-candidate path-param router
-    # (candidate_id in the path); same auth guard. Additive — no existing
-    # routes broken.
-    app.include_router(inbox_router, dependencies=[Depends(require_api_auth)])
-    app.include_router(agent_runs_router, dependencies=[Depends(require_api_auth)])
-    app.include_router(agent_console_router, dependencies=[Depends(require_api_auth)])
-    # Phase 9: notification routes (SSE stream + recovery).  Per-candidate
-    # path-param router; the SSE endpoint uses cookie auth without CSRF
-    # (GET-only, EventSource sends cookies).
-    app.include_router(notifications_router, dependencies=[Depends(require_api_auth)])
+    app.include_router(contacts_router)
+    # Section-3 additive routers (profile / resumes / evidence). Candidate
+    # identity comes from the URL path parameter.
+    app.include_router(profile_router)
+    app.include_router(resumes_router)
+    app.include_router(smart_intake_router)
+    app.include_router(evidence_router)
+    # Section-4 additive routers (crawl sources / plans / runs). Candidate
+    # identity comes from the URL path parameter; the CRAWL_PLAN_MANAGEMENT
+    # capability gate is composed inside each router.
+    app.include_router(crawl_sources_router)
+    app.include_router(crawl_plans_router)
+    app.include_router(crawl_runs_router)
+    app.include_router(crawl_permissions_router)
+    # Section-6 inbox router (tasks 6.7-6.8). Per-candidate path-param router.
+    app.include_router(inbox_router)
+    app.include_router(agent_runs_router)
+    app.include_router(agent_console_router)
+    # Phase 9: notification routes (SSE stream + recovery). Per-candidate
+    # path-param router.
+    app.include_router(notifications_router)
     # Section-7 application-workspace router (tasks 7.8). Additive paths only
     # (detail / prepare / channels / channel / package / timeline /
-    # confirm-external-submission / state); the M3 application routes are
-    # untouched. Same auth guard; candidate ownership resolved server-side.
-    app.include_router(application_workspace_router, dependencies=[Depends(require_api_auth)])
+    # confirm-external-submission / state); candidate ownership resolved from
+    # the path.
+    app.include_router(application_workspace_router)
     # Section-9 email-payload router (tasks 9.1, 9.6). Additive paths only
     # (recruiting-contacts list + submission-preview). Performs NO provider
-    # side effects (the actual send is Section 10). Same auth guard; candidate
-    # ownership resolved server-side; responses carry Cache-Control: no-store.
-    app.include_router(email_payloads_router, dependencies=[Depends(require_api_auth)])
+    # side effects (the actual send is Section 10); responses carry
+    # Cache-Control: no-store.
+    app.include_router(email_payloads_router)
     # Section-10 system-managed-send router (tasks 10.1-10.8, 10.11). Additive
     # paths only (confirm / status / reconcile); gated on the
     # SYSTEM_MANAGED_SEND capability which stays DENIED at the contract layer.
-    # Same auth guard; candidate ownership resolved server-side.
-    app.include_router(system_send_router, dependencies=[Depends(require_api_auth)])
+    app.include_router(system_send_router)
     # Section-12 mail-intelligence router (tasks 12.5-12.6). Per-candidate
     # path-param router; additive paths only (extract/proposal, list, get,
     # accept, reject). Proposals are review-only; application state changes
     # ONLY through the USER-sourced transition path on acceptance (Iron Rule
-    # 2). Same auth guard (CSRF on mutations); candidate_id in the path;
-    # responses carry Cache-Control: no-store.
-    app.include_router(mail_intelligence_router, dependencies=[Depends(require_api_auth)])
+    # 2); responses carry Cache-Control: no-store.
+    app.include_router(mail_intelligence_router)
     # Section-11 Gmail read-sync router (tasks 11.7, 11.10). Per-candidate
-    # path-param router; additive paths only (account status / sync-now /
-    # sync history / threads / messages / unresolved links / confirm link).
-    # Gated on the GMAIL_READ capability, which stays DENIED at the contract
-    # layer until a separate qualification change releases it (Iron Rule 7).
-    # Same auth guard (CSRF on mutations); candidate_id in the path;
-    # responses carry Cache-Control: no-store and bounded cursor pagination.
-    app.include_router(mail_sync_router, dependencies=[Depends(require_api_auth)])
+    # path-param router; additive paths only. Gated on the GMAIL_READ
+    # capability, which stays DENIED at the contract layer until a separate
+    # qualification change releases it (Iron Rule 7); responses carry
+    # Cache-Control: no-store and bounded cursor pagination.
+    app.include_router(mail_sync_router)
     # Section-13 reply-draft + follow-up router (tasks 13.7-13.8, 13.10).
-    # Additive paths only (draft list/detail/create/edit/approve/reject/send +
-    # follow-up schedule/snooze/reschedule/cancel/complete). Drafts are
-    # review-only; only an approved low-risk reply may be sent via the reused
-    # Section 10 chain (separately gated). High-risk categories are permanently
-    # denied system send; auto-send is permanently denied. Same auth guard
-    # (CSRF on mutations); candidate ownership resolved server-side; responses
-    # carry Cache-Control: no-store and bounded cursor pagination.
-    app.include_router(reply_drafts_router, dependencies=[Depends(require_api_auth)])
+    # Additive paths only. Drafts are review-only; high-risk categories are
+    # permanently denied system send; auto-send is permanently denied;
+    # responses carry Cache-Control: no-store and bounded cursor pagination.
+    app.include_router(reply_drafts_router)
 
-    # Review endpoint (plan v0.4 §2.7 / §3 Stage 3): mounted when the runtime
-    # actually compiled the graph (durable in PRODUCTION via
-    # PostgresSaver + PostgresSideEffectStore, in-memory otherwise).
-    if (
-        auth_service is not None
-        and web_settings is not None
-        and resolved.environment is not RuntimeEnvironment.PRODUCTION
-        and isinstance(probe, RuntimeResources)
-        and probe.career_graph is not None
-        and probe.review_mapping is not None
-        and probe.side_effect_kernel is not None
-    ):
-        install_review_endpoint(
-            app,
-            auth_service=auth_service,
-            rate_limiter=RedisAuthRateLimiter(probe.redis_sync),
-            review_mapping=probe.review_mapping,
-            career_graph=probe.career_graph,
-            side_effect_kernel=probe.side_effect_kernel,
-            web_settings=web_settings,
-        )
+    # The review endpoint (plan v0.4 §2.7 / §3 Stage 3) is NOT mounted here
+    # anymore: it was the last consumer of the session/CSRF auth stack being
+    # removed (auth-rm Task 9). Task 10 re-adapts install_review_endpoint to
+    # the post-login world and re-mounts it.
     # -----------------------------------------------------------------------
     # OpenAPI: declare standard error responses on every path
     # -----------------------------------------------------------------------

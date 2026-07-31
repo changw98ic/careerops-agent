@@ -5,13 +5,12 @@
 from __future__ import annotations
 
 from datetime import UTC
-from typing import Annotated, Any
+from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi import APIRouter, Query, Request, Response
 from pydantic import BaseModel, Field
 
-from careerops.api.auth_dependency import reject_candidate_substitution, require_candidate_id
 from careerops.api.errors import DependencyNotReadyError, NotFoundError
 
 router = APIRouter(prefix="/api/v1", tags=["matching"])
@@ -92,7 +91,6 @@ class CompensationResponse(BaseModel):
 
 
 class EvidenceImportRequest(BaseModel):
-    candidate_id: str
     kind: str
     name: str
     description: str = ""
@@ -104,7 +102,6 @@ class EvidenceImportRequest(BaseModel):
 
 
 class MatchRequest(BaseModel):
-    candidate_id: str
     canonical_job_id: str
 
 
@@ -136,64 +133,31 @@ async def list_candidates(
     return CandidateListResponse(items=items, total=len(items))
 
 
-@router.get(
-    "/candidates/{candidate_id}/evidence",
-    response_model=list[EvidenceItemResponse],
-    summary="List candidate evidence",
-)
-async def list_candidate_evidence(
-    candidate_id: UUID,
-    request: Request,
-    response: Response,
-) -> list[EvidenceItemResponse]:
-    response.headers["Cache-Control"] = "no-store"
-    repo = _get_matching_repository(request)
-    if repo is None:
-        return []
-    items = repo.list_evidence(str(candidate_id))
-    return [
-        EvidenceItemResponse(
-            id=str(e["id"]),
-            candidate_id=str(e["candidate_id"]),
-            kind=e["kind"],
-            name=e["name"],
-            description=e.get("description", ""),
-            repository=e.get("repository", ""),
-            commit_sha=e.get("commit_sha", ""),
-            path=e.get("path", ""),
-            symbol=e.get("symbol", ""),
-            verified=e.get("verified", False),
-        )
-        for e in items
-    ]
-
-
 @router.post(
-    "/evidence/import",
+    "/candidates/{candidate_id}/evidence/import",
     response_model=EvidenceItemResponse,
     status_code=201,
     summary="Import candidate evidence",
 )
 async def import_evidence(
+    candidate_id: UUID,
     body: EvidenceImportRequest,
     request: Request,
     response: Response,
-    resolved_candidate_id: Annotated[UUID, Depends(require_candidate_id)],
 ) -> EvidenceItemResponse:
     response.headers["Cache-Control"] = "no-store"
-    reject_candidate_substitution(provided=body.candidate_id, resolved=resolved_candidate_id)
     service = _get_evidence_service(request)
     if service is None:
         response.status_code = 503
         return EvidenceItemResponse(
-            id="", candidate_id=str(resolved_candidate_id), kind=body.kind, name=body.name
+            id="", candidate_id=str(candidate_id), kind=body.kind, name=body.name
         )
     from careerops.application.matching import EvidenceImportRequest as ServiceRequest
     from careerops.domain.candidates import EvidenceKind
 
     result = service.import_evidence(
         ServiceRequest(
-            candidate_id=resolved_candidate_id,
+            candidate_id=candidate_id,
             kind=EvidenceKind(body.kind),
             name=body.name,
             description=body.description,
@@ -247,26 +211,24 @@ async def get_remote_eligibility(
 
 
 @router.get(
-    "/matches",
+    "/candidates/{candidate_id}/matches",
     response_model=MatchListResponse,
     summary="List match results",
 )
 async def list_matches(
+    candidate_id: UUID,
     request: Request,
     response: Response,
-    resolved_candidate_id: Annotated[UUID, Depends(require_candidate_id)],
-    candidate_id: str | None = Query(default=None),
     canonical_job_id: str | None = Query(default=None),
     cursor: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> MatchListResponse:
     response.headers["Cache-Control"] = "no-store"
-    reject_candidate_substitution(provided=candidate_id, resolved=resolved_candidate_id)
     repo = _get_matching_repository(request)
     if repo is None:
         return MatchListResponse(items=[], total=0)
     matches = repo.list_matches(
-        candidate_id=str(resolved_candidate_id),
+        candidate_id=str(candidate_id),
         canonical_job_id=canonical_job_id,
         cursor=cursor,
         limit=limit,
@@ -300,25 +262,24 @@ async def list_matches(
 
 
 @router.post(
-    "/matches/run",
+    "/candidates/{candidate_id}/matches/run",
     response_model=MatchResultResponse,
     status_code=201,
     summary="Run matching for a candidate against a job",
 )
 async def run_match(
+    candidate_id: UUID,
     body: MatchRequest,
     request: Request,
     response: Response,
-    resolved_candidate_id: Annotated[UUID, Depends(require_candidate_id)],
 ) -> MatchResultResponse:
     response.headers["Cache-Control"] = "no-store"
-    reject_candidate_substitution(provided=body.candidate_id, resolved=resolved_candidate_id)
     orchestrator = _get_match_orchestrator(request)
     if orchestrator is None:
         response.status_code = 503
         return MatchResultResponse(
             id="",
-            candidate_id=str(resolved_candidate_id),
+            candidate_id=str(candidate_id),
             canonical_job_id=body.canonical_job_id,
             tier="not_recommended",
             overall_score=0.0,
@@ -326,7 +287,7 @@ async def run_match(
     from datetime import datetime
 
     result = orchestrator.run_match_for_request(
-        candidate_id=resolved_candidate_id,
+        candidate_id=candidate_id,
         canonical_job_id=_parse_uuid(body.canonical_job_id),
         now=datetime.now(tz=UTC),
     )

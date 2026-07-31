@@ -24,8 +24,9 @@ security invariants those files do not exercise:
 - **3.7 model-input minimization**: when the capability IS released, the model
   input contains EXACTLY the selected CONFIRMED evidence + a bounded job
   excerpt, and every forbidden input is recorded as denied egress.
-- **Ownership**: ``reject_candidate_substitution`` denies mismatched client
-  ids; each Section-3 route surface surfaces 503 when its service is missing.
+- **Ownership**: ownership is the path-supplied candidate id (the session
+  auth was removed — auth-rm Task 9); each Section-3 route surface surfaces 503
+  when its service is missing.
 """
 
 from __future__ import annotations
@@ -38,14 +39,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from careerops.api.auth_dependency import (
-    reject_candidate_substitution,
-    require_api_auth,
-    require_candidate_id,
-)
 from careerops.api.capability_dependency import require_repository
 from careerops.api.errors import (
-    CandidateProfileRequiredError,
     DependencyNotReadyError,
     InvalidStateError,
     NotFoundError,
@@ -76,7 +71,6 @@ from careerops.application.resume_service import (
     ResumeRegistrationRequest,
     ResumeService,
 )
-from careerops.auth.contracts import AuthenticatedPrincipal
 from careerops.config import RuntimeEnvironment, Settings
 from careerops.domain.applications import (
     ConfirmationStatus,
@@ -97,7 +91,6 @@ from careerops.orchestration.capability_resolver import SettingsCapabilityResolv
 
 CANDIDATE = UUID("11111111-1111-1111-1111-111111111111")
 OTHER = UUID("22222222-2222-2222-2222-222222222222")
-USER_ID = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 
 
 # ---------------------------------------------------------------------------
@@ -241,21 +234,9 @@ def _seed_evidence(
     return repo.store(item).id
 
 
-def _principal() -> AuthenticatedPrincipal:
-    return AuthenticatedPrincipal(
-        user_id=USER_ID,
-        username="owner",
-        session_id=uuid4(),
-        csrf_token_hash="hash",
-        absolute_expires_at=datetime.now(tz=UTC),
-        candidate_id=CANDIDATE,
-    )
-
-
 def _build_app(
     *,
     wire_services: bool = True,
-    candidate_id: UUID | None = CANDIDATE,
 ) -> tuple[FastAPI, TestClient, dict[str, object]]:
     """Build a Section-3 test app. When ``wire_services`` is False the services
     are omitted from ``app.state`` so routes surface 503."""
@@ -280,14 +261,6 @@ def _build_app(
             if not key.startswith("_"):
                 setattr(app.state, key, value)
 
-    app.dependency_overrides[require_api_auth] = lambda: _principal()
-
-    def _resolve_candidate() -> UUID:
-        if candidate_id is None:
-            raise CandidateProfileRequiredError()
-        return candidate_id
-
-    app.dependency_overrides[require_candidate_id] = _resolve_candidate
     return app, TestClient(app), services
 
 
@@ -890,32 +863,11 @@ class TestModelInputMinimization:
 
 
 # ===========================================================================
-# Ownership — candidate substitution + 503 dependency-not-ready
+# Ownership — path-scoped candidate + 503 dependency-not-ready
 # ===========================================================================
 
 
 class TestCandidateOwnership:
-    def test_reject_candidate_substitution_mismatch(self) -> None:
-        with pytest.raises(CandidateProfileRequiredError):
-            reject_candidate_substitution(provided=str(OTHER), resolved=CANDIDATE)
-
-    def test_reject_candidate_substitution_mismatch_uuid(self) -> None:
-        with pytest.raises(CandidateProfileRequiredError):
-            reject_candidate_substitution(provided=OTHER, resolved=CANDIDATE)
-
-    def test_reject_candidate_substitution_invalid_uuid(self) -> None:
-        with pytest.raises(CandidateProfileRequiredError):
-            reject_candidate_substitution(provided="not-a-uuid", resolved=CANDIDATE)
-
-    def test_reject_candidate_substitution_allows_none_and_empty(self) -> None:
-        # "Not supplied" is not a substitution; the server-resolved id wins.
-        reject_candidate_substitution(provided=None, resolved=CANDIDATE)
-        reject_candidate_substitution(provided="", resolved=CANDIDATE)
-
-    def test_reject_candidate_substitution_allows_match(self) -> None:
-        reject_candidate_substitution(provided=str(CANDIDATE), resolved=CANDIDATE)
-        reject_candidate_substitution(provided=CANDIDATE, resolved=CANDIDATE)
-
     def test_require_repository_raises_dependency_not_ready_when_missing(self) -> None:
         """Unit-level pin of the 503 helper: a missing service name raises
         DependencyNotReadyError (Iron Rule 2)."""
@@ -941,14 +893,14 @@ class TestRouteDependencyNotReady:
 
     def test_resumes_route_503_when_service_missing(self) -> None:
         _app, client, _services = _build_app(wire_services=False)
-        resp = client.get("/api/v1/resumes")
+        resp = client.get(f"/api/v1/candidates/{CANDIDATE}/resumes")
         assert resp.status_code == 503
         assert resp.json()["error"]["code"] == "DEPENDENCY_NOT_READY"
 
     def test_resumes_register_503_when_service_missing(self) -> None:
         _app, client, _services = _build_app(wire_services=False)
         resp = client.post(
-            "/api/v1/resumes",
+            f"/api/v1/candidates/{CANDIDATE}/resumes",
             files={"file": ("r.txt", _resume_text(), "text/plain")},
         )
         assert resp.status_code == 503
@@ -960,27 +912,18 @@ class TestRouteDependencyNotReady:
         assert resp.status_code == 503
         assert resp.json()["error"]["code"] == "DEPENDENCY_NOT_READY"
 
-    def test_missing_principal_is_403(self) -> None:
-        """No server-resolved candidate -> 403, not 503 and never a silent
-        unscoped read. Profile/evidence now take candidate_id from the path
-        (no session principal), so this 403 is pinned against the resumes
-        router which still resolves its candidate server-side via
-        require_candidate_id."""
-        _app, client, _services = _build_app(candidate_id=None)
-        resp = client.get("/api/v1/resumes")
-        assert resp.status_code == 403
-        assert resp.json()["error"]["code"] == "CANDIDATE_PROFILE_REQUIRED"
-
     def test_resumes_cross_candidate_is_404(self) -> None:
-        """A resume registered by CANDIDATE is invisible to OTHER: swapping the
-        server-resolved candidate yields 404 (ownership scoping)."""
+        """A resume registered by CANDIDATE is invisible to OTHER: requesting
+        it under OTHER's path scope yields 404 (ownership is the path-supplied
+        candidate id)."""
         _app, client, _services = _build_app()
         rid = client.post(
-            "/api/v1/resumes",
+            f"/api/v1/candidates/{CANDIDATE}/resumes",
             files={"file": ("r.txt", _resume_text(), "text/plain")},
         ).json()["resume"]["id"]
-        _app.dependency_overrides[require_candidate_id] = lambda: OTHER
-        assert client.get(f"/api/v1/resumes/{rid}").status_code == 404
+        assert (
+            client.get(f"/api/v1/candidates/{OTHER}/resumes/{rid}").status_code == 404
+        )
 
     def test_evidence_cross_candidate_confirm_is_404(self) -> None:
         _app, client, services = _build_app()

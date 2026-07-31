@@ -225,25 +225,34 @@ class TestSSEChannel:
 
 
 class TestNotificationRoutes:
-    def test_pending_endpoint_is_auth_gated(self) -> None:
-        """The notification endpoints require authentication."""
+    def test_pending_endpoint_is_public(self) -> None:
+        """The recovery endpoint is public (the session/CSRF auth gate was
+        removed — auth-rm Task 9). candidate_id comes from the path."""
         from careerops.api.app import create_app
 
         app = create_app()
         client = TestClient(app, raise_server_exceptions=False)
-        # No session cookie -> 401 (auth is required). candidate_id is now part
-        # of the path (per-candidate path-param migration).
         resp = client.get(f"/api/v1/candidates/{uuid4()}/notifications")
-        assert resp.status_code == 401
+        assert resp.status_code == 200
+        assert resp.json() == {"items": [], "count": 0}
 
-    def test_stream_endpoint_is_auth_gated(self) -> None:
-        """The SSE stream endpoint requires authentication."""
+    def test_stream_endpoint_is_public(self) -> None:
+        """The SSE stream endpoint is public (no session gate anymore).
+
+        The stream path is verified through the OpenAPI spec rather than an
+        actual streamed request: the endpoint never terminates (heartbeat
+        keepalives forever), so any HTTP client request against it blocks
+        indefinitely in this environment (starlette 1.x TestClient cannot
+        complete a request to an infinite stream).
+        """
         from careerops.api.app import create_app
 
         app = create_app()
         client = TestClient(app, raise_server_exceptions=False)
-        resp = client.get(f"/api/v1/candidates/{uuid4()}/notifications/stream")
-        assert resp.status_code == 401
+        spec = client.get("/api/v1/openapi.json").json()
+        paths = spec["paths"]
+        assert "/api/v1/candidates/{candidate_id}/notifications/stream" in paths
+        assert "/api/v1/candidates/{candidate_id}/notifications" in paths
 
     def test_notification_service_wired_on_app_state(self) -> None:
         """Verify NotificationService is wired on app.state in create_app."""

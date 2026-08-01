@@ -1,0 +1,107 @@
+"""Pydantic models for crawl recipes.
+
+A recipe is the declarative description of how to crawl one ATS source type:
+where to fetch, how to extract structured job fields from the response, and
+how to merge multi-step results. The shape is intentionally permissive
+(strings rather than enums for source identifiers) so new ATS sources can be
+onboarded by authoring YAML rather than editing code; only the fields that
+have a fixed vocabulary (``executor_mode``, HTTP ``method``, extract
+``mode``, ``transform``, ``fallback``) are constrained with ``Literal``.
+
+The class name ``Field_`` (trailing underscore) avoids shadowing
+:func:`pydantic.Field` which is used to declare defaults on the same module.
+"""
+
+from __future__ import annotations
+
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+
+class Match(BaseModel):
+    """URL routing match for a recipe."""
+
+    url_patterns: list[str] = Field(default_factory=list)
+    host_suffix: str = ""
+
+
+class Fetch(BaseModel):
+    """HTTP fetch descriptor for a step."""
+
+    endpoint: str
+    method: Literal["GET", "POST"] = "GET"
+    headers: dict[str, str] = Field(default_factory=dict)
+    body: str | None = None
+    pagination: dict[str, str] = Field(default_factory=dict)
+
+
+class Field_(BaseModel):
+    """A single extracted field within an :class:`Extract` block.
+
+    ``path`` is interpreted by the executor relative to each matched item
+    (e.g. ``"title"`` resolves to ``item["title"]`` for json_path mode); it is
+    intentionally *not* a full JSONPath expression and is therefore not
+    statically validated by the loader. ``fallback`` paths are tried in order
+    when ``path`` misses. ``transform`` is applied to the resolved value
+    before it is written into the posting record.
+    """
+
+    model_config = {"populate_by_name": True}
+    path: str
+    fallback: list[str] = Field(default_factory=list)
+    transform: Literal["html_unescape", "none"] = "none"
+
+
+class Filter(BaseModel):
+    """A JSONPath filter condition applied to extracted items.
+
+    ``jsonpath`` holds the *condition* only (the fragment that sits inside an
+    RFC 9535 filter selector), e.g. ``@.type=='JobPosting'``. ``@`` refers to
+    the current item. String literals must be **single-quoted** (this is what
+    python-jsonpath 2.2.1 accepts; bare identifiers are treated as syntax
+    errors). At load time the loader wraps the condition as
+    ``$[?({filter.jsonpath})]`` for a syntax-only dry-parse; at run time the
+    executor applies the same wrapped form to each item's data (see Task 5).
+    """
+
+    jsonpath: str  # condition, e.g. "@.type=='JobPosting'"; wrapped as $[?({...})]
+
+
+class Extract(BaseModel):
+    """Extraction strategy for a step's response body."""
+
+    mode: Literal["json_path", "json_ld", "sitemap", "css"]
+    items_path: str | None = None
+    fields: dict[str, Field_] = Field(default_factory=dict)
+    filter: Filter | None = None
+    url_filter: str | None = None  # sitemap only
+
+
+class Merge(BaseModel):
+    """How multi-step field values are merged into one posting."""
+
+    strategy: Literal["overwrite_empty", "overwrite_all", "keep_first"] = "overwrite_empty"
+
+
+class Step(BaseModel):
+    """A single fetch+extract stage within a recipe."""
+
+    id: str
+    when: str | None = None
+    foreach: str | None = None
+    fetch: Fetch
+    extract: Extract
+    merge: Merge | None = None
+
+
+class Recipe(BaseModel):
+    """A complete crawl recipe for one ATS source type."""
+
+    recipe_version: str
+    source_type: str
+    executor_mode: Literal["http", "ego"] = "http"
+    match: Match
+    steps: list[Step]
+    rate_limit: dict[str, int] = Field(default_factory=dict)
+    fallback: Literal["llm_skill", "none"] = "llm_skill"

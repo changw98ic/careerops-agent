@@ -1,5 +1,5 @@
-"""Recipe evaluator: single-step extract (Task 3) and multi-step orchestration
-(Task 4 — ``steps`` / ``when`` / ``foreach`` / ``merge``).
+"""Recipe evaluator: single-step extract (Tasks 3 + 5) and multi-step
+orchestration (Task 4 — ``steps`` / ``when`` / ``foreach`` / ``merge``).
 
 This module is the run-time counterpart of the declarative schema in
 :mod:`careerops.recipes.schema`. It takes declarative blocks and parsed HTTP
@@ -9,39 +9,70 @@ record.
 
 Public entry points:
 
-* :func:`evaluate_extract` — single-step: locate the item list via
-  ``extract.items_path`` (a JSONPath evaluated against ``data``), then resolve
-  every declared field against each item.
+* :func:`evaluate_extract` — single-step: dispatch on ``extract.mode``:
+
+  - ``json_path`` (Task 3): locate the item list via ``items_path`` (a
+    JSONPath evaluated against ``data``), then resolve every declared field
+    against each item.
+  - ``json_ld`` (Task 5): parse embedded JSON-LD ``<script>`` blocks via
+    ``extruct`` and apply ``extract.filter`` per item.
+  - ``sitemap`` (Task 5): parse an XML sitemap with an XXE guard and an
+    optional ``url_filter`` regex.
+  - ``css`` (Task 5): run each ``Field_.path`` as a CSS selector and zip
+    columns by index.
+
 * :func:`apply_field` — resolve a single :class:`Field_` against an item: walk
   ``[field.path, *field.fallback]`` in order and return the first non-empty
   JSONPath match (stringified), optionally unescaped.
 * :func:`run_steps` — multi-step: drive a recipe's ``steps`` in order with
   ``when`` gating, ``foreach`` per-item fetching and ``merge`` strategies.
 
-Non-``json_path`` modes are out of scope for Tasks 3/4 and raise
-:class:`NotImplementedError`; they arrive with the json_ld / sitemap / css
-executors in later tasks.
+Filter semantics (Task 5). RFC 9535 filters ``$[?(...)]`` only apply over
+*arrays* — applied to a single object item, python-jsonpath 2.2.1 returns
+``[]`` (verified). The json_ld executor therefore **wraps each item dict in a
+single-element array** ``[item]`` before evaluating the filter, so a per-item
+condition yields a non-empty match list when the item qualifies. The filter
+fragment is the raw condition (e.g. ``@['@type']=='JobPosting'``); the
+executor wraps it as ``$[?({filter.jsonpath})]``.
 
-Filter evaluation (``extract.filter``) is deferred to Task 5. RFC 9535
-filters ``$[?(...)]`` only apply over *arrays* — applied to a single object
-item, python-jsonpath 2.2.1 returns ``[]`` (verified). The per-item
-evaluation semantics plus the ``?()``-correct wrapping are intertwined with
-json_ld mode, where filter is a core feature, so both are solved together in
-Task 5. ``evaluate_extract`` in json_path mode therefore ignores
-``extract.filter`` today.
+Two notes on JSON-LD key access (verified against python-jsonpath 2.2.1):
+
+* ``@.type`` accesses the literal key ``type``. To reach the schema.org
+  ``@type`` key, use the bracket form ``@['@type']``.
+* String literals inside the filter must be **single-quoted**; bareword
+  identifiers raise ``JSONPathSyntaxError``.
+
+``evaluate_extract`` in ``json_path`` mode ignores ``extract.filter`` — the
+filter only makes sense for json_ld's per-item flow, and pinning that
+behaviour keeps Task 3's tests stable.
 """
 
 from __future__ import annotations
 
+import hashlib
 import html
 import logging
+import re
 from urllib.parse import urlsplit, urlunsplit
+from xml.etree import ElementTree
 
 import jsonpath
 
 from careerops.recipes.schema import Extract, Field_
 
 logger = logging.getLogger(__name__)
+
+
+# XXE defence for sitemap mode. ``ElementTree.fromstring`` does not itself
+# block DOCTYPE/ENTITY declarations (verified), so we reject any XML whose
+# prolog contains those tokens before handing it to the parser. The check is
+# case-insensitive on the raw bytes; a sitemap that legitimately needs a
+# DOCTYPE does not exist in the wild.
+_UNSAFE_XML_RE = re.compile(r"<!DOCTYPE|<!ENTITY", re.IGNORECASE)
+
+# Sitemaps declare ``xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"``;
+# ElementTree requires a prefix-to-namespace mapping for namespaced xpath.
+_SITEMAP_NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
 
 
 def apply_field(field: Field_, item: object) -> str:
@@ -81,19 +112,38 @@ def apply_field(field: Field_, item: object) -> str:
 def evaluate_extract(extract: Extract, data: object) -> list[dict]:
     """Resolve an :class:`Extract` block against ``data`` into rows.
 
-    Only ``json_path`` mode is implemented in Task 3. ``items_path`` is
-    evaluated against ``data``; each matched object becomes one row whose
-    keys are the declared field names and whose values come from
-    :func:`apply_field`. A valid-but-unmatched ``items_path`` yields ``[]``.
+    Dispatch on ``extract.mode``:
 
-    ``extract.filter`` is ignored in json_path mode — filter evaluation is
-    deferred to Task 5 (single-item array semantics + ``?()`` wrapping);
-    see module docstring.
+    * ``json_path``: ``items_path`` is evaluated against ``data``; each matched
+      object becomes one row whose keys are the declared field names and whose
+      values come from :func:`apply_field`. A valid-but-unmatched
+      ``items_path`` yields ``[]``.
+    * ``json_ld``: ``data`` is treated as HTML and parsed via ``extruct``;
+      each JSON-LD block is a candidate row, optionally pruned by
+      ``extract.filter`` (see module docstring for the wrapping rule).
+    * ``sitemap``: ``data`` is treated as XML; URLs matching ``url_filter``
+      become rows of ``{"url", "external_id"}``. DOCTYPE/ENTITY input is
+      rejected up front (XXE defence).
+    * ``css``: ``data`` is treated as HTML; each ``Field_.path`` is used as a
+      CSS selector and the columns are zip-paired by index.
+
+    ``extract.filter`` is ignored outside ``json_ld`` mode — it is a json_ld
+    feature; see module docstring.
     """
-    if extract.mode != "json_path":
-        raise NotImplementedError(extract.mode)
+    if extract.mode == "json_path":
+        return _extract_json_path(extract, data)
+    if extract.mode == "json_ld":
+        return _extract_json_ld(extract, data)
+    if extract.mode == "sitemap":
+        return _extract_sitemap(extract, data)
+    if extract.mode == "css":
+        return _extract_css(extract, data)
+    raise NotImplementedError(extract.mode)
 
-    # filter evaluation deferred to Task 5 (single-item array semantics + ?() wrapping)
+
+def _extract_json_path(extract: Extract, data: object) -> list[dict]:
+    """``json_path`` mode (Task 3). ``extract.filter`` is intentionally
+    ignored — see module docstring."""
     if not isinstance(data, (dict, list)):
         return []
     items_path = extract.items_path or "$"
@@ -106,14 +156,122 @@ def evaluate_extract(extract: Extract, data: object) -> list[dict]:
     # and we unwrap it. The ``$.jobs[*]`` form (already a flat list of dicts)
     # and a top-level array (``$`` against ``[a, b]``) are both handled too.
     # Verified against python-jsonpath 2.2.1.
-    if len(matched) == 1 and isinstance(matched[0], list):
-        items = matched[0]
-    else:
-        items = matched
+    items = matched[0] if len(matched) == 1 and isinstance(matched[0], list) else matched
 
     rows: list[dict] = []
     for item in items:
         row = {name: apply_field(field, item) for name, field in extract.fields.items()}
+        rows.append(row)
+    return rows
+
+
+def _extract_json_ld(extract: Extract, html_str: object) -> list[dict]:
+    """``json_ld`` mode (Task 5).
+
+    Parses every ``<script type="application/ld+json">`` block via
+    ``extruct.extract(html_str, syntaxes=['json-ld'])`` and emits one row per
+    block. ``extract.filter`` is applied per item by wrapping the item dict in
+    a single-element array ``[item]`` and running
+    ``jsonpath.findall('$[?({filter.jsonpath})]', [item])``; a non-empty match
+    list keeps the item. This is the canonical workaround for RFC 9535 filters
+    applying only to arrays (see module docstring).
+
+    ``extruct`` raises ``json.JSONDecodeError`` on a malformed JSON-LD script
+    and ``TypeError`` on non-string input — both are caught and the executor
+    returns ``[]`` so one bad block does not sink the whole crawl (real-page
+    robustness; mirrors the legacy per-item fault tolerance).
+    """
+    if not isinstance(html_str, str):
+        return []
+    import extruct
+
+    try:
+        blocks = extruct.extract(html_str, syntaxes=["json-ld"]).get("json-ld", [])
+    except Exception as exc:  # JSONDecodeError on malformed scripts, others
+        logger.warning("recipes.json_ld extract failed: %s", exc)
+        return []
+
+    rows: list[dict] = []
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        if extract.filter is not None:
+            wrapped = f"$[?({extract.filter.jsonpath})]"
+            if not jsonpath.findall(wrapped, [block]):
+                continue
+        rows.append({name: apply_field(field, block) for name, field in extract.fields.items()})
+    return rows
+
+
+def _extract_sitemap(extract: Extract, xml_str: object) -> list[dict]:
+    """``sitemap`` mode (Task 5).
+
+    Parses an XML sitemap and emits one row per ``<url><loc>`` whose text
+    matches ``extract.url_filter`` (compiled as a regex search). Each row is
+    ``{"url": loc, "external_id": sha256(loc)[:16]}`` — the deterministic ID
+    mirrors the legacy ``SitemapAdapter`` contract.
+
+    Defences:
+
+    * XXE: input containing ``<!DOCTYPE`` or ``<!ENTITY`` (case-insensitive)
+      is rejected before parsing. ``ElementTree.fromstring`` does not block
+      external entities by itself (verified), so the regex gate is the
+      primary safeguard.
+    * Parse errors: malformed XML yields ``[]`` rather than propagating.
+    * Namespace: sitemaps declare ``xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"``;
+      the xpath ``.//sm:url/sm:loc`` with the ``_SITEMAP_NS`` mapping matches.
+      A sitemap without that namespace returns ``[]`` under the namespaced
+      query — that is the correct behaviour for the declared schema.
+    """
+    if not isinstance(xml_str, str) or _UNSAFE_XML_RE.search(xml_str):
+        return []
+    try:
+        root = ElementTree.fromstring(xml_str)
+    except ElementTree.ParseError as exc:
+        logger.warning("recipes.sitemap xml parse failed: %s", exc)
+        return []
+
+    url_re = re.compile(extract.url_filter) if extract.url_filter else None
+    rows: list[dict] = []
+    for loc in root.findall(".//sm:url/sm:loc", _SITEMAP_NS):
+        url = (loc.text or "").strip()
+        if not url:
+            continue
+        if url_re is not None and not url_re.search(url):
+            continue
+        rows.append({"url": url, "external_id": hashlib.sha256(url.encode()).hexdigest()[:16]})
+    return rows
+
+
+def _extract_css(extract: Extract, html_str: object) -> list[dict]:
+    """``css`` mode (Task 5).
+
+    ``Field_.path`` is reused as a CSS selector (the schema field keeps its
+    name; the executor reinterprets it per mode). Each declared field becomes
+    one column; rows are produced by **zipping columns by index** up to the
+    longest column's length, with shorter columns padding missing positions
+    with ``""``. This is the index-aligned pairing the legacy
+    ``StaticHtmlAdapter`` did with two parallel regex matches.
+
+    A selector that matches nothing yields an empty column; if every column
+    is empty the result is ``[]`` (max length 0). ``selectolax``'s node
+    ``.text(strip=True)`` extracts the trimmed text.
+    """
+    if not isinstance(html_str, str):
+        return []
+    from selectolax.parser import HTMLParser
+
+    tree = HTMLParser(html_str)
+    columns: dict[str, list] = {
+        name: tree.css(field.path) for name, field in extract.fields.items()
+    }
+    maxlen = max((len(nodes) for nodes in columns.values()), default=0)
+
+    rows: list[dict] = []
+    for i in range(maxlen):
+        row: dict = {}
+        for name, nodes in columns.items():
+            row[name] = nodes[i].text(strip=True) if i < len(nodes) else ""
         rows.append(row)
     return rows
 

@@ -1,10 +1,11 @@
-"""Single-step evaluator for ``json_path`` extracts (Task 3).
+"""Single-step evaluator for the four extract modes (Tasks 3 + 5) and
+multi-step orchestration (Task 4).
 
 Covers:
 
-* ``evaluate_extract`` walks ``items_path`` against ``data`` and emits one
-  ``dict`` per matched item, mapping each declared field name to its resolved
-  value.
+* ``evaluate_extract`` walks ``items_path`` against ``data`` (``json_path``
+  mode) and emits one ``dict`` per matched item, mapping each declared field
+  name to its resolved value.
 * Nested JSONPath fields (``$.location.name``) resolve against the current
   item, taking the first non-empty match.
 * ``apply_field`` walks the ``[path, *fallback]`` candidate chain and returns
@@ -12,16 +13,19 @@ Covers:
   misses.
 * ``transform: html_unescape`` runs the resolved string through
   :func:`html.unescape`.
-* Non-``json_path`` modes are not implemented at this layer in Task 3 (they
-  arrive with the json_ld / sitemap / css executors in later tasks) and raise
-  :class:`NotImplementedError`.
+* ``json_ld`` mode (Task 5): ``extruct`` parses JSON-LD blocks; ``filter`` is
+  applied per item by wrapping the item dict in ``[item]`` (RFC 9535 filters
+  only apply over arrays).
+* ``sitemap`` mode (Task 5): XXE guard + ``url_filter`` regex.
+* ``css`` mode (Task 5): each ``Field_.path`` is a CSS selector; columns are
+  zip-paired by index.
 
-Filter evaluation (``extract.filter``) is intentionally *not* exercised here:
+``extract.filter`` is intentionally *not* exercised under ``json_path`` mode:
 python-jsonpath 2.2.1 evaluates a filter ``$[?(...)]`` against a *single
 object* as ``[]`` (filters only apply over arrays), so the per-item semantics
-plus the ``?()``-correct wrapping are deferred to Task 5 where json_ld mode
-makes filter a core feature. ``evaluate_extract`` in json_path mode therefore
-ignores ``extract.filter`` today.
+plus the ``?()``-correct wrapping live with the json_ld executor where filter
+is a core feature. ``evaluate_extract`` in json_path mode therefore ignores
+``extract.filter`` — pinned by ``test_filter_ignored_in_json_path_mode``.
 """
 
 from __future__ import annotations
@@ -29,7 +33,7 @@ from __future__ import annotations
 import pytest
 
 from careerops.recipes.evaluator import apply_field, evaluate_extract, run_steps
-from careerops.recipes.schema import Extract, Field_, Recipe
+from careerops.recipes.schema import Extract, Field_, Filter, Recipe
 
 
 def test_json_path_items_and_fields():
@@ -103,13 +107,6 @@ def test_transform_none_is_default_and_noop():
     assert apply_field(f, {"content": "plain"}) == "plain"
 
 
-def test_non_json_path_mode_raises():
-    """json_ld / sitemap / css are implemented in later tasks, not Task 3."""
-    ex = Extract(mode="json_ld", items_path="$.jobs", fields={"title": Field_(path="title")})
-    with pytest.raises(NotImplementedError):
-        evaluate_extract(ex, {"jobs": []})
-
-
 def test_filter_ignored_in_json_path_mode():
     """json_path mode does not evaluate ``extract.filter`` (deferred to Task 5).
 
@@ -126,6 +123,156 @@ def test_filter_ignored_in_json_path_mode():
     data = {"jobs": [{"title": "Eng"}, {"title": "PM"}]}
     rows = evaluate_extract(ex, data)
     assert rows == [{"title": "Eng"}, {"title": "PM"}]
+
+
+# ---------------------------------------------------------------------------
+# Task 5 — json_ld / sitemap / css modes + guards
+#
+# Filter key-access note (verified against python-jsonpath 2.2.1):
+# ``@.type`` accesses the literal key ``type``. To reach schema.org's ``@type``
+# key the bracket form ``@['@type']`` is required, and string literals must be
+# single-quoted (barewords raise ``JSONPathSyntaxError``). The canonical
+# JobPosting filter fragment is therefore ``@['@type']=='JobPosting'``.
+# ---------------------------------------------------------------------------
+
+
+def test_json_ld_filters_jobposting():
+    """json_ld mode parses JSON-LD blocks via extruct and applies
+    ``extract.filter`` per item by wrapping the item in ``[item]``. A
+    Person block is dropped, a JobPosting block survives, and the declared
+    field mapping (``title``) resolves against the surviving block."""
+    html_doc = (
+        '<script type="application/ld+json">{"@type":"Person","name":"x"}</script>'
+        '<script type="application/ld+json">{"@type":"JobPosting","title":"Eng"}</script>'
+    )
+    ex = Extract(
+        mode="json_ld",
+        filter=Filter(jsonpath="@['@type']=='JobPosting'"),
+        fields={"title": Field_(path="title")},
+    )
+    rows = evaluate_extract(ex, html_doc)
+    assert rows == [{"title": "Eng"}]
+
+
+def test_json_ld_no_filter_keeps_all_blocks():
+    """Without a filter every JSON-LD block becomes a row."""
+    html_doc = (
+        '<script type="application/ld+json">{"@type":"Person","name":"Alice"}</script>'
+        '<script type="application/ld+json">{"@type":"JobPosting","title":"Eng"}</script>'
+    )
+    ex = Extract(
+        mode="json_ld",
+        fields={"name": Field_(path="name"), "title": Field_(path="title")},
+    )
+    rows = evaluate_extract(ex, html_doc)
+    assert rows == [
+        {"name": "Alice", "title": ""},
+        {"name": "", "title": "Eng"},
+    ]
+
+
+def test_json_ld_malformed_block_returns_empty():
+    """extruct propagates JSONDecodeError on a malformed script; the executor
+    swallows it and returns ``[]`` so one bad block does not sink the crawl."""
+    html_doc = '<script type="application/ld+json">{bad json}</script>'
+    ex = Extract(mode="json_ld", fields={"title": Field_(path="title")})
+    assert evaluate_extract(ex, html_doc) == []
+
+
+def test_sitemap_xxe_rejected_and_url_filter():
+    """sitemap mode parses ``<urlset>`` via ElementTree, applies ``url_filter``
+    regex to each ``<loc>`` text, and emits ``{url, external_id}`` rows.
+    ``<!DOCTYPE``/``<!ENTITY`` input is rejected before parsing (XXE defence)."""
+    xml = (
+        '<?xml version="1.0"?>'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        "<url><loc>https://x.com/about</loc></url>"
+        "<url><loc>https://x.com/jobs/1</loc></url>"
+        "</urlset>"
+    )
+    ex = Extract(mode="sitemap", url_filter=r"\b(jobs|careers|positions)\b")
+    rows = evaluate_extract(ex, xml)
+    assert len(rows) == 1
+    assert rows[0]["url"] == "https://x.com/jobs/1"
+    # external_id is sha256(url)[:16] — 16 hex chars, deterministic
+    assert rows[0]["external_id"] == "084ccffa4f0902a2"
+    assert len(rows[0]["external_id"]) == 16
+
+    # XXE guard: DOCTYPE-bearing input yields [] without raising.
+    evil = '<!DOCTYPE x [<!ENTITY xxe "y">]><urlset></urlset>'
+    assert evaluate_extract(ex, evil) == []
+
+    # ENTITY-bearing input is also rejected.
+    evil2 = '<?xml version="1.0"?><!ENTITY foo "bar"><urlset></urlset>'
+    assert evaluate_extract(ex, evil2) == []
+
+
+def test_sitemap_no_url_filter_keeps_all():
+    """Without ``url_filter`` every ``<loc>`` becomes a row."""
+    xml = (
+        '<?xml version="1.0"?>'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        "<url><loc>https://x.com/about</loc></url>"
+        "<url><loc>https://x.com/jobs/1</loc></url>"
+        "</urlset>"
+    )
+    ex = Extract(mode="sitemap")
+    rows = evaluate_extract(ex, xml)
+    assert [r["url"] for r in rows] == ["https://x.com/about", "https://x.com/jobs/1"]
+
+
+def test_sitemap_malformed_xml_returns_empty():
+    """Non-XML input yields ``[]`` via the ParseError guard."""
+    ex = Extract(mode="sitemap")
+    assert evaluate_extract(ex, "not xml at all") == []
+
+
+def test_css_zip_pairing():
+    """css mode reuses ``Field_.path`` as a CSS selector and zip-pairs columns
+    by index up to the longest column's length."""
+    doc = (
+        "<div>"
+        '<h2 class="t">A</h2><span class="l">SF</span>'
+        '<h2 class="t">B</h2><span class="l">NYC</span>'
+        "</div>"
+    )
+    ex = Extract(
+        mode="css",
+        fields={"title": Field_(path="h2.t"), "location": Field_(path="span.l")},
+    )
+    rows = evaluate_extract(ex, doc)
+    assert rows == [
+        {"title": "A", "location": "SF"},
+        {"title": "B", "location": "NYC"},
+    ]
+
+
+def test_css_unequal_columns_pad_empty():
+    """When one column is longer than the other, missing positions are
+    padded with ``""`` so the row count equals the longest column's length."""
+    doc = (
+        "<div>"
+        '<h2 class="t">A</h2><span class="l">only-one</span>'
+        '<h2 class="t">B</h2>'
+        '<h2 class="t">C</h2>'
+        "</div>"
+    )
+    ex = Extract(
+        mode="css",
+        fields={"title": Field_(path="h2.t"), "location": Field_(path="span.l")},
+    )
+    rows = evaluate_extract(ex, doc)
+    assert rows == [
+        {"title": "A", "location": "only-one"},
+        {"title": "B", "location": ""},
+        {"title": "C", "location": ""},
+    ]
+
+
+def test_css_no_matches_returns_empty():
+    """Every selector missing → max column length 0 → ``[]``."""
+    ex = Extract(mode="css", fields={"title": Field_(path=".nonexistent")})
+    assert evaluate_extract(ex, "<div></div>") == []
 
 
 # ---------------------------------------------------------------------------

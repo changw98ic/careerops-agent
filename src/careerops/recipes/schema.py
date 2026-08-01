@@ -57,15 +57,19 @@ class Filter(BaseModel):
     """A JSONPath filter condition applied to extracted items.
 
     ``jsonpath`` holds the *condition* only (the fragment that sits inside an
-    RFC 9535 filter selector), e.g. ``@.type=='JobPosting'``. ``@`` refers to
-    the current item. String literals must be **single-quoted** (this is what
-    python-jsonpath 2.2.1 accepts; bare identifiers are treated as syntax
-    errors). At load time the loader wraps the condition as
-    ``$[?({filter.jsonpath})]`` for a syntax-only dry-parse; at run time the
-    executor applies the same wrapped form to each item's data (see Task 5).
+    RFC 9535 filter selector). ``@`` refers to the current item; the executor
+    wraps the condition as ``$[?({filter.jsonpath})]`` and evaluates it
+    against ``[item]`` (single-item array — RFC 9535 filters only apply over
+    arrays). String literals must be **single-quoted** (python-jsonpath 2.2.1
+    raises ``JSONPathSyntaxError`` on bareword identifiers).
+
+    Key access caveat (verified against python-jsonpath 2.2.1): ``@.type``
+    accesses the literal key ``type``. To reach a key with a reserved
+    character prefix such as schema.org's ``@type``, use the bracket form
+    ``@['@type']``. Example: ``@['@type']=='JobPosting'``.
     """
 
-    jsonpath: str  # condition, e.g. "@.type=='JobPosting'"; wrapped as $[?({...})]
+    jsonpath: str  # condition, e.g. "@['@type']=='JobPosting'"; wrapped as $[?({...})]
 
 
 class Extract(BaseModel):

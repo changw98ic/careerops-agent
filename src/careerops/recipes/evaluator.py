@@ -34,11 +34,14 @@ Task 5. ``evaluate_extract`` in json_path mode therefore ignores
 from __future__ import annotations
 
 import html
+import logging
 from urllib.parse import urlsplit, urlunsplit
 
 import jsonpath
 
 from careerops.recipes.schema import Extract, Field_
+
+logger = logging.getLogger(__name__)
 
 
 def apply_field(field: Field_, item: object) -> str:
@@ -223,6 +226,13 @@ def run_steps(steps, fetch_one, base_ns) -> dict:
       ``{id}`` resolves to ``item["id"]``.
     * ``merge``: each per-item extract's rows are merged into the matching
       parent row (located by jsonpath reference identity) using the strategy.
+    * **per-item fault tolerance** (foreach only): a single detail fetch or
+      extract failure is logged and skipped — the failed item emits no row
+      and is not merged (its parent list row keeps its current value), then
+      iteration continues. This preserves the product contract that list
+      data remains useful when a detail fetch fails. List-step fetches
+      (non-foreach branch) are NOT guarded: a list fetch failure means the
+      run has no primary data, so the exception propagates.
 
     After a non-foreach step runs, the namespace publishes ``list_endpoint``
     derived from that step's endpoint with the query string stripped — this is
@@ -245,8 +255,26 @@ def run_steps(steps, fetch_one, base_ns) -> dict:
                 if isinstance(item, dict):
                     local.update({k: str(v) for k, v in item.items()})
                 ep = _render(step.fetch.endpoint, local)
-                data = fetch_one(ep)
-                drows = evaluate_extract(step.extract, data)
+                # Per-item fault tolerance: a single detail fetch failure must
+                # not sink the whole run. Skip the failed item (no row emit,
+                # no merge — the parent list row keeps its current value, e.g.
+                # empty description) and continue to the next item. This
+                # mirrors the legacy m1_crawl_sink contract: "List data
+                # remains useful on detail failure." List-step fetches (the
+                # ``else`` branch below) are NOT wrapped — a list fetch
+                # failure means the run has no primary data and should
+                # propagate.
+                try:
+                    data = fetch_one(ep)
+                    drows = evaluate_extract(step.extract, data)
+                except Exception as exc:  # broad guard: see comment above
+                    logger.warning(
+                        "recipes.foreach item failed (step=%s endpoint=%s): %s",
+                        step.id,
+                        ep,
+                        exc,
+                    )
+                    continue
                 rows.extend(drows)
                 if step.merge is not None and isinstance(item, dict):
                     _merge_into(item, drows, step.merge.strategy)

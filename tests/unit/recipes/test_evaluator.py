@@ -356,3 +356,72 @@ def test_multistep_foreach_bare_path_unwrap():
     # both rows got fetched and filled → bare-path unwrap worked
     assert ns["list"][0]["description"] == "filled"
     assert ns["list"][1]["description"] == "filled"
+
+
+def test_multistep_detail_fetch_failure_skips_item_keeps_list_data():
+    """A per-item detail fetch failure must not sink the run.
+
+    Product contract (mirrors legacy m1_crawl_sink ``except Exception``):
+    "List data remains useful on detail failure." Concretely, when fetch_one
+    raises for one item's detail endpoint:
+
+    * the failed item is skipped (its row keeps its current value — empty
+      description here — and emits no detail row),
+    * the other items are still fetched and merged,
+    * the list step's data is returned intact.
+
+    Uses a bare-path foreach (``$.steps.list[*]``) so both rows are visited
+    regardless of description value, isolating the failure handling from the
+    when-filter short-circuit.
+    """
+    yaml_text = GREENHOUSE_YAML.replace(
+        "$.steps.list[?(@.description=='')]",
+        "$.steps.list[*]",
+    )
+    # drop the `when:` line entirely so the detail step always runs
+    yaml_text = yaml_text.replace('    when: "$.steps.list[*]"\n', "")
+    r = Recipe.model_validate(yaml.safe_load(yaml_text))
+    list_json = {
+        "jobs": [
+            {"id": "1", "title": "A", "description": ""},  # detail fetch will raise
+            {"id": "2", "title": "B", "description": ""},  # detail fetch will succeed
+        ]
+    }
+    detail_json_ok = {"content": "<p>desc for 2</p>"}
+
+    def fetch_one(endpoint):
+        if endpoint.endswith("/jobs/1"):
+            raise RuntimeError("simulated detail 503")
+        if endpoint.endswith("/jobs/2"):
+            return detail_json_ok
+        return list_json  # list call
+
+    ns = run_steps(r.steps, fetch_one, {"slug": "acme", "list_endpoint": "https://x/jobs"})
+
+    by_id = {row["id"]: row for row in ns["list"]}
+    # job 1 (failed) keeps its empty description; job 2 (succeeded) is filled
+    assert by_id["1"]["description"] == ""
+    assert by_id["2"]["description"] == "<p>desc for 2</p>"
+    # list data itself is intact: both rows present with title + id
+    assert {row["id"] for row in ns["list"]} == {"1", "2"}
+    # only the successful item emitted a detail row
+    assert ns["detail"] == [{"description": "<p>desc for 2</p>"}]
+
+
+def test_multistep_list_step_failure_propagates():
+    """List-step fetch failures are NOT swallowed — the run has no primary
+    data, so the exception must propagate to the caller.
+
+    This pins the scope of the per-item fault tolerance: only foreach
+    (detail) per-item fetches are guarded; the list fetch failing is a hard
+    error.
+    """
+    r = Recipe.model_validate(yaml.safe_load(GREENHOUSE_YAML))
+
+    def fetch_one(endpoint):
+        if "jobs?content=true" in endpoint:
+            raise RuntimeError("list endpoint down")
+        return {"content": "x"}
+
+    with pytest.raises(RuntimeError, match="list endpoint down"):
+        run_steps(r.steps, fetch_one, {"slug": "acme", "list_endpoint": "x"})

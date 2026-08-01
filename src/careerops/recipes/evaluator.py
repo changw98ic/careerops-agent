@@ -53,12 +53,13 @@ import hashlib
 import html
 import logging
 import re
+from collections.abc import Callable
 from urllib.parse import urlsplit, urlunsplit
 from xml.etree import ElementTree
 
 import jsonpath
 
-from careerops.recipes.schema import Extract, Field_
+from careerops.recipes.schema import Extract, Field_, Step
 
 logger = logging.getLogger(__name__)
 
@@ -365,7 +366,11 @@ def _merge_into(parent_row: dict, detail_rows: list[dict], strategy: str) -> Non
                     parent_row[k] = v
 
 
-def run_steps(steps, fetch_one, base_ns) -> dict:
+def run_steps(
+    steps: list[Step],
+    fetch_one: Callable[[str], object],
+    base_ns: dict[str, str],
+) -> dict[str, list[dict]]:
     """Execute a recipe's ``steps`` in order, returning ``{step_id: [rows]}``.
 
     ``fetch_one(endpoint) -> object`` is the injected fetcher (returns the

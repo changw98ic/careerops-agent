@@ -44,6 +44,14 @@ class AdapterFetchResult:
     fetched_at: datetime | None = None
     source_url: str = ""
     parser_version: str = ""
+    # HTTP-level signals from the first (list-step) response. ``status_code``
+    # feeds the backoff policy (403/429/CAPTCHA detection); ``body_prefix`` is
+    # the first 4 KiB of the body — a bounded slice that lets the CAPTCHA
+    # detector run without holding the full payload. Both default to sentinels
+    # (0 / "") so legacy callers that only parse ``response_data`` are
+    # unaffected; the recipe engine (Task 6) is the first writer.
+    status_code: int = 0
+    body_prefix: str = ""
 
 
 class JobSourceAdapter(Protocol):

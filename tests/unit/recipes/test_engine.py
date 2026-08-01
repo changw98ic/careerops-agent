@@ -36,7 +36,12 @@ from careerops.recipes.schema import Match, Recipe
 
 
 class FakeResp:
-    """Stand-in for ``FetchedResponse`` (the body/status/final_url triple)."""
+    """Stand-in for ``FetchedResponse`` (the body/status/final_url triple).
+
+    ``final_url`` defaults to the list URL; detail-step tests MUST override it
+    to a distinct URL so any regression that leaks a detail URL into
+    ``result.source_url`` is caught (see test_execute_multistep_*).
+    """
 
     def __init__(self, body: str, status: int = 200, final_url: str = "https://x/jobs") -> None:
         self.body = body
@@ -85,15 +90,27 @@ def _run(coro):
 
 def test_execute_multistep_returns_records_and_signals():
     """List→detail recipe: list rows become records with merged detail fields,
-    and the result carries the list step's status_code + parser_version."""
+    and the result carries the list step's status_code + parser_version +
+    source_url.
+
+    The detail FakeResp gets a DISTINCT final_url so any regression that
+    leaks a detail URL into ``result.source_url`` (the original Important
+    bug — ``final_url`` was assigned on every fetch, not just the first) is
+    caught directly here.
+    """
     r = Recipe.model_validate(yaml.safe_load(MULTISTEP_GREENHOUSE_YAML))
     eng = RecipeEngine(r)
     list_json = '{"jobs": [{"id": "1", "title": "Eng", "description": ""}]}'
     detail_json = '{"content": "filled-by-detail"}'
+    list_url = "https://boards-api.greenhouse.io/v1/boards/acme/jobs"
+    detail_url = "https://boards-api.greenhouse.io/v1/boards/acme/jobs/1"
 
     def fetch(endpoint):
-        # detail endpoints end with the job id; list has the query string
-        return FakeResp(detail_json) if endpoint.endswith("/1") else FakeResp(list_json)
+        if endpoint.endswith("/1"):
+            # detail response carries its OWN final_url + status — both must
+            # be ignored for the result-level signals.
+            return FakeResp(detail_json, status=202, final_url=detail_url)
+        return FakeResp(list_json, status=200, final_url=list_url)
 
     result = _run(eng.execute(request=None, fetch=fetch))
     assert isinstance(result, AdapterFetchResult)
@@ -106,25 +123,30 @@ def test_execute_multistep_returns_records_and_signals():
     assert result.parser_version == "recipe:greenhouse:1"
     # body_prefix carries the list step's raw body (bounded to 4 KiB)
     assert '"jobs"' in result.body_prefix
-    # source_url is the list step's final_url
-    assert result.source_url == "https://x/jobs"
+    # source_url is the LIST step's final_url — NOT the detail URL.
+    # This is the regression guard for the first-step-signal consistency.
+    assert result.source_url == list_url
+    assert result.source_url != detail_url
 
 
 def test_execute_uses_first_step_status_when_detail_returns_other_status():
     """Only the first (list) fetch becomes the signal of record. A detail step
-    returning 202 must NOT overwrite the list step's 200."""
+    returning 202 with its own final_url must NOT overwrite the list step's
+    200 / list URL."""
     r = Recipe.model_validate(yaml.safe_load(MULTISTEP_GREENHOUSE_YAML))
     eng = RecipeEngine(r)
     list_json = '{"jobs": [{"id": "1", "title": "A", "description": ""}]}'
     detail_json = '{"content": "x"}'
+    list_url = "https://boards-api.greenhouse.io/v1/boards/acme/jobs"
 
     def fetch(endpoint):
         if endpoint.endswith("/1"):
-            return FakeResp(detail_json, status=202)
-        return FakeResp(list_json, status=200)
+            return FakeResp(detail_json, status=202, final_url=list_url + "/1")
+        return FakeResp(list_json, status=200, final_url=list_url)
 
     result = _run(eng.execute(request=None, fetch=fetch))
     assert result.status_code == 200  # list step wins, not 202
+    assert result.source_url == list_url  # list URL wins, not detail URL
     # body_prefix also comes from the first fetch
     assert '"jobs"' in result.body_prefix
 
@@ -197,6 +219,24 @@ def test_row_to_record_external_id_fallback_when_missing():
     # 16 hex chars; stable for the same row content
     assert len(rec.external_id) == 16
     assert rec.title == "NoId"
+
+
+def test_row_to_record_id_wins_over_external_id():
+    """When both ``id`` and ``external_id`` are present, ``id`` wins (it is the
+    first term in the resolution chain ``id -> external_id -> sha256``)."""
+    from careerops.recipes.engine import _row_to_record
+
+    rec = _row_to_record({"id": "primary", "external_id": "alt"})
+    assert rec.external_id == "primary"
+
+
+def test_row_to_record_external_id_used_when_id_missing():
+    """When ``id`` is absent, ``external_id`` is the next candidate before the
+    sha256 fallback."""
+    from careerops.recipes.engine import _row_to_record
+
+    rec = _row_to_record({"external_id": "alt"})
+    assert rec.external_id == "alt"
 
 
 def test_row_to_record_apply_url_preferred_over_url():

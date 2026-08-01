@@ -50,5 +50,12 @@
       "recipe_version": "1"
     }
   ],
-  "skills": []
+  "skills": [
+    {
+      "id": "workday",
+      "path": "skills/workday/SKILL.md",
+      "source_type": "workday",
+      "executor_mode": "ego"
+    }
+  ]
 }

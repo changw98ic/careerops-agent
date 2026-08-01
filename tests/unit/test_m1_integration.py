@@ -1227,3 +1227,74 @@ class TestJobsApiRoutes:
         assert response.status_code == 200
         data = response.json()
         assert data["total"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Task 7: dynamic recipe registry (_ADAPTER_REGISTRY merge)
+#
+# Phase B begins to swap hard-coded adapters (GreenhouseAdapter, ...) for
+# RecipeEngine instances loaded from vendor/crawl-recipes/manifest.json. These
+# tests pin the loader contract: missing manifest → {}, empty manifest → {},
+# and a real recipe with source_type="greenhouse" overrides GreenhouseAdapter
+# inside RealCrawlActivitySink._adapters.
+# ---------------------------------------------------------------------------
+
+
+def test_recipe_registry_missing_manifest_returns_empty_dict(tmp_path) -> None:
+    """No manifest.json in the dir → empty dict, no error raised."""
+    from careerops.infrastructure.temporal.m1_crawl_sink import build_recipe_registry
+
+    # tmp_path has no manifest.json at all.
+    assert build_recipe_registry(tmp_path) == {}
+
+
+def test_recipe_registry_empty_manifest_returns_empty_dict(tmp_path) -> None:
+    """A manifest with recipes: [] yields zero engines."""
+    from careerops.infrastructure.temporal.m1_crawl_sink import build_recipe_registry
+
+    (tmp_path / "manifest.json").write_text(
+        '{"schema_version":"1","recipes":[],"skills":[]}',
+        encoding="utf-8",
+    )
+    assert build_recipe_registry(tmp_path) == {}
+
+
+def test_sink_merges_recipe_registry_overriding_legacy(tmp_path, monkeypatch) -> None:
+    """A recipe whose source_type collides with a legacy adapter overrides it."""
+    from careerops.infrastructure.temporal import m1_crawl_sink
+    from careerops.recipes.engine import RecipeEngine
+
+    # Build a one-recipe catalog in tmp_path.
+    (tmp_path / "recipes").mkdir()
+    (tmp_path / "recipes" / "greenhouse.yaml").write_text(
+        'recipe_version: "1"\n'
+        "source_type: greenhouse\n"
+        "match: {}\n"
+        "steps:\n"
+        "  - id: list\n"
+        "    fetch:\n"
+        '      endpoint: "https://example.com/{slug}/jobs"\n'
+        "    extract:\n"
+        "      mode: json_path\n"
+        '      items_path: "$.jobs"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "manifest.json").write_text(
+        '{"schema_version":"1","recipes":[{"path":"recipes/greenhouse.yaml"}],"skills":[]}',
+        encoding="utf-8",
+    )
+
+    # Point the sink's recipe-dir constant at our temp catalog and construct
+    # without injecting adapters — the merge path should run.
+    monkeypatch.setattr(m1_crawl_sink, "DEFAULT_RECIPES_DIR", tmp_path)
+    sink = m1_crawl_sink.RealCrawlActivitySink()
+
+    greenhouse_entry = sink._adapters["greenhouse"]
+    # The greenhouse key was overridden by the recipe engine, NOT the legacy
+    # GreenhouseAdapter instance.
+    assert isinstance(greenhouse_entry, RecipeEngine)
+    assert greenhouse_entry.source_type == "greenhouse"
+    # Legacy adapters for source_types NOT covered by any recipe are still
+    # present (the registry is a merge, not a replacement).
+    assert "lever" in sink._adapters
+    assert "ashby" in sink._adapters

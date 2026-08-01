@@ -21,7 +21,8 @@ import json
 from collections.abc import Callable
 from datetime import UTC, datetime
 from json import JSONDecodeError, loads
-from typing import Any, Protocol
+from pathlib import Path
+from typing import Any, Protocol, cast
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
@@ -43,6 +44,8 @@ from careerops.application.job_ingestion import JobIngestionService
 from careerops.infrastructure.database.postgres_job_repo import PostgresJobReadRepository
 from careerops.infrastructure.database.schema import companies, job_sources
 from careerops.infrastructure.temporal.ego_browser_executor import EgoBrowserExecutor
+from careerops.recipes.engine import RecipeEngine
+from careerops.recipes.loader import load_manifest
 from careerops.workflows.m1_contracts import (
     CrawledPostingRecord,
     CrawlJobSourceInput,
@@ -83,6 +86,38 @@ _ADAPTER_REGISTRY: dict[str, JobSourceAdapter] = {
     "sitemap": SitemapAdapter(),
     "static_html": StaticHtmlAdapter(),
 }
+
+
+# Location of the declarative crawl-recipe catalog shipped in-tree.
+#
+# ``m1_crawl_sink.py`` lives at ``<repo>/src/careerops/infrastructure/temporal/``,
+# so the repo root is ``parents[4]`` (parents[0]=temporal, [1]=infrastructure,
+# [2]=careerops, [3]=src, [4]=repo root). The catalog lives at
+# ``<repo>/vendor/crawl-recipes/`` and is populated by the recipe-authoring
+# tasks (Task 8/9 onwards). Until then ``manifest.json`` is empty and
+# :func:`build_recipe_registry` returns ``{}``, leaving the legacy adapters in
+# control — so this change is a no-op until a recipe ships.
+DEFAULT_RECIPES_DIR = Path(__file__).resolve().parents[4] / "vendor" / "crawl-recipes"
+
+
+def build_recipe_registry(recipes_dir: Path | None = None) -> dict[str, RecipeEngine]:
+    """Build ``{source_type: RecipeEngine}`` from a recipe manifest.
+
+    Missing ``manifest.json`` → ``{}`` (no error). This keeps the sink usable
+    in environments that ship without the vendor catalog (CI sandboxes, unit
+    tests, stripped containers) and during the early Phase B rollout when the
+    manifest exists but is still empty.
+
+    Each loaded :class:`Recipe` becomes a :class:`RecipeEngine` keyed by its
+    ``source_type``. When the caller is :class:`RealCrawlActivitySink`, the
+    recipe registry is merged *over* ``_ADAPTER_REGISTRY`` so that a recipe
+    with ``source_type: greenhouse`` overrides the legacy
+    :class:`GreenhouseAdapter` — that is the Phase B migration seam.
+    """
+    catalog = recipes_dir or DEFAULT_RECIPES_DIR
+    if not (catalog / "manifest.json").exists():
+        return {}
+    return {recipe.source_type: RecipeEngine(recipe) for recipe in load_manifest(catalog)}
 
 
 def _parse_body(body: str) -> object:
@@ -221,7 +256,29 @@ class RealCrawlActivitySink:
         agent: CrawlAgentProtocol | None = None,
         public_ats_fetcher: FetcherFn | None = None,
     ) -> None:
-        self._adapters = adapters or dict(_ADAPTER_REGISTRY)
+        # When the caller injects ``adapters`` (incl. an explicit ``{}``) we
+        # use it verbatim — tests rely on the empty-dict case to build a sink
+        # with no adapters. Otherwise start from the legacy registry and layer
+        # recipe engines on top: a recipe whose ``source_type`` collides with
+        # a legacy adapter overrides it (Phase B migration seam — Task 8/9
+        # drops a greenhouse recipe here to swap out GreenhouseAdapter).
+        #
+        # ``cast``: RecipeEngine exposes the same ``source_type`` /
+        # ``parser_version`` / ``detect`` surface as ``JobSourceAdapter`` but
+        # is keyed off ``execute(request, fetch)`` rather than
+        # ``list_jobs(response_data)``. The merged dict therefore is NOT
+        # statically a ``dict[str, JobSourceAdapter]``. We keep the call sites
+        # unchanged (they still read legacy keys) and defer the
+        # ``RecipeEngine``-aware dispatch to the Phase B call-site task that
+        # ships the first real recipe; the cast localises the type tension
+        # here instead of widening every adapter lookup to ``Any``.
+        if adapters is not None:
+            self._adapters = adapters
+        else:
+            self._adapters = dict(_ADAPTER_REGISTRY)
+            self._adapters.update(
+                cast("dict[str, JobSourceAdapter]", build_recipe_registry())
+            )
         # Allow injecting a fake fetcher for tests.
         self._fetch: FetcherFn = fetcher or fetch
         self._public_ats_fetch = public_ats_fetcher

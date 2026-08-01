@@ -25,16 +25,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-
-from careerops.adapters import (
-    AshbyDetailAdapter,
-    GreenhouseDetailAdapter,
-    JsonLdAdapter,
-    RawJobRecord,
-)
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "adapter_responses"
 MANIFEST_PATH = FIXTURES_DIR.parent / "adapter_manifest.json"
@@ -222,48 +214,3 @@ class TestDescriptionCoverage:
             == _ashby_detail_coverage(data)
             == 1
         )
-
-
-class TestAdapterSurfacesDescription:
-    """End-to-end: adapters that claim description coverage must surface it.
-
-    Independent of the manifest counts -- proves the fixture is parseable by
-    the real adapter and produces a non-empty ``RawJobRecord.description``.
-    """
-
-    def test_greenhouse_detail_adapter_reads_content(self) -> None:
-        adapter = GreenhouseDetailAdapter()
-        detail = _load_json("greenhouse_detail.json")
-
-        record = adapter.fetch_job(
-            detail,
-            source_url="https://boards.greenhouse.io/acme/jobs/1001",
-            fetched_at=datetime(2026, 7, 24, tzinfo=UTC),
-        )
-
-        assert isinstance(record, RawJobRecord)
-        assert record.description.strip() != ""
-        assert record.external_id == "1001"
-
-    def test_ashby_detail_adapter_reads_description(self) -> None:
-        adapter = AshbyDetailAdapter()
-        detail = _load_json("ashby_detail.json")
-
-        record = adapter.fetch_job(
-            detail,
-            source_url="https://careers.ashbyhq.com/acme/ashby-1",
-            fetched_at=datetime(2026, 7, 24, tzinfo=UTC),
-        )
-
-        assert isinstance(record, RawJobRecord)
-        assert record.description.strip() != ""
-        assert record.external_id == "ashby-1"
-
-    def test_json_ld_adapter_reads_descriptions(self) -> None:
-        adapter = JsonLdAdapter()
-        html = (FIXTURES_DIR / "jsonld_page.html").read_text(encoding="utf-8")
-
-        result = adapter.list_jobs(html)
-
-        assert len(result.jobs) >= 1
-        assert all(job.description.strip() != "" for job in result.jobs)

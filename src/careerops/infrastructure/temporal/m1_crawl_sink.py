@@ -1,9 +1,14 @@
-"""Real ``CrawlActivitySink`` backed by http_fetcher + JobSourceAdapter.
+"""Real ``CrawlActivitySink`` backed by http_fetcher + RecipeEngine.
 
 Implements the ``CrawlActivitySink`` protocol from ``m1_activities.py`` by
 fetching the source URL via ``http_fetcher.fetch`` and running the matching
-``JobSourceAdapter.list_jobs`` parser. Each ``RawJobRecord`` is mapped to a
-``CrawledPostingRecord`` with the fetch provenance attached.
+recipe through :class:`careerops.recipes.engine.RecipeEngine.execute`. Each
+``RawJobRecord`` the engine emits is mapped to a ``CrawledPostingRecord``
+with the fetch provenance attached.
+
+Phase C (Task 11) removed the hard-coded adapter classes and the
+``_ADAPTER_REGISTRY`` dict; the registry is now exactly what
+:func:`build_recipe_registry` returns from ``vendor/crawl-recipes/``.
 
 ``ingest_posting`` writes to ``job_postings`` + ``job_posting_versions``
 with dedup by ``source_id + external_id`` (posting) and
@@ -20,7 +25,6 @@ import dataclasses
 import json
 from collections.abc import Callable
 from datetime import UTC, datetime
-from json import JSONDecodeError, loads
 from pathlib import Path
 from typing import Protocol, cast
 from uuid import UUID
@@ -30,14 +34,8 @@ from sqlalchemy.engine import Engine
 
 from careerops.adapters.http_fetcher import FetchedResponse, fetch
 from careerops.adapters.job_sources import (
-    AshbyAdapter,
-    GreenhouseAdapter,
     JobSourceAdapter,
-    JsonLdAdapter,
-    LeverAdapter,
     RawJobRecord,
-    SitemapAdapter,
-    StaticHtmlAdapter,
 )
 from careerops.application.job_ingestion import JobIngestionService
 from careerops.infrastructure.database.postgres_job_repo import PostgresJobReadRepository
@@ -77,16 +75,6 @@ class CrawlSourceResult:
     expected_fields_missing: tuple[str, ...] = ()
 
 
-_ADAPTER_REGISTRY: dict[str, JobSourceAdapter] = {
-    "greenhouse": GreenhouseAdapter(),
-    "lever": LeverAdapter(),
-    "ashby": AshbyAdapter(),
-    "json_ld": JsonLdAdapter(),
-    "sitemap": SitemapAdapter(),
-    "static_html": StaticHtmlAdapter(),
-}
-
-
 # Location of the declarative crawl-recipe catalog shipped in-tree.
 #
 # ``m1_crawl_sink.py`` lives at ``<repo>/src/careerops/infrastructure/temporal/``,
@@ -97,20 +85,19 @@ _ADAPTER_REGISTRY: dict[str, JobSourceAdapter] = {
 DEFAULT_RECIPES_DIR = Path(__file__).resolve().parents[4] / "vendor" / "crawl-recipes"
 
 
-# Phase B live-rollout gate. The recipe registry merges ``RecipeEngine``
-# instances over the legacy ``_ADAPTER_REGISTRY`` inside
-# :class:`RealCrawlActivitySink.__init__``, so a recipe whose ``source_type``
-# collides with a legacy adapter (greenhouse/lever/ashby) replaces it.
+# Phase C live-rollout gate. Task 11 removed every hard-coded adapter class
+# (``GreenhouseAdapter`` / ``LeverAdapter`` / ``AshbyAdapter`` /
+# ``JsonLdAdapter`` / ``SitemapAdapter`` / ``StaticHtmlAdapter``) along with
+# the ``_ADAPTER_REGISTRY`` dict that hosted them, so the crawl sink is now
+# fully recipe-driven: :class:`RealCrawlActivitySink` populates
+# ``self._adapters`` from :func:`build_recipe_registry` and dispatches every
+# request through ``RecipeEngine.execute``.
 #
-# Task 10 flipped this to ``True``: ``crawl_source`` /
-# ``crawl_source_with_signals`` now dispatch through ``adapter.execute(...)``
-# when the adapter exposes it (:class:`RecipeEngine` does), and fall back to
-# ``adapter.list_jobs(...)`` for the remaining legacy adapters
-# (json_ld/sitemap/static_html). The gate is therefore safe to open. The
-# ``test_sink_merges_recipe_registry_overriding_legacy`` test still
-# monkeypatches this flag to ``True`` (now a no-op); parity tests load
-# recipes directly via :func:`load_recipe` / :func:`evaluate_extract` and
-# never construct a sink, so they are unaffected by the gate.
+# The gate is retained as an emergency stop: flipping it to ``False`` makes
+# :func:`build_recipe_registry` return ``{}`` so the sink reports the source
+# type as unsupported (Tier 2 fallback if an agent is wired, otherwise an
+# empty result) without touching the recipe catalog. That keeps the
+# rollback lever code-only rather than requiring a recipe revert.
 RECIPES_LIVE: bool = True
 
 
@@ -119,41 +106,26 @@ def build_recipe_registry(recipes_dir: Path | None = None) -> dict[str, RecipeEn
 
     Missing ``manifest.json`` → ``{}`` (no error). This keeps the sink usable
     in environments that ship without the vendor catalog (CI sandboxes, unit
-    tests, stripped containers) and during the early Phase B rollout when the
-    manifest exists but is still empty.
+    tests, stripped containers).
 
-    Gated by :data:`RECIPES_LIVE` (Task 10 default): while ``False``, this
-    returns ``{}`` unconditionally so the live crawl sink stays on the
-    legacy adapters. See :data:`RECIPES_LIVE` for the rationale.
+    Gated by :data:`RECIPES_LIVE` (Phase C default ``True``): while ``False``,
+    this returns ``{}`` unconditionally so the live crawl sink reports every
+    source type as unsupported. See :data:`RECIPES_LIVE` for the rationale.
 
     Each loaded :class:`Recipe` becomes a :class:`RecipeEngine` keyed by its
-    ``source_type``. When the caller is :class:`RealCrawlActivitySink`, the
-    recipe registry is merged *over* ``_ADAPTER_REGISTRY`` so that a recipe
-    with ``source_type: greenhouse`` overrides the legacy
-    :class:`GreenhouseAdapter` — that is the Phase B migration seam.
+    ``source_type``. There is no longer a legacy adapter registry to merge
+    over: ``RealCrawlActivitySink.__init__`` consumes this dict verbatim.
     """
-    # Live-rollout gate (see :data:`RECIPES_LIVE`). Task 10 flipped the
-    # default to ``True`` and migrated ``crawl_source`` /
-    # ``crawl_source_with_signals`` to dispatch through
-    # ``RecipeEngine.execute``; the gate is retained so the recipe catalog
-    # can be force-disabled without code changes if a recipe regress.
+    # Emergency-stop gate (see :data:`RECIPES_LIVE`). Phase C removed the
+    # legacy adapters entirely, so disabling recipes here leaves the sink
+    # with no structured adapters — every request then falls through to the
+    # Tier 2 agent (when wired) or returns an empty result.
     if not RECIPES_LIVE:
         return {}
     catalog = recipes_dir or DEFAULT_RECIPES_DIR
     if not (catalog / "manifest.json").exists():
         return {}
     return {recipe.source_type: RecipeEngine(recipe) for recipe in load_manifest(catalog)}
-
-
-def _parse_body(body: str) -> object:
-    """Parse a fetch body into the form its adapter expects."""
-    stripped = body.lstrip()
-    if stripped and stripped[0] in "{[":
-        try:
-            return loads(body)
-        except (JSONDecodeError, ValueError):
-            return body
-    return body
 
 
 # Default provenance/parser_version when a raw record carries no explicit tag.
@@ -283,26 +255,24 @@ class RealCrawlActivitySink:
     ) -> None:
         # When the caller injects ``adapters`` (incl. an explicit ``{}``) we
         # use it verbatim — tests rely on the empty-dict case to build a sink
-        # with no adapters. Otherwise start from the legacy registry and layer
-        # recipe engines on top: a recipe whose ``source_type`` collides with
-        # a legacy adapter overrides it (Phase B migration seam — Task 8/9
-        # drops a greenhouse recipe here to swap out GreenhouseAdapter).
+        # with no adapters. Otherwise the registry is exactly what
+        # :func:`build_recipe_registry` returns: every entry is a
+        # :class:`RecipeEngine` loaded from ``vendor/crawl-recipes/``. Phase C
+        # removed the legacy hard-coded adapter dict that previously sat
+        # underneath the recipe merge, so there is no longer a "merge over
+        # legacy" step — the sink is fully recipe-driven.
         #
-        # ``cast``: RecipeEngine exposes the same ``source_type`` /
+        # ``cast``: ``RecipeEngine`` exposes the same ``source_type`` /
         # ``parser_version`` / ``detect`` surface as ``JobSourceAdapter`` but
         # is keyed off ``execute(request, fetch)`` rather than
-        # ``list_jobs(response_data)``. The merged dict therefore is NOT
-        # statically a ``dict[str, JobSourceAdapter]``. We keep the call sites
-        # unchanged (they still read legacy keys) and defer the
-        # ``RecipeEngine``-aware dispatch to the Phase B call-site task that
-        # ships the first real recipe; the cast localises the type tension
+        # ``list_jobs(response_data)``. The dict is therefore NOT statically a
+        # ``dict[str, JobSourceAdapter]``; the cast localises the type tension
         # here instead of widening every adapter lookup to ``Any``.
         if adapters is not None:
             self._adapters = adapters
         else:
-            self._adapters = dict(_ADAPTER_REGISTRY)
-            self._adapters.update(
-                cast("dict[str, JobSourceAdapter]", build_recipe_registry())
+            self._adapters = cast(
+                "dict[str, JobSourceAdapter]", build_recipe_registry()
             )
         # Allow injecting a fake fetcher for tests.
         self._fetch: FetcherFn = fetcher or fetch
@@ -344,34 +314,21 @@ class RealCrawlActivitySink:
         if adapter is None:
             return []
 
-        # Dual-protocol dispatch (Task 10): RecipeEngine exposes
-        # ``execute(request, fetch)`` (multi-step recipes — greenhouse list→
-        # detail lives here now), while the remaining legacy adapters
-        # (json_ld / sitemap / static_html) still implement ``list_jobs``.
-        # ``hasattr`` keeps both paths working until Task 11 deletes the
-        # legacy adapters, after which the ``else`` branch is dead code. The
-        # ``cast`` to :class:`RecipeEngine` localises the static type tension
-        # documented in ``__init__``: ``self._adapters`` is typed
-        # ``dict[str, JobSourceAdapter]`` but the recipe merge mixes in
-        # ``RecipeEngine`` instances whose contract is ``execute`` not
-        # ``list_jobs``; pyright cannot see ``execute`` through the Protocol,
-        # so the cast tells it the runtime shape.
-        if hasattr(adapter, "execute"):
-            engine = cast("RecipeEngine", adapter)
-            result = await engine.execute(
-                request, lambda url: self._fetch_for_request(request, url)
-            )
-            jobs = result.jobs
-            source_url = result.source_url or request.base_url
-            # RecipeEngine samples the first-step ``fetched_at``; legacy
-            # ``AdapterFetchResult`` (list_jobs path) leaves it ``None``.
-            fetched_at_dt = result.fetched_at or datetime.now(tz=UTC)
-        else:
-            resp = self._fetch_for_request(request, request.base_url)
-            result = adapter.list_jobs(_parse_body(resp.body))
-            jobs = result.jobs
-            source_url = resp.final_url or request.base_url
-            fetched_at_dt = resp.fetched_at
+        # Phase C: the registry holds only :class:`RecipeEngine` instances, so
+        # dispatch is always ``execute(request, fetch)``. The ``cast`` tells
+        # pyright the runtime shape — see the ``__init__`` comment for why
+        # ``self._adapters`` is typed ``dict[str, JobSourceAdapter]`` despite
+        # holding ``RecipeEngine`` values (the ``execute`` contract is not on
+        # the ``JobSourceAdapter`` Protocol).
+        engine = cast("RecipeEngine", adapter)
+        result = await engine.execute(
+            request, lambda url: self._fetch_for_request(request, url)
+        )
+        jobs = result.jobs
+        source_url = result.source_url or request.base_url
+        # RecipeEngine samples the first-step ``fetched_at``; fall back to now
+        # only when the fetcher returned no timestamp.
+        fetched_at_dt = result.fetched_at or datetime.now(tz=UTC)
         fetched_at = fetched_at_dt.isoformat()
 
         postings: list[CrawledPostingRecord] = []
@@ -423,9 +380,10 @@ class RealCrawlActivitySink:
         """
         # Tier 2 (Phase 4): a multi-step agent is used as a FALLBACK for ego
         # sources, not a replacement for structured parsing. Structured Tier 1
-        # adapters (json_ld / static_html / ATS) parse first; only when they
-        # yield nothing (parse drift) — or when no adapter exists for the source
-        # type — does the sink delegate to the injected CrawlAgent.
+        # recipes (``official_jsonld`` / ``official_static`` / ATS recipes)
+        # parse first; only when they yield nothing (parse drift) — or when no
+        # recipe exists for the source type — does the sink delegate to the
+        # injected CrawlAgent.
         agent_available = request.executor_mode == "ego" and self._agent is not None
 
         adapter = self._adapters.get(request.source_type)
@@ -434,29 +392,19 @@ class RealCrawlActivitySink:
                 return await self._crawl_via_agent(request)
             return CrawlSourceResult(postings=())
 
-        # Dual-protocol dispatch (Task 10): same shape as ``crawl_source``.
-        # RecipeEngine drives ``execute`` (its first-step response supplies
-        # the signals); legacy adapters keep the ``list_jobs`` path where
-        # ``resp.status_code`` / ``resp.body`` are the signal source. See
-        # ``crawl_source`` for the ``cast`` rationale.
-        if hasattr(adapter, "execute"):
-            engine = cast("RecipeEngine", adapter)
-            result = await engine.execute(
-                request, lambda url: self._fetch_for_request(request, url)
-            )
-            jobs = result.jobs
-            source_url = result.source_url or request.base_url
-            status_code = result.status_code
-            body_prefix = result.body_prefix
-            fetched_at_dt = result.fetched_at or datetime.now(tz=UTC)
-        else:
-            resp = self._fetch_for_request(request, request.base_url)
-            result = adapter.list_jobs(_parse_body(resp.body))
-            jobs = result.jobs
-            source_url = resp.final_url or request.base_url
-            status_code = resp.status_code
-            body_prefix = resp.body[:4096]
-            fetched_at_dt = resp.fetched_at
+        # Phase C dispatch: the registry holds only :class:`RecipeEngine`
+        # instances; ``execute`` always runs and its first-step response
+        # supplies the signals. See ``crawl_source`` for the ``cast``
+        # rationale.
+        engine = cast("RecipeEngine", adapter)
+        result = await engine.execute(
+            request, lambda url: self._fetch_for_request(request, url)
+        )
+        jobs = result.jobs
+        source_url = result.source_url or request.base_url
+        status_code = result.status_code
+        body_prefix = result.body_prefix
+        fetched_at_dt = result.fetched_at or datetime.now(tz=UTC)
         fetched_at = fetched_at_dt.isoformat()
 
         postings: list[CrawledPostingRecord] = []

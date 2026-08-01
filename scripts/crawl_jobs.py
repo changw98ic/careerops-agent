@@ -1,45 +1,45 @@
-"""Automated job crawler: discovers and fetches jobs from public ATS APIs.
+"""Automated job crawler over the declarative recipe catalog.
+
+DEPRECATED (Phase C / Task 11). The hard-coded Greenhouse / Lever / Ashby
+adapter classes and their per-source ``crawl_greenhouse`` / ``crawl_lever`` /
+``crawl_ashby`` functions were removed when the crawl sink became fully
+recipe-driven. The seed list and DB-upsert helpers below are kept so this
+script can still seed ``job_sources`` rows and then run each source through
+:class:`careerops.infrastructure.temporal.m1_crawl_sink.RealCrawlActivitySink`,
+which dispatches every request to :class:`careerops.recipes.engine.RecipeEngine`
+loaded from ``vendor/crawl-recipes/``.
 
 Usage:
     uv run python scripts/crawl_jobs.py [--dry-run]
 
-Crawls a seed list of companies across Greenhouse, Lever, and Ashby,
-ingesting postings into the CareerOps database with dedup and versioning.
+What the script does now:
+1. Ensures the seed companies + ``job_sources`` rows exist (same as before).
+2. Constructs a ``RealCrawlActivitySink`` against the live database.
+3. For each seed entry, builds a :class:`CrawlJobSourceInput` and calls
+   ``sink.crawl_source`` so the recipe engine handles fetch + parse, then
+   ingests each posting via ``sink.ingest_posting``.
+
+The bespoke ``CrawledJob`` shape, the per-ATS list/detail adapters, and the
+``fetch_json`` retry loop are gone — the recipe engine plus
+``http_fetcher.fetch`` already provide fetch retries, SSRF protection, and
+the per-source structured parsing contract.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import time
-import urllib.error
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
-from uuid import NAMESPACE_DNS, UUID, uuid5
+from uuid import NAMESPACE_DNS, uuid5
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 
-from careerops.adapters import (
-    AshbyAdapter,
-    GreenhouseAdapter,
-    GreenhouseDetailAdapter,
-    LeverAdapter,
-    RawJobRecord,
-)
-from careerops.adapters.http_fetcher import (
-    CircuitOpenError,
-    FetchError,
-    SSRFError,
-    fetch,
-)
 from careerops.config import Settings
 from careerops.infrastructure.database.engine import create_database_engine
-from careerops.infrastructure.database.postgres_job_repo import PostgresJobReadRepository
 from careerops.infrastructure.database.schema import companies, job_sources
 from careerops.infrastructure.temporal.m1_crawl_sink import RealCrawlActivitySink
-from careerops.workflows.m1_contracts import CrawledPostingRecord
+from careerops.workflows.m1_contracts import CrawlJobSourceInput
 
 # --- Seed list: companies with known public ATS boards ---
 
@@ -68,154 +68,14 @@ SEED_SOURCES: list[dict[str, str]] = [
     {"company": "Perplexity", "type": "ashby", "board": "perplexity"},
 ]
 
+# Per-source-type API endpoint templates. Used only to seed the
+# ``job_sources.base_url`` column; the recipe engine owns the live endpoint
+# contract (a recipe's ``fetch.endpoint`` is the source of truth at runtime).
 GREENHOUSE_API = "https://boards-api.greenhouse.io/v1/boards/{board}/jobs"
 LEVER_API = "https://api.lever.co/v0/postings/{board}?mode=json"
 ASHBY_API = "https://api.ashbyhq.com/posting-api/job-board/{board}"
 
-_TIMEOUT = 30
 _RATE_LIMIT_SECONDS = 1.0
-_MAX_RETRIES = 2
-
-
-@dataclass
-class CrawledJob:
-    company: str
-    source_type: str
-    external_id: str
-    title: str
-    location: str
-    url: str
-    raw_data: dict = field(default_factory=dict)
-    description: str = ""
-    fetched_at: datetime = field(default_factory=lambda: datetime.now(UTC))
-
-
-# --- Adapter instances (list + detail) ---
-
-_GREENHOUSE_ADAPTER = GreenhouseAdapter()
-_LEVER_ADAPTER = LeverAdapter()
-_ASHBY_ADAPTER = AshbyAdapter()
-_GREENHOUSE_DETAIL_ADAPTER = GreenhouseDetailAdapter()
-
-
-def _extract_desc(raw: dict[str, Any], source_type: str) -> str:
-    """Best-effort description extraction from list-payload raw_data.
-
-    Greenhouse list omits the JD body entirely (fetched per-job via the
-    detail endpoint in ``crawl_greenhouse``). Lever list carries both
-    ``descriptionPlain`` (text) and ``description`` (HTML) -- prefer the
-    plain text. Ashby list typically carries ``description`` (HTML) but
-    not ``descriptionPlain``.
-    """
-    if source_type == "lever":
-        return str(raw.get("descriptionPlain", "")) or str(raw.get("description", ""))
-    if source_type == "ashby":
-        return str(raw.get("description", "")) or str(raw.get("descriptionPlain", ""))
-    return ""
-
-
-def _raw_to_crawled(company: str, source_type: str, raw: RawJobRecord) -> CrawledJob:
-    """Build a CrawledJob from an adapter's RawJobRecord.
-
-    The list adapters leave ``description`` empty; for Lever/Ashby we pull
-    it from ``raw_data`` here. Greenhouse description is filled later by
-    the per-job detail fetch in ``crawl_greenhouse``.
-    """
-    description = raw.description or _extract_desc(raw.raw_data, source_type)
-    return CrawledJob(
-        company=company,
-        source_type=source_type,
-        external_id=raw.external_id,
-        title=raw.title,
-        location=raw.location,
-        url=raw.url,
-        description=description,
-        raw_data=dict(raw.raw_data),
-    )
-
-
-def fetch_json(url: str) -> object | None:
-    """Fetch JSON from a URL with retries and rate limiting.
-
-    Uses careerops.adapters.http_fetcher.fetch which provides SSRF protection,
-    circuit breaker, and per-domain rate limiting.  Custom headers are not
-    supported by fetch(); the module's built-in User-Agent is used instead.
-    """
-    for attempt in range(_MAX_RETRIES + 1):
-        try:
-            result = fetch(url, timeout=float(_TIMEOUT))
-            return json.loads(result.body)
-        except urllib.error.HTTPError as e:
-            # http_fetcher.fetch re-raises HTTPError after recording breaker state.
-            if e.code == 429 and attempt < _MAX_RETRIES:
-                retry_after = int(e.headers.get("Retry-After", "5"))
-                print(f"    Rate limited, waiting {retry_after}s...")
-                time.sleep(retry_after)
-                continue
-            if e.code == 404:
-                return None
-            if attempt < _MAX_RETRIES:
-                time.sleep(2)
-                continue
-            print(f"    HTTP {e.code}: {e.reason}")
-            return None
-        except (SSRFError, CircuitOpenError, FetchError) as e:
-            # Non-retryable: SSRF policy, circuit breaker, size violation
-            print(f"    Fetch rejected: {e}")
-            return None
-        except (urllib.error.URLError, OSError) as e:
-            if attempt < _MAX_RETRIES:
-                time.sleep(2)
-                continue
-            print(f"    Network error: {e}")
-            return None
-    return None
-
-
-def crawl_greenhouse(company: str, board: str) -> list[CrawledJob]:
-    url = GREENHOUSE_API.format(board=board)
-    data = fetch_json(url)
-    result = _GREENHOUSE_ADAPTER.list_jobs(data if data is not None else {})
-    jobs: list[CrawledJob] = []
-    for raw in result.jobs:
-        job = _raw_to_crawled(company, "greenhouse", raw)
-        # Greenhouse list endpoint omits JD body; fetch per-job detail.
-        detail_url = f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs/{raw.external_id}"
-        detail_data = fetch_json(detail_url)
-        if isinstance(detail_data, dict):
-            detail = _GREENHOUSE_DETAIL_ADAPTER.fetch_job(
-                detail_data,
-                source_url=detail_url,
-                fetched_at=datetime.now(UTC),
-            )
-            job.description = detail.description
-        time.sleep(_RATE_LIMIT_SECONDS)
-        jobs.append(job)
-    return jobs
-
-
-def crawl_lever(company: str, board: str) -> list[CrawledJob]:
-    url = LEVER_API.format(board=board)
-    data = fetch_json(url)
-    result = _LEVER_ADAPTER.list_jobs(data if data is not None else [])
-    return [_raw_to_crawled(company, "lever", raw) for raw in result.jobs]
-
-
-def crawl_ashby(company: str, board: str) -> list[CrawledJob]:
-    url = ASHBY_API.format(board=board)
-    data = fetch_json(url)
-    result = _ASHBY_ADAPTER.list_jobs(data if data is not None else {})
-    # TODO: Ashby detail endpoint is not confirmed; description comes from
-    # the list payload's ``description`` field only. If it is empty, the
-    # JD body is left blank rather than guessing a detail URL.
-    return [_raw_to_crawled(company, "ashby", raw) for raw in result.jobs]
-
-
-CRAWLERS = {
-    "greenhouse": crawl_greenhouse,
-    "lever": crawl_lever,
-    "ashby": crawl_ashby,
-}
 
 
 def _company_slug(name: str) -> str:
@@ -283,9 +143,15 @@ def _ensure_source_rows(
 
 
 def _base_url_for(source_type: str, board: str) -> str:
-    """Return the canonical API base URL for a source type + board slug."""
+    """Return the canonical API base URL for a source type + board slug.
+
+    The greenhouse URL carries ``?content=true`` so the list-step recipe
+    inlines the JD body in the ``content`` field (the recipe design that
+    ``test_greenhouse_bulk_fetch.py`` pins); the per-job detail fan-out is
+    then a no-op for any row whose description already came back populated.
+    """
     if source_type == "greenhouse":
-        return GREENHOUSE_API.format(board=board)
+        return GREENHOUSE_API.format(board=board) + "?content=true"
     if source_type == "lever":
         return LEVER_API.format(board=board)
     if source_type == "ashby":
@@ -293,165 +159,127 @@ def _base_url_for(source_type: str, board: str) -> str:
     return ""
 
 
-_ADAPTER_VERSIONS = {
-    "greenhouse": "greenhouse-v1",
-    "lever": "lever-v1",
-    "ashby": "ashby-v1",
-}
-
-
-def _job_to_record(job: CrawledJob, source_id: str) -> CrawledPostingRecord:
-    """Convert a CrawledJob to a CrawledPostingRecord for DB ingest."""
-    raw: dict[str, str] = {}
-    for k, v in job.raw_data.items():
-        raw[k] = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
-    return CrawledPostingRecord(
-        source_id=source_id,
-        external_id=job.external_id,
-        canonical_url=job.url,
-        source_url=job.url,
-        structured_data={
-            "title": job.title or "",
-            "location": job.location or "",
-            "description": job.description or "",
-            **raw,
-        },
-        parser_version=_ADAPTER_VERSIONS.get(job.source_type, "unknown-v1"),
-        fetched_at=job.fetched_at.isoformat(),
-    )
-
-
-def _ingest_jobs(
+async def _crawl_one(
     sink: RealCrawlActivitySink,
-    jobs: list[CrawledJob],
+    *,
     source_id: str,
     company_name: str,
-    company_id: str,
-    job_repo: object | None = None,
+    source_type: str,
+    board: str,
+    base_url: str,
 ) -> tuple[int, int, list[str]]:
-    """Ingest a batch of CrawledJobs into the database.
+    """Run one seed source through the recipe-driven sink and ingest results.
 
-    Runs the async ingest_posting in a dedicated event loop, then calls
-    JobIngestionService to create canonical_jobs + job_posting_assignments.
-    Returns (new_postings, new_versions, errors).
+    Returns ``(new_postings, new_versions, errors)``.
     """
-    import asyncio
+    new_postings = 0
+    new_versions = 0
+    errors: list[str] = []
 
-    from careerops.application.job_ingestion import JobIngestionService
+    request = CrawlJobSourceInput(
+        source_id=source_id,
+        company_id="",
+        company_name=company_name,
+        source_type=source_type,
+        base_url=base_url,
+        executor_mode="http",
+    )
+    try:
+        postings = await sink.crawl_source(request)
+    except Exception as exc:
+        errors.append(f"{company_name}/{board}: crawl failed: {exc}")
+        return 0, 0, errors
 
-    service = JobIngestionService(job_repo) if job_repo is not None else None
-
-    async def _run() -> tuple[int, int, list[str]]:
-        new_postings = 0
-        new_versions = 0
-        errors: list[str] = []
-        for job in jobs:
-            try:
-                record = _job_to_record(job, source_id)
-                result = await sink.ingest_posting(record)
-                if result.get("is_new_posting"):
-                    new_postings += 1
-                if result.get("is_new_version"):
-                    new_versions += 1
-
-                if service is not None:
-                    service.ingest_posting(
-                        source_id=UUID(source_id),
-                        external_id=record.external_id,
-                        canonical_url=record.canonical_url,
-                        structured_data=record.structured_data,
-                        source_url=record.source_url,
-                        parser_version=record.parser_version,
-                        company_name=company_name,
-                        now=datetime.now(UTC),
-                        company_id=UUID(company_id),
-                    )
-            except Exception as exc:
-                errors.append(f"{job.external_id}: {exc}")
-        return new_postings, new_versions, errors
-
-    return asyncio.run(_run())
+    for posting in postings:
+        try:
+            result = await sink.ingest_posting(posting)
+            if result.get("is_new_posting"):
+                new_postings += 1
+            if result.get("is_new_version"):
+                new_versions += 1
+        except Exception as exc:
+            errors.append(f"{company_name}/{board}/{posting.external_id}: {exc}")
+    return new_postings, new_versions, errors
 
 
 def crawl_all(dry_run: bool = False) -> None:
-    total_jobs = 0
-    total_sources = 0
-    failed_sources = 0
-    total_new_postings = 0
-    total_new_versions = 0
-    all_errors: list[str] = []
-
     print(f"CareerOps Job Crawler - {datetime.now(UTC).isoformat()}")
     print(f"Seed sources: {len(SEED_SOURCES)}")
     print(f"Mode: {'DRY RUN' if dry_run else 'LIVE'}")
     print("=" * 60)
 
-    engine: Engine | None = None
-    sink: RealCrawlActivitySink | None = None
-    job_repo: PostgresJobReadRepository | None = None
-    source_map: dict[str, str] = {}
+    if dry_run:
+        print("Dry run: no database writes.")
+        return
 
-    if not dry_run:
-        settings = Settings()
-        from careerops.config import RuntimeEnvironment
+    settings = Settings()
+    from careerops.config import RuntimeEnvironment
 
-        engine = create_database_engine(
-            settings, enforce_role=settings.environment is RuntimeEnvironment.PRODUCTION
-        )
-        sink = RealCrawlActivitySink(engine=engine)
-        job_repo = PostgresJobReadRepository(engine)
-        print("Ensuring companies and job_sources rows exist...")
-        source_map, company_map = _ensure_source_rows(engine, SEED_SOURCES)
-        print(f"  Resolved {len(source_map)} source IDs.")
+    engine = create_database_engine(
+        settings, enforce_role=settings.environment is RuntimeEnvironment.PRODUCTION
+    )
+    sink = RealCrawlActivitySink(engine=engine)
+    print("Ensuring companies and job_sources rows exist...")
+    source_map, _company_map = _ensure_source_rows(engine, SEED_SOURCES)
+    print(f"  Resolved {len(source_map)} source IDs.")
+
+    import asyncio
+
+    total_new_postings = 0
+    total_new_versions = 0
+    all_errors: list[str] = []
+    total_sources = 0
+    failed_sources = 0
 
     for source in SEED_SOURCES:
         company = source["company"]
         source_type = source["type"]
         board = source["board"]
-
-        crawler = CRAWLERS.get(source_type)
-        if crawler is None:
-            print(f"  [{company}] No crawler for type '{source_type}'")
+        sid = source_map.get(board)
+        if sid is None:
+            all_errors.append(f"{company}: no source_id for board '{board}'")
             failed_sources += 1
             continue
 
         print(f"  [{company}] Crawling {source_type}/{board}...", end=" ", flush=True)
-        jobs = crawler(company, board)
-        total_sources += 1
-
-        if not jobs:
-            print("0 jobs (failed or empty)")
+        try:
+            np, nv, errs = asyncio.run(
+                _crawl_one(
+                    sink,
+                    source_id=sid,
+                    company_name=company,
+                    source_type=source_type,
+                    board=board,
+                    base_url=_base_url_for(source_type, board),
+                )
+            )
+        except Exception as exc:
+            print(f"failed: {exc}")
             failed_sources += 1
-        else:
-            print(f"{len(jobs)} jobs")
-            total_jobs += len(jobs)
+            time.sleep(_RATE_LIMIT_SECONDS)
+            continue
 
-            if sink is not None:
-                sid = source_map.get(board)
-                if sid is None:
-                    all_errors.append(f"{company}: no source_id for board '{board}'")
-                else:
-                    cid = company_map.get(board, "")
-                    np, nv, errs = _ingest_jobs(sink, jobs, sid, company, cid, job_repo)
-                    total_new_postings += np
-                    total_new_versions += nv
-                    all_errors.extend(errs)
-                    if np or nv:
-                        print(f"    -> DB: {np} new postings, {nv} new versions")
-                    if errs:
-                        for err in errs:
-                            print(f"    -> ERROR: {err}")
+        total_sources += 1
+        total_new_postings += np
+        total_new_versions += nv
+        all_errors.extend(errs)
+        if np or nv:
+            print(f"{np} new postings, {nv} new versions")
+        else:
+            print("up to date")
+        if errs:
+            for err in errs:
+                print(f"    -> ERROR: {err}")
 
         time.sleep(_RATE_LIMIT_SECONDS)
 
     print("=" * 60)
-    print(f"Summary: {total_jobs} jobs from {total_sources} sources ({failed_sources} failed)")
-    if sink is not None:
-        print(f"DB ingest: {total_new_postings} new postings, {total_new_versions} new versions")
-        if all_errors:
-            print(f"DB errors: {len(all_errors)}")
-            for err in all_errors[:10]:
-                print(f"  - {err}")
+    print(f"Summary: {total_sources} sources crawled ({failed_sources} failed)")
+    print(f"DB ingest: {total_new_postings} new postings, {total_new_versions} new versions")
+    if all_errors:
+        print(f"DB errors: {len(all_errors)}")
+        for err in all_errors[:10]:
+            print(f"  - {err}")
 
 
 if __name__ == "__main__":

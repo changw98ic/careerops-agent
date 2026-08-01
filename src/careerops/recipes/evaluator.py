@@ -1,21 +1,24 @@
-"""Single-step recipe evaluator for ``json_path`` extracts (Task 3).
+"""Recipe evaluator: single-step extract (Task 3) and multi-step orchestration
+(Task 4 — ``steps`` / ``when`` / ``foreach`` / ``merge``).
 
 This module is the run-time counterpart of the declarative schema in
-:mod:`careerops.recipes.schema`: it takes an :class:`Extract` block and the
-parsed response ``data`` and produces a list of flat field->value dicts
-("rows"), one per matched item. Each row is the unit the crawl pipeline later
-merges into a posting record.
+:mod:`careerops.recipes.schema`. It takes declarative blocks and parsed HTTP
+responses and produces flat ``field -> value`` dicts ("rows"), one per matched
+item. Each row is the unit the crawl pipeline later merges into a posting
+record.
 
-Two public entry points:
+Public entry points:
 
-* :func:`evaluate_extract` — locate the item list via ``extract.items_path``
-  (a JSONPath evaluated against ``data``), then resolve every declared field
-  against each item.
+* :func:`evaluate_extract` — single-step: locate the item list via
+  ``extract.items_path`` (a JSONPath evaluated against ``data``), then resolve
+  every declared field against each item.
 * :func:`apply_field` — resolve a single :class:`Field_` against an item: walk
   ``[field.path, *field.fallback]`` in order and return the first non-empty
   JSONPath match (stringified), optionally unescaped.
+* :func:`run_steps` — multi-step: drive a recipe's ``steps`` in order with
+  ``when`` gating, ``foreach`` per-item fetching and ``merge`` strategies.
 
-Non-``json_path`` modes are out of scope for Task 3 and raise
+Non-``json_path`` modes are out of scope for Tasks 3/4 and raise
 :class:`NotImplementedError`; they arrive with the json_ld / sitemap / css
 executors in later tasks.
 
@@ -31,6 +34,7 @@ Task 5. ``evaluate_extract`` in json_path mode therefore ignores
 from __future__ import annotations
 
 import html
+from urllib.parse import urlsplit, urlunsplit
 
 import jsonpath
 
@@ -109,3 +113,151 @@ def evaluate_extract(extract: Extract, data: object) -> list[dict]:
         row = {name: apply_field(field, item) for name, field in extract.fields.items()}
         rows.append(row)
     return rows
+
+
+# ---------------------------------------------------------------------------
+# Multi-step orchestration (Task 4)
+#
+# The greenhouse list→detail pattern is the canonical two-hop crawl: a list
+# step returns job cards whose ``description`` is empty, and a detail step
+# fans out one fetch per card to fill the missing field. ``run_steps`` models
+# this declaratively so a recipe YAML — not code — drives the orchestration.
+#
+# JSONPath return shapes (verified against python-jsonpath 2.2.1, the version
+# pinned in pyproject.toml):
+#
+#   expr                              findall result
+#   --------------------------------  -----------------------------------
+#   ``$.steps.list``                  ``[[a, b]]``  (single-node array value)
+#   ``$.steps.list[*]``               ``[a, b]``    (flat, references)
+#   ``$.steps.list[?(@.k=='')]``      ``[a]``       (flat, references, doc order)
+#   no match                          ``[]``
+#
+# Two consequences:
+# 1. ``findall`` returns *references* to the underlying dicts, so mutating a
+#    foreach target mutates the canonical row stored under
+#    ``ns["steps"][<source_step>]`` — no key scan needed for merge.
+# 2. The ``$.steps.list`` (bare-path) form needs unwrapping to be iterable as
+#    items; :func:`_eval_pathlist` applies the same single-list-node unwrap
+#    rule as :func:`evaluate_extract` so both forms work as ``when``/``foreach``
+#    expressions.
+# ---------------------------------------------------------------------------
+
+
+class _SafeDict(dict):
+    """``str.format_map`` mapping that preserves unknown ``{keys}`` literally.
+
+    Used for endpoint templating: a detail step referencing ``{list_endpoint}``
+    before the list step has run should not raise; it should leave the
+    placeholder so the miss is visible in the rendered URL.
+    """
+
+    def __missing__(self, key: str) -> str:  # pragma: no cover - trivial
+        return "{" + key + "}"
+
+
+def _render(template: str, ctx: dict) -> str:
+    """Render ``template`` via ``str.format_map`` with missing keys preserved."""
+    return template.format_map(_SafeDict(ctx))
+
+
+def _eval_pathlist(expr: str, ns: dict) -> list:
+    """``jsonpath.findall`` + single-list-node unwrap.
+
+    ``$.steps.list`` resolves to one node whose *value* is the array, so
+    ``findall`` returns ``[[a, b]]`` rather than ``[a, b]``. The filter form
+    (``$.steps.list[?(...)]``) and wildcard form (``$.steps.list[*]``) already
+    return a flat list of items. The unwrap makes both forms iterable as item
+    lists. Verified against python-jsonpath 2.2.1.
+    """
+    matched = jsonpath.findall(expr, ns)
+    if len(matched) == 1 and isinstance(matched[0], list):
+        return matched[0]
+    return matched
+
+
+def _merge_into(parent_row: dict, detail_rows: list[dict], strategy: str) -> None:
+    """Merge ``detail_rows`` into ``parent_row`` per ``strategy`` (in place).
+
+    ``parent_row`` is a reference to a row inside a prior step's output
+    (``jsonpath.findall`` returns node references), so in-place mutation
+    updates the canonical row callers see through ``ns["steps"][<src>]``.
+
+    Strategies:
+
+    * ``overwrite_empty`` (default): only fill fields whose current value is
+      falsy (``""`` / ``None`` / ``0``). This mirrors the greenhouse
+      detail-cache: the list value wins whenever it was already present.
+    * ``overwrite_all``: replace every field the detail step provides.
+    * ``keep_first``: only set keys that are *absent* from ``parent_row``;
+      an existing key wins even if its value is empty.
+    """
+    for d in detail_rows:
+        for k, v in d.items():
+            if strategy == "overwrite_all":
+                parent_row[k] = v
+            elif strategy == "keep_first":
+                if k not in parent_row:
+                    parent_row[k] = v
+            else:  # overwrite_empty (and any unknown → safe default)
+                if not parent_row.get(k):
+                    parent_row[k] = v
+
+
+def run_steps(steps, fetch_one, base_ns) -> dict:
+    """Execute a recipe's ``steps`` in order, returning ``{step_id: [rows]}``.
+
+    ``fetch_one(endpoint) -> object`` is the injected fetcher (returns the
+    parsed JSON response). ``base_ns`` carries template variables such as
+    ``{slug}`` and optionally ``{list_endpoint}``; it is copied, not mutated.
+
+    Per-step semantics:
+
+    * ``when`` (step-level gate): evaluate ``step.when`` against the namespace;
+      an empty match list skips the step entirely (its slot becomes ``[]`` and
+      no fetch is issued). This is the short-circuit that prevents detail
+      fetches when every list row already has the field filled.
+    * ``foreach`` (per-item fan-out): evaluate ``step.foreach`` against the
+      namespace and iterate the matched items **in document order**, one fetch
+      per item. The item's own fields are exposed to endpoint templating so
+      ``{id}`` resolves to ``item["id"]``.
+    * ``merge``: each per-item extract's rows are merged into the matching
+      parent row (located by jsonpath reference identity) using the strategy.
+
+    After a non-foreach step runs, the namespace publishes ``list_endpoint``
+    derived from that step's endpoint with the query string stripped — this is
+    the detail-step analogue of the legacy
+    ``_fetch_greenhouse_details`` URL-derivation (the path that produced
+    ``https://boards-api.greenhouse.io/v1/boards/<slug>/jobs`` from the list
+    URL by dropping ``?content=true``).
+    """
+    ns: dict = {"steps": {}}
+    ctx = dict(base_ns)
+    for step in steps:
+        rows: list[dict] = []
+        if step.when is not None and not _eval_pathlist(step.when, ns):
+            ns["steps"][step.id] = rows
+            continue
+        if step.foreach is not None:
+            targets = _eval_pathlist(step.foreach, ns)
+            for item in targets:
+                local = dict(ctx)
+                if isinstance(item, dict):
+                    local.update({k: str(v) for k, v in item.items()})
+                ep = _render(step.fetch.endpoint, local)
+                data = fetch_one(ep)
+                drows = evaluate_extract(step.extract, data)
+                rows.extend(drows)
+                if step.merge is not None and isinstance(item, dict):
+                    _merge_into(item, drows, step.merge.strategy)
+        else:
+            ep = _render(step.fetch.endpoint, ctx)
+            data = fetch_one(ep)
+            # Publish list_endpoint for subsequent detail steps: strip the
+            # query string, keep scheme/netloc/path. Matches the legacy
+            # _fetch_greenhouse_details derivation.
+            parts = urlsplit(ep)
+            ctx["list_endpoint"] = urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+            rows = evaluate_extract(step.extract, data)
+        ns["steps"][step.id] = rows
+    return ns["steps"]

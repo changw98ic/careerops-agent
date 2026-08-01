@@ -1,5 +1,30 @@
 {
   "schema_version": "1",
-  "recipes": [],
+  "recipes": [
+    {
+      "id": "greenhouse",
+      "path": "recipes/greenhouse/recipe.yaml",
+      "source_type": "greenhouse",
+      "executor_mode": "http",
+      "match_hosts": ["boards.greenhouse.io"],
+      "recipe_version": "1"
+    },
+    {
+      "id": "lever",
+      "path": "recipes/lever/recipe.yaml",
+      "source_type": "lever",
+      "executor_mode": "http",
+      "match_hosts": ["lever.co"],
+      "recipe_version": "1"
+    },
+    {
+      "id": "ashby",
+      "path": "recipes/ashby/recipe.yaml",
+      "source_type": "ashby",
+      "executor_mode": "http",
+      "match_hosts": ["ashbyhq.com"],
+      "recipe_version": "1"
+    }
+  ],
   "skills": []
 }

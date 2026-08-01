@@ -94,10 +94,32 @@ _ADAPTER_REGISTRY: dict[str, JobSourceAdapter] = {
 # so the repo root is ``parents[4]`` (parents[0]=temporal, [1]=infrastructure,
 # [2]=careerops, [3]=src, [4]=repo root). The catalog lives at
 # ``<repo>/vendor/crawl-recipes/`` and is populated by the recipe-authoring
-# tasks (Task 8/9 onwards). Until then ``manifest.json`` is empty and
-# :func:`build_recipe_registry` returns ``{}``, leaving the legacy adapters in
-# control — so this change is a no-op until a recipe ships.
+# tasks (Task 8/9 onwards).
 DEFAULT_RECIPES_DIR = Path(__file__).resolve().parents[4] / "vendor" / "crawl-recipes"
+
+
+# Phase B live-rollout gate. The recipe registry merges ``RecipeEngine``
+# instances over the legacy ``_ADAPTER_REGISTRY`` inside
+# :class:`RealCrawlActivitySink.__init__``, so a recipe whose ``source_type``
+# collides with a legacy adapter (greenhouse/lever/ashby) replaces it. The
+# live crawl path (:meth:`crawl_source` / :meth:`crawl_source_with_signals`)
+# still dispatches via ``adapter.list_jobs(...)``, which :class:`RecipeEngine`
+# does not implement — it exposes ``execute(request, fetch)`` instead. So
+# once recipes ship in ``manifest.json`` (Task 8), every
+# ``RealCrawlActivitySink()`` construction would flip greenhouse/lever/ashby
+# to ``RecipeEngine`` and break the live crawl path with ``AttributeError``.
+#
+# The gate keeps the registry a no-op until the dispatch is migrated to
+# ``execute`` (Task 10): while ``False``, :func:`build_recipe_registry`
+# returns ``{}`` unconditionally, so the merge leaves the legacy adapters in
+# control and the live path is unchanged. Tests that exercise the merge
+# seam (``test_sink_merges_recipe_registry_overriding_legacy``) set this
+# flag to ``True`` via ``monkeypatch`` to verify the override semantics.
+# Parity tests load recipes directly via :func:`load_recipe` /
+# :func:`evaluate_extract` and never construct a sink, so they are
+# unaffected by the gate. Task 10 flips this to ``True`` once
+# ``crawl_source`` dispatches through ``execute``.
+RECIPES_LIVE: bool = False
 
 
 def build_recipe_registry(recipes_dir: Path | None = None) -> dict[str, RecipeEngine]:
@@ -108,12 +130,21 @@ def build_recipe_registry(recipes_dir: Path | None = None) -> dict[str, RecipeEn
     tests, stripped containers) and during the early Phase B rollout when the
     manifest exists but is still empty.
 
+    Gated by :data:`RECIPES_LIVE`: while ``False`` (default), this returns
+    ``{}`` unconditionally so the live crawl sink stays on the legacy
+    adapters. See :data:`RECIPES_LIVE` for the rationale.
+
     Each loaded :class:`Recipe` becomes a :class:`RecipeEngine` keyed by its
     ``source_type``. When the caller is :class:`RealCrawlActivitySink`, the
     recipe registry is merged *over* ``_ADAPTER_REGISTRY`` so that a recipe
     with ``source_type: greenhouse`` overrides the legacy
     :class:`GreenhouseAdapter` — that is the Phase B migration seam.
     """
+    # Live-rollout gate: until Task 10 migrates ``crawl_source`` dispatch to
+    # ``RecipeEngine.execute``, return ``{}`` so the merge in __init__ leaves
+    # the legacy adapters in control and the live path is unchanged.
+    if not RECIPES_LIVE:
+        return {}
     catalog = recipes_dir or DEFAULT_RECIPES_DIR
     if not (catalog / "manifest.json").exists():
         return {}

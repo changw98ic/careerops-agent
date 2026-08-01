@@ -1,0 +1,33 @@
+# Lever ATS crawl recipe (single step).
+#
+# Lever's postings API returns a bare top-level JSON array (not an object
+# wrapping ``jobs``), so ``items_path: "$`` selects the root array; the
+# evaluator's single-list-node unwrap rule turns that into the flat item
+# list. ``apply_url`` and ``description`` both use a fallback chain to
+# match the legacy adapter's ``or`` short-circuit: the primary API field
+# wins when present, otherwise the hosted/board field is used.
+#
+# Endpoint templating: ``{base_url}`` is resolved from ``CrawlSource.base_url``
+# (the full Lever API URL including the concrete company slug, e.g.
+# ``https://api.lever.co/v0/postings/acme?mode=json``).
+recipe_version: "1"
+source_type: lever
+executor_mode: http
+match:
+  url_patterns: ["lever.co"]
+  host_suffix: "lever.co"
+steps:
+  - id: list
+    fetch:
+      endpoint: "{base_url}"
+      method: GET
+    extract:
+      mode: json_path
+      items_path: "$"
+      fields:
+        id: {path: id}
+        title: {path: text}
+        location: {path: categories.location}
+        apply_url: {path: applyUrl, fallback: [hostedUrl]}
+        description: {path: descriptionPlain, fallback: [description], transform: html_unescape}
+fallback: llm_skill

@@ -1285,8 +1285,13 @@ def test_sink_merges_recipe_registry_overriding_legacy(tmp_path, monkeypatch) ->
     )
 
     # Point the sink's recipe-dir constant at our temp catalog and construct
-    # without injecting adapters — the merge path should run.
+    # without injecting adapters — the merge path should run. The live-rollout
+    # gate (RECIPES_LIVE) defaults to False so recipes don't override legacy
+    # adapters in production until Task 10 wires ``crawl_source`` dispatch to
+    # ``RecipeEngine.execute``; this test exercises the override seam, so it
+    # must opt in.
     monkeypatch.setattr(m1_crawl_sink, "DEFAULT_RECIPES_DIR", tmp_path)
+    monkeypatch.setattr(m1_crawl_sink, "RECIPES_LIVE", True)
     sink = m1_crawl_sink.RealCrawlActivitySink()
 
     greenhouse_entry = sink._adapters["greenhouse"]

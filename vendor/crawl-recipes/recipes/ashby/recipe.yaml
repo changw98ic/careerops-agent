@@ -1,0 +1,32 @@
+# Ashby ATS crawl recipe (single step).
+#
+# Ashby's posting API wraps jobs in ``{"jobs": [...]}``. ``location`` is a
+# plain string (unlike Greenhouse's nested ``location.name``). ``apply_url``
+# walks a three-step chain (``applyUrl`` → ``jobUrl`` → ``url``) and
+# ``description`` walks ``descriptionPlain`` → ``descriptionHtml`` →
+# ``description``, mirroring the legacy adapter's ``or`` cascade.
+#
+# Endpoint templating: ``{base_url}`` is resolved from ``CrawlSource.base_url``
+# (the full Ashby API URL including the concrete board slug, e.g.
+# ``https://api.ashbyhq.com/posting-api/job-board/acme?includeCompensation=true``).
+recipe_version: "1"
+source_type: ashby
+executor_mode: http
+match:
+  url_patterns: ["ashbyhq.com"]
+  host_suffix: "ashbyhq.com"
+steps:
+  - id: list
+    fetch:
+      endpoint: "{base_url}"
+      method: GET
+    extract:
+      mode: json_path
+      items_path: "$.jobs"
+      fields:
+        id: {path: id}
+        title: {path: title}
+        location: {path: location}
+        apply_url: {path: applyUrl, fallback: [jobUrl, url]}
+        description: {path: descriptionPlain, fallback: [descriptionHtml, description], transform: html_unescape}
+fallback: llm_skill

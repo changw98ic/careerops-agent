@@ -21,6 +21,10 @@ dependencies = [
     "langgraph-checkpoint-postgres>=3,<4",
     "cryptography>=48.0.1,<49",
     "playwright>=1.61,<1.62",
+    "pyyaml>=6.0.3",
+    "extruct>=0.18.0",
+    "selectolax>=0.4.11",
+    "python-jsonpath>=2.2.1",
 ]
 
 [project.scripts]

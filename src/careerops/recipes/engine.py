@@ -146,34 +146,38 @@ class RecipeEngine:
         socket itself.
 
         First-step signals: the first ``fetch`` call's ``status_code``,
-        ``body_prefix`` (first 4 KiB) AND ``final_url`` are sampled into the
-        result. Detail fetches' statuses and URLs are NOT propagated — they
-        are per-item and are handled by ``run_steps``' per-item fault
-        tolerance. The first-step rule keeps ``source_url`` aligned with the
-        same list response that produced ``status_code`` / ``body_prefix``
-        (a detail URL leaking into ``source_url`` would corrupt canonical URL
-        resolution and the backoff policy's signal consistency).
+        ``body_prefix`` (first 4 KiB), ``final_url`` AND ``fetched_at`` are
+        sampled into the result. Detail fetches' statuses and URLs are NOT
+        propagated — they are per-item and are handled by ``run_steps``' per-
+        item fault tolerance. The first-step rule keeps ``source_url`` /
+        ``fetched_at`` aligned with the same list response that produced
+        ``status_code`` / ``body_prefix`` (a detail URL leaking into
+        ``source_url`` would corrupt canonical URL resolution and the backoff
+        policy's signal consistency).
         """
         first_status = 0
         first_body = ""
         final_url = ""
+        first_fetched_at = None
         first_sampled = False
 
         def fetch_one(endpoint: str) -> object:
-            nonlocal first_status, first_body, final_url, first_sampled
+            nonlocal first_status, first_body, final_url, first_fetched_at, first_sampled
             resp = fetch(endpoint)
-            # Sample status_code / body_prefix / final_url from the FIRST
-            # fetch only. A plain ``if not first_status`` guard would re-enter
-            # when the first response legitimately returned status 0 (or an
-            # empty status attribute), letting a later detail fetch clobber
-            # the list-step signals — so a dedicated sampled-flag is the
-            # correct gate. Detail responses' status/url stay per-item.
+            # Sample status_code / body_prefix / final_url / fetched_at from
+            # the FIRST fetch only. A plain ``if not first_status`` guard
+            # would re-enter when the first response legitimately returned
+            # status 0 (or an empty status attribute), letting a later detail
+            # fetch clobber the list-step signals — so a dedicated sampled-
+            # flag is the correct gate. Detail responses' status/url stay
+            # per-item.
             if not first_sampled:
                 first_sampled = True
                 first_status = getattr(resp, "status_code", 0) or 0
                 raw_body = getattr(resp, "body", "") or ""
                 first_body = raw_body[:4096]
                 final_url = getattr(resp, "final_url", endpoint) or endpoint
+                first_fetched_at = getattr(resp, "fetched_at", None)
             return _parse_body(getattr(resp, "body", ""))
 
         base_ns: dict[str, str] = {}
@@ -197,4 +201,5 @@ class RecipeEngine:
             parser_version=self.parser_version,
             status_code=first_status,
             body_prefix=first_body,
+            fetched_at=first_fetched_at,
         )

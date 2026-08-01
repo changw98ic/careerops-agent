@@ -22,8 +22,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from json import JSONDecodeError, loads
 from pathlib import Path
-from typing import Any, Protocol, cast
-from urllib.parse import urlsplit, urlunsplit
+from typing import Protocol, cast
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -101,25 +100,18 @@ DEFAULT_RECIPES_DIR = Path(__file__).resolve().parents[4] / "vendor" / "crawl-re
 # Phase B live-rollout gate. The recipe registry merges ``RecipeEngine``
 # instances over the legacy ``_ADAPTER_REGISTRY`` inside
 # :class:`RealCrawlActivitySink.__init__``, so a recipe whose ``source_type``
-# collides with a legacy adapter (greenhouse/lever/ashby) replaces it. The
-# live crawl path (:meth:`crawl_source` / :meth:`crawl_source_with_signals`)
-# still dispatches via ``adapter.list_jobs(...)``, which :class:`RecipeEngine`
-# does not implement — it exposes ``execute(request, fetch)`` instead. So
-# once recipes ship in ``manifest.json`` (Task 8), every
-# ``RealCrawlActivitySink()`` construction would flip greenhouse/lever/ashby
-# to ``RecipeEngine`` and break the live crawl path with ``AttributeError``.
+# collides with a legacy adapter (greenhouse/lever/ashby) replaces it.
 #
-# The gate keeps the registry a no-op until the dispatch is migrated to
-# ``execute`` (Task 10): while ``False``, :func:`build_recipe_registry`
-# returns ``{}`` unconditionally, so the merge leaves the legacy adapters in
-# control and the live path is unchanged. Tests that exercise the merge
-# seam (``test_sink_merges_recipe_registry_overriding_legacy``) set this
-# flag to ``True`` via ``monkeypatch`` to verify the override semantics.
-# Parity tests load recipes directly via :func:`load_recipe` /
-# :func:`evaluate_extract` and never construct a sink, so they are
-# unaffected by the gate. Task 10 flips this to ``True`` once
-# ``crawl_source`` dispatches through ``execute``.
-RECIPES_LIVE: bool = False
+# Task 10 flipped this to ``True``: ``crawl_source`` /
+# ``crawl_source_with_signals`` now dispatch through ``adapter.execute(...)``
+# when the adapter exposes it (:class:`RecipeEngine` does), and fall back to
+# ``adapter.list_jobs(...)`` for the remaining legacy adapters
+# (json_ld/sitemap/static_html). The gate is therefore safe to open. The
+# ``test_sink_merges_recipe_registry_overriding_legacy`` test still
+# monkeypatches this flag to ``True`` (now a no-op); parity tests load
+# recipes directly via :func:`load_recipe` / :func:`evaluate_extract` and
+# never construct a sink, so they are unaffected by the gate.
+RECIPES_LIVE: bool = True
 
 
 def build_recipe_registry(recipes_dir: Path | None = None) -> dict[str, RecipeEngine]:
@@ -130,9 +122,9 @@ def build_recipe_registry(recipes_dir: Path | None = None) -> dict[str, RecipeEn
     tests, stripped containers) and during the early Phase B rollout when the
     manifest exists but is still empty.
 
-    Gated by :data:`RECIPES_LIVE`: while ``False`` (default), this returns
-    ``{}`` unconditionally so the live crawl sink stays on the legacy
-    adapters. See :data:`RECIPES_LIVE` for the rationale.
+    Gated by :data:`RECIPES_LIVE` (Task 10 default): while ``False``, this
+    returns ``{}`` unconditionally so the live crawl sink stays on the
+    legacy adapters. See :data:`RECIPES_LIVE` for the rationale.
 
     Each loaded :class:`Recipe` becomes a :class:`RecipeEngine` keyed by its
     ``source_type``. When the caller is :class:`RealCrawlActivitySink`, the
@@ -140,9 +132,11 @@ def build_recipe_registry(recipes_dir: Path | None = None) -> dict[str, RecipeEn
     with ``source_type: greenhouse`` overrides the legacy
     :class:`GreenhouseAdapter` — that is the Phase B migration seam.
     """
-    # Live-rollout gate: until Task 10 migrates ``crawl_source`` dispatch to
-    # ``RecipeEngine.execute``, return ``{}`` so the merge in __init__ leaves
-    # the legacy adapters in control and the live path is unchanged.
+    # Live-rollout gate (see :data:`RECIPES_LIVE`). Task 10 flipped the
+    # default to ``True`` and migrated ``crawl_source`` /
+    # ``crawl_source_with_signals`` to dispatch through
+    # ``RecipeEngine.execute``; the gate is retained so the recipe catalog
+    # can be force-disabled without code changes if a recipe regress.
     if not RECIPES_LIVE:
         return {}
     catalog = recipes_dir or DEFAULT_RECIPES_DIR
@@ -350,42 +344,54 @@ class RealCrawlActivitySink:
         if adapter is None:
             return []
 
-        resp: FetchedResponse = self._fetch_for_request(request, request.base_url)
-        result = adapter.list_jobs(_parse_body(resp.body))
-
-        fetched_at = resp.fetched_at.isoformat()
-        postings: list[CrawledPostingRecord] = []
-
-        # Greenhouse's list endpoint includes the JD body when called with
-        # ``content=true``.  Fetch details only for records where the body is
-        # actually absent.
-        detail_cache: dict[str, str] = {}
-        if request.source_type == "greenhouse":
-            detail_cache = self._fetch_greenhouse_details(
-                request.base_url,
-                tuple(record for record in result.jobs if not record.description),
-                executor_mode=request.executor_mode,
+        # Dual-protocol dispatch (Task 10): RecipeEngine exposes
+        # ``execute(request, fetch)`` (multi-step recipes — greenhouse list→
+        # detail lives here now), while the remaining legacy adapters
+        # (json_ld / sitemap / static_html) still implement ``list_jobs``.
+        # ``hasattr`` keeps both paths working until Task 11 deletes the
+        # legacy adapters, after which the ``else`` branch is dead code. The
+        # ``cast`` to :class:`RecipeEngine` localises the static type tension
+        # documented in ``__init__``: ``self._adapters`` is typed
+        # ``dict[str, JobSourceAdapter]`` but the recipe merge mixes in
+        # ``RecipeEngine`` instances whose contract is ``execute`` not
+        # ``list_jobs``; pyright cannot see ``execute`` through the Protocol,
+        # so the cast tells it the runtime shape.
+        if hasattr(adapter, "execute"):
+            engine = cast("RecipeEngine", adapter)
+            result = await engine.execute(
+                request, lambda url: self._fetch_for_request(request, url)
             )
+            jobs = result.jobs
+            source_url = result.source_url or request.base_url
+            # RecipeEngine samples the first-step ``fetched_at``; legacy
+            # ``AdapterFetchResult`` (list_jobs path) leaves it ``None``.
+            fetched_at_dt = result.fetched_at or datetime.now(tz=UTC)
+        else:
+            resp = self._fetch_for_request(request, request.base_url)
+            result = adapter.list_jobs(_parse_body(resp.body))
+            jobs = result.jobs
+            source_url = resp.final_url or request.base_url
+            fetched_at_dt = resp.fetched_at
+        fetched_at = fetched_at_dt.isoformat()
 
-        for record in result.jobs:
+        postings: list[CrawledPostingRecord] = []
+        for record in jobs:
             # Flatten to dict[str, str] — Temporal JSON converter rejects
             # ``object`` values; stringify non-string scalars.
             raw: dict[str, str] = {}
             for k, v in record.raw_data.items():
                 raw[k] = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
 
-            description = record.description or detail_cache.get(record.external_id, "")
-
             postings.append(
                 CrawledPostingRecord(
                     source_id=request.source_id,
                     external_id=record.external_id,
                     canonical_url=record.url or request.base_url,
-                    source_url=resp.final_url or request.base_url,
+                    source_url=source_url,
                     structured_data={
                         "title": record.title or "",
                         "location": record.location or "",
-                        "description": description,
+                        "description": record.description,
                         "apply_url": record.url or "",
                         **raw,
                     },
@@ -428,39 +434,47 @@ class RealCrawlActivitySink:
                 return await self._crawl_via_agent(request)
             return CrawlSourceResult(postings=())
 
-        resp: FetchedResponse = self._fetch_for_request(request, request.base_url)
-        result = adapter.list_jobs(_parse_body(resp.body))
-
-        fetched_at = resp.fetched_at.isoformat()
-        postings: list[CrawledPostingRecord] = []
-
-        # Avoid thousands of duplicate detail requests when ``content=true``
-        # already supplied the full description in the list response.
-        detail_cache: dict[str, str] = {}
-        if request.source_type == "greenhouse":
-            detail_cache = self._fetch_greenhouse_details(
-                request.base_url,
-                tuple(record for record in result.jobs if not record.description),
-                executor_mode=request.executor_mode,
+        # Dual-protocol dispatch (Task 10): same shape as ``crawl_source``.
+        # RecipeEngine drives ``execute`` (its first-step response supplies
+        # the signals); legacy adapters keep the ``list_jobs`` path where
+        # ``resp.status_code`` / ``resp.body`` are the signal source. See
+        # ``crawl_source`` for the ``cast`` rationale.
+        if hasattr(adapter, "execute"):
+            engine = cast("RecipeEngine", adapter)
+            result = await engine.execute(
+                request, lambda url: self._fetch_for_request(request, url)
             )
+            jobs = result.jobs
+            source_url = result.source_url or request.base_url
+            status_code = result.status_code
+            body_prefix = result.body_prefix
+            fetched_at_dt = result.fetched_at or datetime.now(tz=UTC)
+        else:
+            resp = self._fetch_for_request(request, request.base_url)
+            result = adapter.list_jobs(_parse_body(resp.body))
+            jobs = result.jobs
+            source_url = resp.final_url or request.base_url
+            status_code = resp.status_code
+            body_prefix = resp.body[:4096]
+            fetched_at_dt = resp.fetched_at
+        fetched_at = fetched_at_dt.isoformat()
 
-        for record in result.jobs:
+        postings: list[CrawledPostingRecord] = []
+        for record in jobs:
             raw: dict[str, str] = {}
             for k, v in record.raw_data.items():
                 raw[k] = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
-
-            description = record.description or detail_cache.get(record.external_id, "")
 
             postings.append(
                 CrawledPostingRecord(
                     source_id=request.source_id,
                     external_id=record.external_id,
                     canonical_url=record.url or request.base_url,
-                    source_url=resp.final_url or request.base_url,
+                    source_url=source_url,
                     structured_data={
                         "title": record.title or "",
                         "location": record.location or "",
-                        "description": description,
+                        "description": record.description,
                         "apply_url": record.url or "",
                         **raw,
                     },
@@ -484,14 +498,14 @@ class RealCrawlActivitySink:
             for field_name in _EXPECTED_POSTING_FIELDS:
                 if not sample.get(field_name):
                     missing_fields.append(field_name)
-        elif result.jobs:
+        elif jobs:
             # Jobs were found by the adapter but produced no postings — unusual.
             missing_fields.extend(_EXPECTED_POSTING_FIELDS)
 
         return CrawlSourceResult(
             postings=tuple(postings),
-            status_code=resp.status_code,
-            body_prefix=resp.body[:4096],
+            status_code=status_code,
+            body_prefix=body_prefix,
             expected_fields_missing=tuple(missing_fields),
         )
 
@@ -516,62 +530,6 @@ class RealCrawlActivitySink:
             postings=postings,
             status_code=200 if postings else 0,
         )
-
-    def _fetch_greenhouse_details(
-        self,
-        base_url: str,
-        jobs: tuple[Any, ...],
-        *,
-        batch_size: int = 10,
-        executor_mode: str = "http",
-    ) -> dict[str, str]:
-        """Fetch Greenhouse detail endpoint for each job to get description.
-
-        Constructs detail URL by appending /{id} to the list URL.
-        Returns a map of external_id -> description (HTML content).
-        """
-        from careerops.adapters.job_sources import GreenhouseDetailAdapter
-
-        detail_adapter = GreenhouseDetailAdapter()
-        descriptions: dict[str, str] = {}
-
-        # Detail URLs must be built from the list endpoint path, not from its
-        # query string (``...?content=true/123`` is invalid).
-        parts = urlsplit(base_url)
-        list_endpoint = urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
-
-        # Process in batches to stay within timeout.
-        job_list = list(jobs)
-        for i in range(0, len(job_list), batch_size):
-            batch = job_list[i : i + batch_size]
-            for record in batch:
-                ext_id = record.external_id
-                if not ext_id:
-                    continue
-                detail_url = f"{list_endpoint.rstrip('/')}/{ext_id}"
-                detail_description = ""
-                try:
-                    detail_request = CrawlJobSourceInput(
-                        source_id="detail",
-                        company_id="",
-                        company_name="",
-                        source_type="greenhouse",
-                        base_url=detail_url,
-                        executor_mode=executor_mode,
-                    )
-                    detail_resp = self._fetch_for_request(detail_request, detail_url)
-                    detail_data = _parse_body(detail_resp.body)
-                    detail_record = detail_adapter.fetch_job(
-                        detail_data,
-                        source_url=detail_url,
-                        fetched_at=detail_resp.fetched_at,
-                    )
-                    detail_description = detail_record.description
-                except Exception:
-                    detail_description = ""  # List data remains useful on detail failure.
-                if detail_description:
-                    descriptions[ext_id] = detail_description
-        return descriptions
 
     async def ingest_posting(
         self,

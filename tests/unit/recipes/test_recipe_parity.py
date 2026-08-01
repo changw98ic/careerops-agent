@@ -41,18 +41,26 @@ correctness.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from careerops.adapters.job_sources import (
     AshbyAdapter,
     GreenhouseAdapter,
+    JsonLdAdapter,
     LeverAdapter,
     RawJobRecord,
+    SitemapAdapter,
+    StaticHtmlAdapter,
 )
+from careerops.infrastructure.temporal.m1_crawl_sink import DEFAULT_RECIPES_DIR
 from careerops.recipes.evaluator import evaluate_extract
 from careerops.recipes.loader import load_recipe
 
-RECIPES_DIR = Path("vendor/crawl-recipes/recipes")
+# Resolve the recipes directory from ``__file__``-derived DEFAULT_RECIPES_DIR
+# (``<repo>/vendor/crawl-recipes``) rather than a relative path. The latter is
+# cwd-fragile: running pytest from a subdirectory would raise FileNotFoundError
+# on ``vendor/crawl-recipes/recipes``. The single source of truth lives in
+# ``m1_crawl_sink``; importing it keeps the parity tests aligned with the
+# runtime catalog location.
+RECIPES_DIR = DEFAULT_RECIPES_DIR / "recipes"
 
 
 def _list_step_extract_rows(recipe_name: str) -> list[dict]:
@@ -179,3 +187,140 @@ def test_ashby_list_parity():
     }
     extract = _list_step_extract_rows("ashby")
     assert _recipe_tuples(extract, data) == _legacy_tuples(AshbyAdapter(), data)
+
+
+# ---------------------------------------------------------------------------
+# Task 9 — official jsonld / sitemap / static recipe parity
+#
+# These recipes translate the legacy "official" adapters (JsonLdAdapter /
+# SitemapAdapter / StaticHtmlAdapter) into the declarative DSL. Each recipe is
+# a single ``fetch`` step; parity compares the step's ``evaluate_extract``
+# output against the legacy adapter's ``list_jobs`` output on identical mock
+# data, projected to the field-mapping layer both share.
+#
+# external_id note. json_ld and static recipes do not declare an id field —
+# legacy computes the id in code (sha256 of url / title), and the DSL has no
+# sha256 transform, so the engine layer (``_row_to_record``) derives the id
+# from the full row instead. Parity for those two modes therefore compares
+# only the field-mapping layer (title / description / location / apply_url for
+# json_ld; title / location for static) and excludes external_id. Sitemap
+# mode is the exception: the evaluator computes ``sha256(url)[:16]`` inline,
+# identically to the legacy adapter, so sitemap parity includes external_id.
+#
+# RECIPES_DIR is cwd-independent (Task 8 Minor fix): ``DEFAULT_RECIPES_DIR`` is
+# derived from ``m1_crawl_sink.__file__``, so the parity tests resolve the
+# recipe catalog the same way the runtime sink does, regardless of the
+# directory pytest was launched from.
+# ---------------------------------------------------------------------------
+
+
+def _official_step_extract(recipe_name: str, step_id: str = "fetch"):
+    """Load ``recipes/<recipe_name>/recipe.yaml`` and return the named step's
+    extract block directly (no fetch, no engine). The official recipes are
+    single-step (``id: fetch``), so the default matches all three."""
+    recipe = load_recipe(RECIPES_DIR / recipe_name / "recipe.yaml")
+    return next(s.extract for s in recipe.steps if s.id == step_id)
+
+
+def test_official_jsonld_parity():
+    """official_jsonld recipe extract == ``JsonLdAdapter.list_jobs``.
+
+    Covers:
+
+    * the ``@['@type']=='JobPosting'`` filter drops a ``Person`` block and
+      keeps ``JobPosting`` blocks;
+    * nested ``jobLocation.address.addressLocality`` resolution (row 1);
+    * a row missing ``jobLocation`` yields ``location == ""`` on both paths
+      (the legacy adapter returns "" and the recipe's ``[location]`` fallback
+      misses because no top-level ``location`` key is present);
+    * the ``description`` and ``url`` (→ ``apply_url``) field mappings.
+
+    ``external_id`` is excluded — see the module-level note.
+    """
+    html_doc = (
+        '<script type="application/ld+json">'
+        '{"@type":"Person","name":"Alice"}'
+        "</script>"
+        '<script type="application/ld+json">'
+        '{"@type":"JobPosting","title":"Eng","description":"desc 1",'
+        '"url":"https://x.com/jobs/1",'
+        '"jobLocation":{"address":{"addressLocality":"SF"}}}'
+        "</script>"
+        '<script type="application/ld+json">'
+        '{"@type":"JobPosting","title":"PM","description":"desc 2",'
+        '"url":"https://x.com/jobs/2"}'
+        "</script>"
+    )
+    extract = _official_step_extract("official_jsonld")
+    recipe_rows = evaluate_extract(extract, html_doc)
+    recipe_proj = [
+        (r["title"], r["description"], r["location"], r["apply_url"]) for r in recipe_rows
+    ]
+    legacy_jobs = JsonLdAdapter().list_jobs(html_doc).jobs
+    legacy_proj = [(j.title, j.description, j.location, j.url) for j in legacy_jobs]
+    assert recipe_proj == legacy_proj
+    # Explicit guard: the Person block was filtered out (only 2 JobPostings).
+    assert len(recipe_proj) == 2
+
+
+def test_official_sitemap_parity():
+    """official_sitemap recipe extract == ``SitemapAdapter.list_jobs``.
+
+    Covers:
+
+    * the ``url_filter`` drops a non-job URL (``/about``) and keeps ``/jobs/1``
+      and ``/careers/2`` (detail URLs with a trailing path segment — the form
+      both the legacy ``/(jobs|careers|positions)/`` regex and the recipe's
+      ``\\b(jobs|careers|positions)\\b`` word-boundary regex agree on);
+    * the evaluator computes ``external_id`` as ``sha256(url)[:16]``
+      identically to the legacy adapter, so it is included in the comparison;
+    * sitemap mode emits ``{url, external_id}`` with no declared ``fields``;
+    * the XXE guard: both legacy and recipe reject ``<!DOCTYPE``/``<!ENTITY``
+      bearing input with an empty result and no raise.
+    """
+    xml = (
+        '<?xml version="1.0"?>'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        "<url><loc>https://x.com/about</loc></url>"
+        "<url><loc>https://x.com/jobs/1</loc></url>"
+        "<url><loc>https://x.com/careers/2</loc></url>"
+        "</urlset>"
+    )
+    extract = _official_step_extract("official_sitemap")
+    recipe_rows = evaluate_extract(extract, xml)
+    recipe_proj = [(r["external_id"], r["url"]) for r in recipe_rows]
+    legacy_jobs = SitemapAdapter().list_jobs(xml).jobs
+    legacy_proj = [(j.external_id, j.url) for j in legacy_jobs]
+    assert recipe_proj == legacy_proj
+
+    # XXE guard parity: DOCTYPE/ENTITY-bearing input yields [] on both paths.
+    evil = '<!DOCTYPE x [<!ENTITY xxe "y">]><urlset></urlset>'
+    assert evaluate_extract(extract, evil) == []
+    assert SitemapAdapter().list_jobs(evil).jobs == ()
+
+
+def test_official_static_parity():
+    """official_static recipe extract == ``StaticHtmlAdapter.list_jobs``.
+
+    Covers: css mode zip-pairs the ``[class*=job_title]`` and
+    ``[class*=job_location]`` columns by index. Mock data uses the underscore
+    class-name form — the form both the legacy regex ``job[-_]?title`` and the
+    css substring selector ``[class*=job_title]`` agree on. Dash-form
+    (``job-title``) and concatenated (``jobtitle``) class names are a known
+    recipe-refinement candidate (see recipe.yaml comment) and are out of scope
+    for this field-mapping parity assertion.
+
+    ``external_id`` is excluded — see the module-level note.
+    """
+    doc = (
+        "<div>"
+        '<h2 class="job_title">Eng</h2><span class="job_location">SF</span>'
+        '<h2 class="job_title">PM</h2><span class="job_location">NYC</span>'
+        "</div>"
+    )
+    extract = _official_step_extract("official_static")
+    recipe_rows = evaluate_extract(extract, doc)
+    recipe_proj = [(r["title"], r["location"]) for r in recipe_rows]
+    legacy_jobs = StaticHtmlAdapter().list_jobs(doc).jobs
+    legacy_proj = [(j.title, j.location) for j in legacy_jobs]
+    assert recipe_proj == legacy_proj

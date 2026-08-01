@@ -24,6 +24,30 @@
       "executor_mode": "http",
       "match_hosts": ["ashbyhq.com"],
       "recipe_version": "1"
+    },
+    {
+      "id": "official_jsonld",
+      "path": "recipes/official_jsonld/recipe.yaml",
+      "source_type": "official_jsonld",
+      "executor_mode": "http",
+      "match_hosts": [],
+      "recipe_version": "1"
+    },
+    {
+      "id": "official_sitemap",
+      "path": "recipes/official_sitemap/recipe.yaml",
+      "source_type": "official_sitemap",
+      "executor_mode": "http",
+      "match_hosts": [],
+      "recipe_version": "1"
+    },
+    {
+      "id": "official_static",
+      "path": "recipes/official_static/recipe.yaml",
+      "source_type": "official_static",
+      "executor_mode": "http",
+      "match_hosts": [],
+      "recipe_version": "1"
     }
   ],
   "skills": []

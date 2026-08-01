@@ -1,0 +1,44 @@
+# Official static-HTML crawl recipe (Task 9).
+#
+# Translates ``StaticHtmlAdapter`` (adapters/job_sources.py) into the
+# declarative recipe DSL. ``css`` mode reuses ``Field_.path`` as a CSS
+# selector and zip-pairs columns by index — the index-aligned pairing the
+# legacy adapter did with two parallel regex matches (titles + locations
+# scanned independently, then zip-paired).
+#
+# Selector scope. The legacy regex ``class=["'][^"']*job[-_]?title`` accepts
+# ``job_title`` / ``job-title`` / ``jobtitle`` (optional ``-`` or ``_``
+# separator, or none). The CSS substring selector ``[class*=job_title]``
+# matches the underscore form — the most common convention in real job-board
+# markup. Sites that use dash-form (``job-title``) or concatenated
+# (``jobtitle``) class names are a recipe-refinement candidate (a selector
+# list ``[class*=job_title], [class*=job-title], [class*=jobtitle]`` would
+# cover all three); kept simple here per the Task 9 brief, and the DSL is NOT
+# extended to keep that refinement declarative. The parity test uses the
+# underscore form, which both the legacy regex and the css selector agree on.
+#
+# External id. Not declared as a field — the legacy adapter computes
+# ``sha256(title.strip())[:16]`` in code, and the DSL has no sha256 transform.
+# The recipe row therefore carries ``title`` / ``location`` only; the engine
+# layer (``RecipeEngine._row_to_record``) derives the id. Parity compares the
+# field-mapping layer (title / location) and excludes external_id.
+#
+# Endpoint templating. ``{base_url}`` is resolved from ``CrawlSource.base_url``
+# at execute time.
+recipe_version: "1"
+source_type: official_static
+executor_mode: http
+match:
+  url_patterns: []
+  host_suffix: ""
+steps:
+  - id: fetch
+    fetch:
+      endpoint: "{base_url}"
+      method: GET
+    extract:
+      mode: css
+      fields:
+        title: {path: "[class*=job_title]"}
+        location: {path: "[class*=job_location]"}
+fallback: llm_skill

@@ -21,6 +21,17 @@ dependencies = [
     "langgraph-checkpoint-postgres>=3,<4",
     "cryptography>=48.0.1,<49",
     "playwright>=1.61,<1.62",
+    "pyyaml>=6.0.3,<7",
+    "extruct>=0.18.0,<1",
+    "selectolax>=0.4.11,<1",
+    # ``~=2.2.1`` (compatible release) pins to the 2.2.x line. The recipe
+    # engine's multi-step merge depends on ``jsonpath.findall`` returning
+    # *references* to the underlying dict nodes (so in-place mutation of
+    # ``ns["steps"]`` rows propagates) plus the single-list-node unwrap and
+    # RFC 9535 filter semantics verified against 2.2.1. A 2.3+ minor or 3.x
+    # major bump could silently break the merge contract, so the bound is
+    # intentionally tight; bump only after re-verifying those semantics.
+    "python-jsonpath~=2.2.1",
 ]
 
 [project.scripts]

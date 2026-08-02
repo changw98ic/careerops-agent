@@ -30,6 +30,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import cast
 from urllib.parse import urlsplit, urlunsplit
 
@@ -37,6 +38,14 @@ from careerops.adapters.job_sources import RawJobRecord
 from careerops.application.llm_job_extraction import LLMJobExtractor
 from careerops.infrastructure.ego_tool import BrowserTool, CapturedApiCall, PageFetchResult
 from careerops.model_gateway.base import StructuredModelClient, StructuredModelRequest
+from careerops.recipes.skill_loader import Skill, load_skills
+
+# Canonical Tier 2 skill catalog. ``crawl_agent.py`` lives at
+# ``<repo>/src/careerops/application/``, so ``parents[3]`` is the repo root and
+# the catalog is ``<repo>/vendor/crawl-recipes/skills``. Mirrors
+# ``DEFAULT_RECIPES_DIR`` in ``m1_crawl_sink`` without dragging the agent into
+# the infrastructure layer.
+DEFAULT_SKILLS_DIR = Path(__file__).resolve().parents[3] / "vendor" / "crawl-recipes" / "skills"
 
 # Generic page trigger used when a source supplies no site-specific trigger.
 # It tries common search/click patterns to fire a job-list request. Inlined
@@ -91,6 +100,28 @@ GENERIC_TRIGGER = """(() => {
 # Distinct from the LLM extractor's ``llm-extraction`` tag so the sink can tell
 # API-captured postings apart from model-extracted ones.
 API_CAPTURE_PROVENANCE = "api-capture"
+
+# Base ReAct system prompt used when no Tier 2 skill matches the source URL
+# (the blind-run path). When a skill *does* match, its playbook is prepended
+# (see :meth:`CrawlAgent._build_react_system_prompt`) so the model follows the
+# site-specific steps instead of guessing.
+_REACT_SYSTEM_PROMPT_BASE = (
+    "You are an autonomous web crawler exploring a company career page to find "
+    "job listings. You see the current page state. Decide ONE action to take "
+    "next.\n\n"
+    "Actions:\n"
+    "- extract: Job titles are visible on this page NOW. Extract them.\n"
+    "- click: Click a button/link to reach the job list. Provide the exact "
+    "text in 'target'.\n"
+    "- navigate: Open a different URL on the same site that looks like the "
+    "job list. Provide the URL in 'target'.\n"
+    "- wait: The page is still loading. Wait a few seconds.\n"
+    "- scroll: Scroll down to reveal more content.\n"
+    "- capture_network: Check what API calls the page made (may contain job "
+    "data in JSON).\n"
+    "- give_up: This page has no path to job listings.\n"
+    "Always provide 'reasoning' for your choice."
+)
 
 
 class CrawlActionLimitReached(RuntimeError):
@@ -201,6 +232,7 @@ class _BoundedBrowserTool:
             body=body,
             headers=headers,
         )
+
 
 # Common JSON paths to the job array in a job-list API response, tried in order.
 _JOB_ARRAY_PATHS: tuple[tuple[str, ...], ...] = (
@@ -325,12 +357,30 @@ class CrawlAgent:
         extractor: LLMJobExtractor,
         *,
         model_client: StructuredModelClient | None = None,
+        skills: dict[str, Skill] | None = None,
+        skills_dir: Path | None = None,
     ) -> None:
         self._tool = tool
         self._extractor = extractor
         self._model = model_client
         self._metrics: _CrawlMetrics | None = None
         self._run_lock = threading.Lock()
+        # Tier 2 skill playbooks. When a source URL matches a skill, the
+        # skill's Markdown body is prepended to the ReAct system prompt so the
+        # model follows a known-good playbook instead of blind ReAct. Default
+        # loads the shipped vendor catalog (``vendor/crawl-recipes/skills``);
+        # a missing directory yields ``{}`` (load_skills returns empty) and a
+        # malformed SKILL.md degrades to ``{}`` rather than crashing the agent
+        # in production — the loader itself stays strict so CI catches bad
+        # skills via its own validation tests.
+        if skills is not None:
+            self._skills: dict[str, Skill] = dict(skills)
+        else:
+            directory = skills_dir or DEFAULT_SKILLS_DIR
+            try:
+                self._skills = load_skills(directory)
+            except (OSError, ValueError):
+                self._skills = {}
 
     def close(self) -> None:
         """Release the process-owned browser, when the tool supports it."""
@@ -351,6 +401,7 @@ class CrawlAgent:
         api_substr: str = "",
         max_pages: int = 20,
         wait_s: float = 7.0,
+        source_type: str = "",
     ) -> CrawlAgentRunResult:
         """Serialize runs because one browser page/session belongs to this agent."""
         with self._run_lock:
@@ -365,6 +416,7 @@ class CrawlAgent:
                 api_substr=api_substr,
                 max_pages=max_pages,
                 wait_s=wait_s,
+                source_type=source_type,
             )
 
     def _crawl_bounded_locked(
@@ -380,6 +432,7 @@ class CrawlAgent:
         api_substr: str = "",
         max_pages: int = 20,
         wait_s: float = 7.0,
+        source_type: str = "",
     ) -> CrawlAgentRunResult:
         """Run the agent with limits enforced at every browser operation."""
         if max_actions <= 0 or max_duration_s <= 0 or max_consecutive_empty <= 0:
@@ -410,6 +463,7 @@ class CrawlAgent:
                 api_substr=api_substr,
                 max_pages=max_pages,
                 wait_s=wait_s,
+                source_type=source_type,
             )
             if bounded.action_count >= max_actions:
                 stop_reason = "action_limit"
@@ -438,9 +492,7 @@ class CrawlAgent:
             self._tool = original_tool
 
         deduped: dict[str, RawJobRecord] = {
-            record.external_id: record
-            for record in records
-            if record.external_id
+            record.external_id: record for record in records if record.external_id
         }
         return CrawlAgentRunResult(
             records=tuple(deduped.values()),
@@ -453,16 +505,12 @@ class CrawlAgent:
         if self._metrics is None:
             return False
         self._metrics.note_page(records)
-        return (
-            self._metrics.consecutive_empty_pages
-            >= self._metrics.max_consecutive_empty
-        )
+        return self._metrics.consecutive_empty_pages >= self._metrics.max_consecutive_empty
 
     def _empty_page_limit_reached(self) -> bool:
         return (
             self._metrics is not None
-            and self._metrics.consecutive_empty_pages
-            >= self._metrics.max_consecutive_empty
+            and self._metrics.consecutive_empty_pages >= self._metrics.max_consecutive_empty
         )
 
     def crawl(
@@ -473,6 +521,7 @@ class CrawlAgent:
         api_substr: str = "",
         max_pages: int = 20,
         wait_s: float = 7.0,
+        source_type: str = "",
     ) -> list[RawJobRecord]:
         """Crawl ``source_url``, exploring deeper if the first page has 0 jobs.
 
@@ -481,7 +530,11 @@ class CrawlAgent:
         2. When a model client is present and enabled, run the ReAct loop first
            (the model adapts to the site: navigate/click/scroll/capture/extract).
            This is the primary Tier 2 path and runs before any hardcoded
-           extraction so an empty first page does not short-circuit it.
+           extraction so an empty first page does not short-circuit it. When a
+           Tier 2 skill matches ``source_url`` (or the explicit
+           ``source_type`` hint), its playbook is injected into the ReAct
+           system prompt so the model follows known-good steps instead of
+           blind ReAct.
         3. If the ReAct loop yields nothing (or no model is configured), fall
            back to ``_try_current_page`` (API capture + LLM extraction).
         4. Last resort: follow job-list links found on the current page.
@@ -489,11 +542,13 @@ class CrawlAgent:
         origin = _origin(source_url)
         self._tool.navigate(source_url, wait_s=wait_s)
         trigger = trigger_script or GENERIC_TRIGGER
+        skill = self._match_skill(source_url, source_type=source_type)
 
         # Primary: ReAct loop when a model is available.
         if self._model is not None and self._model.is_enabled:
             records = self._llm_agent_loop(
                 origin,
+                skill=skill,
                 max_pages=max_pages,
                 wait_s=wait_s,
             )
@@ -604,10 +659,61 @@ class CrawlAgent:
             pass
         return []
 
+    def _match_skill(self, url: str, *, source_type: str = "") -> Skill | None:
+        """Return the Tier 2 skill whose match hints apply to ``url``.
+
+        Honors an explicit ``source_type`` hint first (lets the sink
+        disambiguate when a URL could match multiple skills), then falls back
+        to URL matching against ``match.host_suffix`` and
+        ``match.url_patterns``. Matching is case-insensitive substring on the
+        full URL — permissive enough for path-embedded tenants (e.g. workday)
+        while staying deterministic. Returns ``None`` when no skill is loaded
+        or none matches (the caller then blind-runs ReAct).
+        """
+        if not self._skills:
+            return None
+        if source_type:
+            exact = self._skills.get(source_type)
+            if exact is not None:
+                return exact
+        lowered = url.lower()
+        for skill in self._skills.values():
+            match = skill.match
+            host_suffix = match.get("host_suffix")
+            if isinstance(host_suffix, str) and host_suffix and host_suffix.lower() in lowered:
+                return skill
+            url_patterns = match.get("url_patterns")
+            if isinstance(url_patterns, list):
+                for pattern in url_patterns:
+                    if isinstance(pattern, str) and pattern and pattern.lower() in lowered:
+                        return skill
+        return None
+
+    def _build_react_system_prompt(self, skill: Skill | None) -> str:
+        """Build the ReAct system prompt, injecting ``skill.body`` when present.
+
+        No skill (or empty body) → the blind-run base prompt, unchanged. A
+        matched skill → the playbook is wrapped in explicit ``SKILL PLAYBOOK``
+        delimiters and prepended, with a one-line framing note telling the
+        model which ``source_type`` it is crawling.
+        """
+        if skill is None or not skill.body:
+            return _REACT_SYSTEM_PROMPT_BASE
+        return (
+            f"You are crawling a known site type ({skill.source_type}). "
+            "Apply the following skill playbook to drive every action you "
+            "take; it overrides the generic heuristics below.\n\n"
+            "--- SKILL PLAYBOOK ---\n"
+            f"{skill.body}\n"
+            "--- END PLAYBOOK ---\n\n"
+            f"{_REACT_SYSTEM_PROMPT_BASE}"
+        )
+
     def _llm_agent_loop(
         self,
         origin: str,
         *,
+        skill: Skill | None = None,
         max_pages: int,
         wait_s: float,
         max_steps: int = 6,
@@ -619,11 +725,16 @@ class CrawlAgent:
         capture network, extract from HTML, or give up. Adapts to any site
         without hardcoded triggers.
 
+        When ``skill`` is provided (the caller matched a Tier 2 skill for this
+        source), its playbook is prepended to the system prompt so the model
+        follows site-specific steps instead of guessing.
+
         Returns ``[]`` immediately when no model client is configured or it is
         disabled — the caller then falls back to ``_try_current_page``.
         """
         if self._model is None or not self._model.is_enabled:
             return []
+        system_prompt = self._build_react_system_prompt(skill)
         action_schema: dict[str, object] = {
             "type": "object",
             "additionalProperties": False,
@@ -649,24 +760,7 @@ class CrawlAgent:
             page_state = self._get_page_state()
             request = StructuredModelRequest(
                 task_type="crawl_agent",
-                system_prompt=(
-                    "You are an autonomous web crawler exploring a company "
-                    "career page to find job listings. You see the current "
-                    "page state. Decide ONE action to take next.\n\n"
-                    "Actions:\n"
-                    "- extract: Job titles are visible on this page NOW. "
-                    "Extract them.\n"
-                    "- click: Click a button/link to reach the job list. "
-                    "Provide the exact text in 'target'.\n"
-                    "- navigate: Open a different URL on the same site that "
-                    "looks like the job list. Provide the URL in 'target'.\n"
-                    "- wait: The page is still loading. Wait a few seconds.\n"
-                    "- scroll: Scroll down to reveal more content.\n"
-                    "- capture_network: Check what API calls the page made "
-                    "(may contain job data in JSON).\n"
-                    "- give_up: This page has no path to job listings.\n"
-                    "Always provide 'reasoning' for your choice."
-                ),
+                system_prompt=system_prompt,
                 user_prompt=f"Step {step + 1}/{max_steps}.",
                 untrusted_content=page_state,
                 schema_name="crawl_agent",

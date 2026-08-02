@@ -5,14 +5,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from careerops.adapters.job_sources import (
-    AshbyAdapter,
-    GreenhouseAdapter,
-    JsonLdAdapter,
-    LeverAdapter,
-    SitemapAdapter,
-    StaticHtmlAdapter,
-)
 from careerops.application.crawl_policy import check_ssrf, evaluate_crawl_policy
 from careerops.application.job_ingestion import (
     JobIngestionService,
@@ -39,14 +31,8 @@ from careerops.domain.jobs import (
     PostingSourceState,
 )
 from careerops.evaluation.dedup_evaluator import (
-    FROZEN_ASHBY_RESPONSE,
     FROZEN_CLOSE_REOPEN_DATASET,
     FROZEN_DEDUP_DATASET,
-    FROZEN_GREENHOUSE_RESPONSE,
-    FROZEN_JSON_LD_HTML,
-    FROZEN_LEVER_RESPONSE,
-    FROZEN_SITEMAP_XML,
-    FROZEN_STATIC_HTML,
     CloseReopenCase,
     DedupPair,
     DedupPrediction,
@@ -197,148 +183,6 @@ class TestSSRFCheck:
         result = check_ssrf("http://[::1]/jobs")
         assert result is not None
         assert result.decision == CrawlDecision.DENY_SSRF
-
-
-# --- Adapter tests with frozen fixtures ---
-
-
-class TestGreenhouseAdapter:
-    def test_detect(self) -> None:
-        adapter = GreenhouseAdapter()
-        assert adapter.detect("https://boards.greenhouse.io/techjobs")
-        assert not adapter.detect("https://example.com/careers")
-
-    def test_list_jobs_frozen(self) -> None:
-        adapter = GreenhouseAdapter()
-        result = adapter.list_jobs(FROZEN_GREENHOUSE_RESPONSE)
-        assert len(result.jobs) == 2
-        assert result.jobs[0].external_id == "12345"
-        assert result.jobs[0].title == "Senior Software Engineer"
-        assert result.jobs[0].location == "San Francisco, CA"
-        assert result.jobs[1].title == "Product Manager"
-        assert result.response_hash != ""
-        assert result.parser_version == "greenhouse-v1"
-
-    def test_list_jobs_preserves_content_when_requested(self) -> None:
-        adapter = GreenhouseAdapter()
-        result = adapter.list_jobs(
-            {
-                "jobs": [
-                    {
-                        "id": 123,
-                        "title": "Platform Engineer",
-                        "location": {"name": "Remote"},
-                        "absolute_url": "https://example.test/jobs/123",
-                        "content": "&lt;p&gt;Build the platform.&lt;/p&gt;",
-                    }
-                ]
-            }
-        )
-
-        assert result.jobs[0].description == "<p>Build the platform.</p>"
-
-    def test_invalid_data(self) -> None:
-        adapter = GreenhouseAdapter()
-        result = adapter.list_jobs("not a dict")
-        assert len(result.jobs) == 0
-
-
-class TestLeverAdapter:
-    def test_detect(self) -> None:
-        adapter = LeverAdapter()
-        assert adapter.detect("https://jobs.lever.co/company")
-        assert not adapter.detect("https://example.com")
-
-    def test_list_jobs_frozen(self) -> None:
-        adapter = LeverAdapter()
-        result = adapter.list_jobs(FROZEN_LEVER_RESPONSE)
-        assert len(result.jobs) == 2
-        assert result.jobs[0].external_id == "lev-001"
-        assert result.jobs[0].title == "Backend Engineer"
-        assert result.jobs[0].location == "Berlin, Germany"
-        assert result.jobs[1].location == "Remote"
-
-    def test_invalid_data(self) -> None:
-        adapter = LeverAdapter()
-        result = adapter.list_jobs({"not": "a list"})
-        assert len(result.jobs) == 0
-
-
-class TestAshbyAdapter:
-    def test_detect(self) -> None:
-        adapter = AshbyAdapter()
-        assert adapter.detect("https://jobs.ashbyhq.com/company")
-        assert not adapter.detect("https://example.com")
-
-    def test_list_jobs_frozen(self) -> None:
-        adapter = AshbyAdapter()
-        result = adapter.list_jobs(FROZEN_ASHBY_RESPONSE)
-        assert len(result.jobs) == 1
-        assert result.jobs[0].external_id == "ash-001"
-        assert result.jobs[0].title == "Data Scientist"
-        assert result.jobs[0].location == "London, UK"
-
-
-class TestJsonLdAdapter:
-    def test_list_jobs_frozen(self) -> None:
-        adapter = JsonLdAdapter()
-        result = adapter.list_jobs(FROZEN_JSON_LD_HTML)
-        assert len(result.jobs) == 1
-        assert result.jobs[0].title == "DevOps Engineer"
-        assert result.jobs[0].location == "Chengdu"
-        assert result.jobs[0].url == "https://testcorp.com/careers/devops"
-
-    def test_no_json_ld(self) -> None:
-        adapter = JsonLdAdapter()
-        result = adapter.list_jobs("<html><body>No jobs</body></html>")
-        assert len(result.jobs) == 0
-
-    def test_non_jobposting_type_ignored(self) -> None:
-        html = '<script type="application/ld+json">{"@type": "Organization"}</script>'
-        adapter = JsonLdAdapter()
-        result = adapter.list_jobs(html)
-        assert len(result.jobs) == 0
-
-
-class TestSitemapAdapter:
-    def test_detect(self) -> None:
-        adapter = SitemapAdapter()
-        assert adapter.detect("https://example.com/sitemap.xml")
-        assert not adapter.detect("https://example.com/jobs")
-
-    def test_list_jobs_frozen(self) -> None:
-        adapter = SitemapAdapter()
-        result = adapter.list_jobs(FROZEN_SITEMAP_XML)
-        assert len(result.jobs) == 2
-        urls = [j.url for j in result.jobs]
-        assert "https://company.com/jobs/engineer" in urls
-        assert "https://company.com/jobs/designer" in urls
-        assert "https://company.com/about" not in urls
-
-    def test_xxe_rejected(self) -> None:
-        adapter = SitemapAdapter()
-        xxe = '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><urlset></urlset>'
-        result = adapter.list_jobs(xxe)
-        assert len(result.jobs) == 0
-
-    def test_invalid_xml(self) -> None:
-        adapter = SitemapAdapter()
-        result = adapter.list_jobs("not xml at all")
-        assert len(result.jobs) == 0
-
-
-class TestStaticHtmlAdapter:
-    def test_list_jobs_frozen(self) -> None:
-        adapter = StaticHtmlAdapter()
-        result = adapter.list_jobs(FROZEN_STATIC_HTML)
-        assert len(result.jobs) == 1
-        assert result.jobs[0].title == "QA Engineer"
-        assert result.jobs[0].location == "Tokyo, Japan"
-
-    def test_no_jobs(self) -> None:
-        adapter = StaticHtmlAdapter()
-        result = adapter.list_jobs("<html><body>No listings</body></html>")
-        assert len(result.jobs) == 0
 
 
 # --- Dedup evaluator tests ---
@@ -1227,3 +1071,83 @@ class TestJobsApiRoutes:
         assert response.status_code == 200
         data = response.json()
         assert data["total"] == 0
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Phase C: recipe registry is the only registry (legacy adapters removed).
+#
+# Task 11 removed every hard-coded adapter class plus the ``_ADAPTER_REGISTRY``
+# dict, so :class:`RealCrawlActivitySink` now consumes
+# :func:`build_recipe_registry` verbatim. These tests pin the loader contract:
+# missing manifest → {}, empty manifest → {}, and a one-recipe catalog yields
+# exactly that recipe's source_type keyed on its :class:`RecipeEngine`.
+# ---------------------------------------------------------------------------
+
+
+def test_recipe_registry_missing_manifest_returns_empty_dict(tmp_path) -> None:
+    """No manifest.json in the dir → empty dict, no error raised."""
+    from careerops.infrastructure.temporal.m1_crawl_sink import build_recipe_registry
+
+    # tmp_path has no manifest.json at all.
+    assert build_recipe_registry(tmp_path) == {}
+
+
+def test_recipe_registry_empty_manifest_returns_empty_dict(tmp_path) -> None:
+    """A manifest with recipes: [] yields zero engines."""
+    from careerops.infrastructure.temporal.m1_crawl_sink import build_recipe_registry
+
+    (tmp_path / "manifest.json").write_text(
+        '{"schema_version":"1","recipes":[],"skills":[]}',
+        encoding="utf-8",
+    )
+    assert build_recipe_registry(tmp_path) == {}
+
+
+def test_sink_registry_is_recipe_only(tmp_path, monkeypatch) -> None:
+    """The sink's registry equals what ``build_recipe_registry`` returns.
+
+    Phase C: there is no longer a legacy adapter registry to merge over, so
+    a one-recipe catalog yields a one-entry registry. Source types the
+    catalog does not cover are simply absent — the sink then either falls
+    back to the Tier 2 agent (when wired) or returns an empty result.
+    """
+    from careerops.infrastructure.temporal import m1_crawl_sink
+    from careerops.recipes.engine import RecipeEngine
+
+    # Build a one-recipe catalog in tmp_path.
+    (tmp_path / "recipes").mkdir()
+    (tmp_path / "recipes" / "greenhouse.yaml").write_text(
+        'recipe_version: "1"\n'
+        "source_type: greenhouse\n"
+        "match: {}\n"
+        "steps:\n"
+        "  - id: list\n"
+        "    fetch:\n"
+        '      endpoint: "https://example.com/{slug}/jobs"\n'
+        "    extract:\n"
+        "      mode: json_path\n"
+        '      items_path: "$.jobs"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "manifest.json").write_text(
+        '{"schema_version":"1","recipes":[{"path":"recipes/greenhouse.yaml"}],"skills":[]}',
+        encoding="utf-8",
+    )
+
+    # Point the sink's recipe-dir constant at our temp catalog and construct
+    # without injecting adapters — the registry should equal what
+    # ``build_recipe_registry`` returns.
+    monkeypatch.setattr(m1_crawl_sink, "DEFAULT_RECIPES_DIR", tmp_path)
+    sink = m1_crawl_sink.RealCrawlActivitySink()
+
+    # The registry contains exactly the recipe we loaded — no legacy fallback
+    # keys, no merge layer.
+    assert set(sink._adapters.keys()) == {"greenhouse"}
+    greenhouse_entry = sink._adapters["greenhouse"]
+    assert isinstance(greenhouse_entry, RecipeEngine)
+    assert greenhouse_entry.source_type == "greenhouse"
+    # Source types not covered by any recipe are absent (no legacy adapters
+    # hide behind a merge step anymore).
+    assert "lever" not in sink._adapters
+    assert "ashby" not in sink._adapters

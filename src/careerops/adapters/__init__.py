@@ -1,33 +1,23 @@
-"""Job source adapters for ATS platforms and web scraping."""
+"""Job source adapter contracts.
+
+The concrete legacy adapter classes were removed in Task 11 (Phase C); every
+source type is now driven declaratively by a YAML recipe executed by
+:class:`careerops.recipes.engine.RecipeEngine`. This package re-exports the
+shared value types and Protocol contracts the rest of the crawl pipeline
+depends on; recipe-driven crawls import ``RecipeEngine`` from
+``careerops.recipes`` directly.
+"""
 
 from careerops.adapters.job_sources import (
-    ALL_ADAPTERS,
     AdapterFetchResult,
-    AshbyAdapter,
-    AshbyDetailAdapter,
     DetailJobSourceAdapter,
-    GreenhouseAdapter,
-    GreenhouseDetailAdapter,
     JobSourceAdapter,
-    JsonLdAdapter,
-    LeverAdapter,
     RawJobRecord,
-    SitemapAdapter,
-    StaticHtmlAdapter,
 )
 
 __all__ = [
-    "ALL_ADAPTERS",
     "AdapterFetchResult",
-    "AshbyAdapter",
-    "AshbyDetailAdapter",
     "DetailJobSourceAdapter",
-    "GreenhouseAdapter",
-    "GreenhouseDetailAdapter",
     "JobSourceAdapter",
-    "JsonLdAdapter",
-    "LeverAdapter",
     "RawJobRecord",
-    "SitemapAdapter",
-    "StaticHtmlAdapter",
 ]

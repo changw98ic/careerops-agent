@@ -1,0 +1,51 @@
+# Greenhouse ATS crawl recipe.
+#
+# Two-step list→detail pattern. The list endpoint (with ``?content=true``)
+# inlines the JD body in the ``content`` field for every job, so the list
+# extract already fills ``description`` for most rows. The detail step is a
+# per-row fan-out that tops up rows whose ``description`` came back empty
+# (the ``when``/``foreach`` filter on ``@.description==''`` short-circuits
+# the fan-out when every row already has a body), fetching
+# ``{list_endpoint}/{id}`` and overwriting the empty ``description`` from
+# the detail payload's ``content`` field.
+#
+# Endpoint templating: ``{base_url}`` is resolved from
+# ``CrawlSource.base_url`` (the full Greenhouse board URL including the
+# concrete board slug, e.g. ``https://boards-api.greenhouse.io/v1/boards/acme/jobs?content=true``).
+# The detail step's ``{list_endpoint}`` is derived by ``run_steps`` from
+# the list step's rendered endpoint with the query string stripped, so
+# ``{list_endpoint}/{id}`` resolves to the per-job detail URL. ``{id}``
+# comes from each list row's extracted ``id``.
+recipe_version: "1"
+source_type: greenhouse
+executor_mode: http
+match:
+  url_patterns: ["boards.greenhouse.io"]
+  host_suffix: "greenhouse.io"
+steps:
+  - id: list
+    fetch:
+      endpoint: "{base_url}"
+    extract:
+      mode: json_path
+      items_path: "$.jobs"
+      fields:
+        id: {path: id}
+        title: {path: title}
+        location: {path: location.name}
+        apply_url: {path: absolute_url}
+        description: {path: content, transform: html_unescape}
+  - id: detail
+    when: "$.steps.list[?(@.description=='')]"
+    foreach: "$.steps.list[?(@.description=='')]"
+    fetch:
+      endpoint: "{list_endpoint}/{id}"
+    extract:
+      mode: json_path
+      fields:
+        description: {path: content, transform: html_unescape}
+    merge:
+      strategy: overwrite_empty
+rate_limit:
+  requests_per_minute: 60
+fallback: llm_skill

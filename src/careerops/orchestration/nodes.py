@@ -11,9 +11,9 @@ services / kernel) and the LangGraph state. Nodes MUST:
 v1 wiring:
 
 - ``crawl`` accepts an injected ``Crawler`` callable so tests can pass fixtures.
-  The real boundary is ``AdapterCrawler`` (``http_fetcher`` + ``JobSourceAdapter``
-  + optional ``DetailJobSourceAdapter``), which converts via
-  ``raw_job_record_to_dto`` with the fetch layer's provenance.
+  The real crawl boundary (``http_fetcher`` + ``RecipeEngine``) lives in
+  :mod:`careerops.infrastructure.temporal.m1_crawl_sink` and is wired through
+  the Temporal activity sink, not this node.
 - ``extract`` accepts an injected ``ContactExtractor`` callable; the real path
   is ``build_file_contact_extractor`` wrapping ``contact_extraction``.
 - ``filter`` delegates to the pure ``filter_jobs`` (remote / direction / region
@@ -27,19 +27,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import dataclass
 from datetime import UTC, datetime
-from json import JSONDecodeError
 from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
-from careerops.adapters.http_fetcher import FetchedResponse
-from careerops.adapters.job_sources import (
-    DetailJobSourceAdapter,
-    JobSourceAdapter,
-    RawJobRecord,
-)
 from careerops.application.contact_extraction import extract_from_file
 from careerops.application.email_drafting import generate_body
 from careerops.application.llm_matching import (
@@ -51,10 +43,8 @@ from careerops.application.llm_matching import (
 from careerops.application.side_effect_kernel import SideEffectKernel
 from careerops.model_gateway.base import StructuredModelClient
 from careerops.orchestration.conversions import (
-    JobProvenance,
     build_draft_dto,
     job_match_result_to_dto,
-    raw_job_record_to_dto,
     skill_profile_to_dto,
 )
 from careerops.orchestration.filter_node import FilterCriteria, filter_jobs
@@ -71,10 +61,8 @@ from careerops.orchestration.state import (
 )
 
 __all__ = [
-    "AdapterCrawler",
     "ContactExtractor",
     "Crawler",
-    "HttpFetcher",
     "crawl_node",
     "draft_node",
     "extract_contacts_node",
@@ -91,7 +79,15 @@ __all__ = [
 
 
 class Crawler(Protocol):
-    """Returns the batch of raw job DTOs for this run."""
+    """Returns the batch of raw job DTOs for this run.
+
+    Production wires the Temporal crawl activity sink
+    (``RealCrawlActivitySink`` → ``RecipeEngine.execute``) behind the callable;
+    tests inject a deterministic tuple. The structured-adapter crawl boundary
+    (``http_fetcher`` + ``JobSourceAdapter``) now lives entirely in
+    :mod:`careerops.infrastructure.temporal.m1_crawl_sink`; this module keeps
+    only the thin LangGraph seam.
+    """
 
     def __call__(self) -> tuple[RawJobDTO, ...]: ...
 
@@ -100,96 +96,6 @@ class ContactExtractor(Protocol):
     """Returns the batch of contact DTOs for this run."""
 
     def __call__(self, jobs: tuple[RawJobDTO, ...]) -> tuple[ContactDTO, ...]: ...
-
-
-class HttpFetcher(Protocol):
-    """Callable subset of ``adapters.http_fetcher`` used by ``AdapterCrawler``."""
-
-    def __call__(self, url: str) -> FetchedResponse: ...
-
-
-def _parse_body(body: str) -> object:
-    """Parse a fetch body into the form its adapter expects.
-
-    JSON-based adapters (Greenhouse / Lever / Ashby) take a parsed dict/list;
-    text-based adapters (JsonLd / Sitemap / StaticHtml) take the raw string. We
-    attempt JSON first and fall back to the string so one boundary serves both
-    families without each adapter having to re-parse.
-    """
-    stripped = body.lstrip()
-    if stripped and stripped[0] in "{[":
-        from json import loads
-
-        try:
-            return loads(body)
-        except (JSONDecodeError, ValueError):
-            return body
-    return body
-
-
-# ---------------------------------------------------------------------------
-# Real crawl boundary: http_fetcher + JobSourceAdapter (+ optional detail)
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class AdapterCrawler:
-    """``Crawler`` backed by ``http_fetcher`` + a ``JobSourceAdapter``.
-
-    For each list URL the crawler fetches the body, runs the list adapter, and
-    converts each ``RawJobRecord`` to a ``RawJobDTO`` attaching the fetch
-    provenance (``source_url`` / ``fetched_at`` / ``response_hash`` /
-    ``parser_version``). When a ``detail_adapter`` + ``detail_url_for`` are
-    supplied AND a list record has no description, the crawler fetches the
-    per-job detail endpoint and lets the detail parser fill the JD body; the
-    detail response's provenance then overrides the list provenance (the
-    description is authoritative for what we store, plan v0.4 §2.3).
-
-    The injected ``fetcher`` is the ONLY I/O seam: production wires
-    ``http_fetcher.fetch``; tests pass a deterministic fake. The node itself
-    performs no I/O.
-    """
-
-    adapter: JobSourceAdapter
-    fetcher: HttpFetcher
-    list_urls: tuple[str, ...]
-    detail_adapter: DetailJobSourceAdapter | None = None
-    detail_url_for: Callable[[RawJobRecord], str] | None = None
-
-    def __call__(self) -> tuple[RawJobDTO, ...]:
-        out: list[RawJobDTO] = []
-        for url in self.list_urls:
-            resp = self.fetcher(url)
-            fetch_result = self.adapter.list_jobs(_parse_body(resp.body))
-            list_prov = JobProvenance(
-                source_url=resp.final_url or url,
-                fetched_at=resp.fetched_at,
-                response_hash=resp.response_hash,
-                parser_version=self.adapter.parser_version,
-            )
-            for record in fetch_result.jobs:
-                final_record = record
-                prov = list_prov
-                if (
-                    self.detail_adapter is not None
-                    and self.detail_url_for is not None
-                    and not record.description
-                ):
-                    detail_url = self.detail_url_for(record)
-                    dresp = self.fetcher(detail_url)
-                    final_record = self.detail_adapter.fetch_job(
-                        _parse_body(dresp.body),
-                        source_url=dresp.final_url or detail_url,
-                        fetched_at=dresp.fetched_at,
-                    )
-                    prov = JobProvenance(
-                        source_url=dresp.final_url or detail_url,
-                        fetched_at=dresp.fetched_at,
-                        response_hash=dresp.response_hash,
-                        parser_version=self.detail_adapter.parser_version,
-                    )
-                out.append(raw_job_record_to_dto(final_record, prov))
-        return tuple(out)
 
 
 def build_file_contact_extractor(snapshot_paths: tuple[Path, ...]) -> ContactExtractor:
@@ -242,9 +148,10 @@ def build_file_contact_extractor(snapshot_paths: tuple[Path, ...]) -> ContactExt
 def crawl_node(state: CareerOpsState, *, crawler: Crawler) -> dict[str, Any]:
     """Fetch raw job records via the injected crawler.
 
-    Production wires ``AdapterCrawler`` (``http_fetcher + JobSourceAdapter``)
-    behind the callable; tests inject a deterministic tuple. The node does no
-    I/O of its own so it remains a pure adapter for the graph.
+    The real crawl boundary is the Temporal activity sink
+    (``RealCrawlActivitySink`` → ``RecipeEngine.execute``); tests inject a
+    deterministic tuple. The node does no I/O of its own so it remains a pure
+    adapter for the graph.
     """
     del state
     jobs = crawler()

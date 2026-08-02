@@ -339,15 +339,19 @@ class CrawlExecutionService:
                     async with asyncio.timeout(remaining):
                         result = await self._sink.crawl_source_with_signals(crawl_input)
                 except TimeoutError:
+                    # The crawl raised before returning, so no recipe produced
+                    # structured output: ``error_result.had_recipe`` is False
+                    # (the default). Source ``has_adapter`` the same way as the
+                    # success path (``result.had_recipe``) so a timeout is never
+                    # mistaken for positive job-source evidence.
+                    error_result = CrawlSourceResult(postings=(), status_code=0)
                     if self._source_queue is not None:
                         self._source_queue.record_attempt(
                             owner_id,
                             source_id,
-                            CrawlSourceResult(postings=(), status_code=0),
+                            error_result,
                             policy_decision=policy_result.decision,
-                            has_adapter=self._sink.supports_source_type(
-                                source.source_type.value
-                            ),
+                            has_adapter=error_result.had_recipe,
                             timed_out=True,
                             crawl_run_id=run.id,
                             now=started_at,
@@ -357,15 +361,16 @@ class CrawlExecutionService:
                     break
                 except Exception:
                     logger.exception("crawl_source failed for source %s", source_id)
+                    # Same as the timeout branch: the crawl raised, so no recipe
+                    # produced data and ``error_result.had_recipe`` is False.
+                    error_result = CrawlSourceResult(postings=(), status_code=0)
                     if self._source_queue is not None:
                         self._source_queue.record_attempt(
                             owner_id,
                             source_id,
-                            CrawlSourceResult(postings=(), status_code=0),
+                            error_result,
                             policy_decision=policy_result.decision,
-                            has_adapter=self._sink.supports_source_type(
-                                source.source_type.value
-                            ),
+                            has_adapter=error_result.had_recipe,
                             transport_error=True,
                             crawl_run_id=run.id,
                             now=started_at,
@@ -384,6 +389,9 @@ class CrawlExecutionService:
 
                 # A configured ego source whose public structured probe
                 # produced no postings is dynamic evidence, not VERIFIED_EMPTY.
+                # The rewrap preserves ``had_recipe`` / ``recipe_fallback`` so
+                # the Tier 2 admission gate still sees that a recipe ran
+                # (positive evidence) when it re-evaluates the source.
                 if (
                     source.executor_mode is CrawlExecutorMode.EGO
                     and not result.postings
@@ -395,16 +403,20 @@ class CrawlExecutionService:
                         status_code=result.status_code,
                         body_prefix=result.body_prefix,
                         expected_fields_missing=("dynamic_rendering_required",),
+                        had_recipe=result.had_recipe,
+                        recipe_fallback=result.recipe_fallback,
                     )
 
                 # Record the Tier 1 outcome before any Tier 2 escalation.
+                # ``has_adapter`` uses ``result.had_recipe`` (not the registry
+                # key lookup) because ``detect()``-routed recipes sit at a
+                # source_type the registry does not key on; ``had_recipe`` is
+                # the authoritative "did structured Tier 1 parsing run" signal.
                 tier1_outcome = classify_outcome(
                     ClassificationInput(
                         result=result,
                         policy_decision=policy_result.decision,
-                        has_adapter=self._sink.supports_source_type(
-                            source.source_type.value
-                        ),
+                        has_adapter=result.had_recipe,
                     )
                 )
                 if self._source_queue is not None:
@@ -413,9 +425,7 @@ class CrawlExecutionService:
                         source_id,
                         result,
                         policy_decision=policy_result.decision,
-                        has_adapter=self._sink.supports_source_type(
-                            source.source_type.value
-                        ),
+                        has_adapter=result.had_recipe,
                         crawl_run_id=run.id,
                         now=started_at,
                     )
@@ -429,6 +439,8 @@ class CrawlExecutionService:
                             owner_id,
                             source_id,
                             tier1_outcome=tier1_outcome,
+                            has_adapter=result.had_recipe,
+                            recipe_fallback=result.recipe_fallback,
                         )
                         if self._tier2 is not None
                         else Tier2RoutingDecision.DENY
@@ -453,9 +465,7 @@ class CrawlExecutionService:
                             },
                             now=started_at,
                         )
-                        counters = dataclasses.replace(
-                            counters, failed=counters.failed + 1
-                        )
+                        counters = dataclasses.replace(counters, failed=counters.failed + 1)
                         continue
 
                     if routing is not Tier2RoutingDecision.DENY and self._tier2 is not None:
@@ -466,28 +476,17 @@ class CrawlExecutionService:
                                 owner_id=owner_id,
                                 crawl_run_id=run.id,
                                 plan_version_id=plan_version.id,
-                                authenticated=(
-                                    routing
-                                    is Tier2RoutingDecision.SKIP_AUTHENTICATED
-                                ),
+                                authenticated=(routing is Tier2RoutingDecision.SKIP_AUTHENTICATED),
+                                source_type=source.source_type.value,
                             )
                         )
                         counters = dataclasses.replace(
                             counters,
-                            discovered=(
-                                counters.discovered + tier2_result.postings_new
-                            ),
-                            updated=(
-                                counters.updated + tier2_result.postings_updated
-                            ),
-                            failed=(
-                                counters.failed
-                                + (1 if tier2_result.error else 0)
-                            ),
+                            discovered=(counters.discovered + tier2_result.postings_new),
+                            updated=(counters.updated + tier2_result.postings_updated),
+                            failed=(counters.failed + (1 if tier2_result.error else 0)),
                         )
-                        changed_canonical_job_ids.update(
-                            tier2_result.canonical_job_ids
-                        )
+                        changed_canonical_job_ids.update(tier2_result.canonical_job_ids)
                         if self._source_queue is not None:
                             self._source_queue.record_tier2_attempt(
                                 owner_id,
@@ -505,8 +504,7 @@ class CrawlExecutionService:
                                         tier2_result.consecutive_empty_pages
                                     ),
                                     "authenticated": (
-                                        routing
-                                        is Tier2RoutingDecision.SKIP_AUTHENTICATED
+                                        routing is Tier2RoutingDecision.SKIP_AUTHENTICATED
                                     ),
                                 },
                             )
@@ -600,8 +598,7 @@ class CrawlExecutionService:
                         counters = dataclasses.replace(counters, updated=counters.updated + 1)
                     canonical_job_id = ingest_result.get("canonical_job_id")
                     if canonical_job_id and (
-                        ingest_result.get("is_new_posting")
-                        or ingest_result.get("is_new_version")
+                        ingest_result.get("is_new_posting") or ingest_result.get("is_new_version")
                     ):
                         changed_canonical_job_ids.add(UUID(str(canonical_job_id)))
 
@@ -612,11 +609,7 @@ class CrawlExecutionService:
             # counters and bounded category; a budget exhaustion is distinct
             # from a source failure so callers can offer a safe retry action.
             ended_at = datetime.now(tz=UTC)
-            if (
-                not timed_out
-                and changed_canonical_job_ids
-                and self._downstream is not None
-            ):
+            if not timed_out and changed_canonical_job_ids and self._downstream is not None:
                 self._downstream.project(
                     owner_id,
                     changed_canonical_job_ids,

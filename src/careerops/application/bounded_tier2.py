@@ -121,6 +121,11 @@ class Tier2RunConfig:
     max_actions: int = _MAX_ACTIONS_PER_SOURCE
     max_duration_s: float = _MAX_DURATION_S
     max_consecutive_empty: int = _MAX_CONSECUTIVE_EMPTY_PAGES
+    # Forwarded to ``crawl_bounded`` → ``crawl`` → ``_match_skill`` so a Tier 2
+    # skill playbook (e.g. workday) matches by source_type on the only legal
+    # Tier 2 entry point, not just by URL. ``""`` preserves the prior
+    # URL-only behaviour when no type is known.
+    source_type: str = ""
 
 
 @dataclass(slots=True)
@@ -136,7 +141,7 @@ class Tier2RunResult:
     consecutive_empty_pages: int = 0
     duration_s: float = 0.0
     error: str = ""
-    canonical_job_ids: set[UUID] = field(default_factory=set)
+    canonical_job_ids: set[UUID] = field(default_factory=lambda: set[UUID]())
 
 
 # ---------------------------------------------------------------------------
@@ -153,9 +158,7 @@ class SessionChecker(Protocol):
 class PermissionChecker(Protocol):
     """Checks whether a source's crawl permission is currently granted."""
 
-    def is_permission_granted(
-        self, owner_id: UUID, source_id: UUID
-    ) -> bool: ...
+    def is_permission_granted(self, owner_id: UUID, source_id: UUID) -> bool: ...
 
 
 class PolicyEvaluator(Protocol):
@@ -191,6 +194,7 @@ class Tier2Agent(Protocol):
         max_consecutive_empty: int,
         session_ref: str | None,
         consume_action: Callable[[], bool] | None,
+        source_type: str = "",
     ) -> CrawlAgentRunResult: ...
 
 
@@ -250,19 +254,12 @@ class RepositoryPermissionChecker:
     def __init__(self, permission_repo: CrawlPermissionRepository) -> None:
         self._repo = permission_repo
 
-    def is_permission_granted(
-        self, owner_id: UUID, source_id: UUID
-    ) -> bool:
+    def is_permission_granted(self, owner_id: UUID, source_id: UUID) -> bool:
         now = datetime.now(tz=UTC)
         return any(
             permission.state is CrawlPermissionState.GRANTED
-            and (
-                permission.expires_at is None
-                or permission.expires_at > now
-            )
-            for permission in self._repo.list_for_source(
-                owner_id, source_id, limit=10
-            )
+            and (permission.expires_at is None or permission.expires_at > now)
+            for permission in self._repo.list_for_source(owner_id, source_id, limit=10)
         )
 
 
@@ -359,6 +356,8 @@ class BoundedTier2Orchestrator:
         source_id: UUID,
         *,
         tier1_outcome: CrawlAttemptOutcome,
+        has_adapter: bool = False,
+        recipe_fallback: str = "llm_skill",
     ) -> Tier2RoutingDecision:
         """Decide if a source should enter Tier 2 and how.
 
@@ -367,10 +366,29 @@ class BoundedTier2Orchestrator:
         7.3: ``AUTH_REQUIRED`` enters authenticated Tier 2 only when
         permission is granted AND the source-scoped session is valid.
 
+        Evidence gate (beads rule: "Tier 1 empty results must not be directly
+        upgraded; there must be job-source evidence"). For
+        ``DYNAMIC_OR_UNSUPPORTED``, escalation to public Tier 2 is granted only
+        when:
+
+        * ``has_adapter`` is ``True`` — a Tier 1 recipe actually ran against
+          this source (direct lookup, OFFICIAL probe, or ``detect()`` URL
+          routing). This is positive evidence the URL is a job source whose
+          structured parse drifted, not an unknown URL that happened to 200.
+        * ``recipe_fallback != "none"`` — the recipe did not explicitly opt out
+          of escalation. A recipe declaring ``fallback: none`` pins the source
+          to Tier 1-only even when it ran.
+
+        An unknown HTTP source (``has_adapter=False``) therefore never enters
+        Tier 2 from an empty Tier 1 result. ``DENY`` is not terminal: author a
+        recipe (or let ``detect()`` match) and the source gains evidence.
+
         Returns ``DENY`` if the source is not eligible.
         """
         if tier1_outcome == CrawlAttemptOutcome.DYNAMIC_OR_UNSUPPORTED:
-            return Tier2RoutingDecision.SKIP_PUBLIC
+            if has_adapter and recipe_fallback != "none":
+                return Tier2RoutingDecision.SKIP_PUBLIC
+            return Tier2RoutingDecision.DENY
 
         if tier1_outcome == CrawlAttemptOutcome.AUTH_REQUIRED:
             if self._permission_checker is None:
@@ -414,18 +432,14 @@ class BoundedTier2Orchestrator:
             source_uuid = UUID(config.source_id)
             if (
                 self._permission_checker is None
-                or not self._permission_checker.is_permission_granted(
-                    config.owner_id, source_uuid
-                )
+                or not self._permission_checker.is_permission_granted(config.owner_id, source_uuid)
             ):
                 return Tier2RunResult(
                     source_id=config.source_id,
                     stop_reason=Tier2StopReason.PERMISSION_REVOKED,
                     error="source-specific crawl permission is not granted",
                 )
-            session_ref = self._session.get_session_ref(
-                config.owner_id, config.source_id
-            )
+            session_ref = self._session.get_session_ref(config.owner_id, config.source_id)
             if session_ref is None:
                 return Tier2RunResult(
                     source_id=config.source_id,
@@ -484,6 +498,7 @@ class BoundedTier2Orchestrator:
                 max_consecutive_empty=config.max_consecutive_empty,
                 session_ref=session_ref,
                 consume_action=lambda: self._budget.consume(1) == 1,
+                source_type=config.source_type,
             )
             raw_records = list(run_result.records)
             action_count = run_result.action_count
@@ -499,10 +514,9 @@ class BoundedTier2Orchestrator:
             # Check if the error indicates CAPTCHA or account risk.
             if self._captcha.has_captcha_signal(error):
                 stop_reason = Tier2StopReason.CAPTCHA
-            elif (
-                isinstance(self._captcha, _BodyPrefixCaptchaDetector)
-                and self._captcha.has_account_risk_signal(error)
-            ):
+            elif isinstance(
+                self._captcha, _BodyPrefixCaptchaDetector
+            ) and self._captcha.has_account_risk_signal(error):
                 stop_reason = Tier2StopReason.ACCOUNT_RISK
             else:
                 stop_reason = Tier2StopReason.NO_POSTINGS
@@ -536,9 +550,7 @@ class BoundedTier2Orchestrator:
             ):
                 stop_reason = Tier2StopReason.PERMISSION_REVOKED
                 error = "permission revoked during crawl"
-            elif self._session.get_session_ref(
-                config.owner_id, config.source_id
-            ) is None:
+            elif self._session.get_session_ref(config.owner_id, config.source_id) is None:
                 stop_reason = Tier2StopReason.SESSION_EXPIRED
                 error = "authenticated session expired during crawl"
 

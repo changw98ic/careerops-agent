@@ -1,0 +1,55 @@
+# Official JSON-LD crawl recipe (Task 9).
+#
+# Translates ``JsonLdAdapter`` (adapters/job_sources.py) into the declarative
+# recipe DSL. The page is fetched as HTML; every
+# ``<script type="application/ld+json">`` block is a candidate row, pruned by
+# the ``@['@type']=='JobPosting'`` filter (schema.org JobPosting). Declared
+# fields then resolve against each surviving block.
+#
+# Filter form. RFC 9535 filters only apply over arrays, so the json_ld
+# evaluator wraps each block dict in ``[block]`` before running
+# ``$[?(@['@type']=='JobPosting')]``. The bracket key access ``@['@type']`` is
+# required because ``@.type`` resolves the literal key ``type`` rather than
+# schema.org's ``@type``; string literals must be single-quoted
+# (python-jsonpath 2.2.1 raises ``JSONPathSyntaxError`` on bareword
+# identifiers). Verified by ``test_json_ld_filters_jobposting``.
+#
+# Location fallback. The primary path ``jobLocation.address.addressLocality``
+# mirrors the legacy adapter (``jobLocation`` → ``address`` →
+# ``addressLocality``). The ``location`` fallback is a recipe-level
+# enhancement for sites that flatten the address into a top-level key; it does
+# not affect the parity assertion because the legacy adapter produces ``""``
+# when the nested path misses, and the mock data avoids a present top-level
+# ``location`` key on rows that lack ``jobLocation``.
+#
+# External id. Not declared as a field — the legacy adapter computes
+# ``sha256(url)[:16]`` in code, and the DSL has no sha256 transform. The recipe
+# row therefore carries ``apply_url`` only; the engine layer
+# (``RecipeEngine._row_to_record``) derives the id. Parity compares the
+# field-mapping layer (title / description / location / apply_url) and
+# excludes external_id.
+#
+# Endpoint templating. ``{base_url}`` is resolved from
+# ``CrawlSource.base_url`` at execute time (engine ``base_ns``).
+recipe_version: "1"
+source_type: official_jsonld
+executor_mode: http
+match:
+  url_patterns: []
+  host_suffix: ""
+steps:
+  - id: fetch
+    fetch:
+      endpoint: "{base_url}"
+    extract:
+      mode: json_ld
+      filter:
+        jsonpath: "@['@type']=='JobPosting'"
+      fields:
+        title: {path: title}
+        description: {path: description}
+        location:
+          path: jobLocation.address.addressLocality
+          fallback: [location]
+        apply_url: {path: url}
+fallback: llm_skill

@@ -1,0 +1,38 @@
+# Official XML sitemap crawl recipe (Task 9).
+#
+# Translates ``SitemapAdapter`` (adapters/job_sources.py) into the declarative
+# recipe DSL. The sitemap is fetched as XML; every ``<url><loc>`` whose text
+# matches the ``url_filter`` regex becomes a row ``{url, external_id}`` where
+# ``external_id`` is ``sha256(url)[:16]`` — the deterministic id the sitemap
+# evaluator computes inline, mirroring the legacy adapter. No ``fields`` block
+# is declared: sitemap mode emits the url/id pair automatically.
+#
+# XXE defence. The sitemap evaluator rejects any input containing
+# ``<!DOCTYPE`` or ``<!ENTITY`` (case-insensitive) before parsing, matching
+# the legacy ``_UNSAFE_XML_RE`` guard bit-for-bit (same regex, same
+# case-insensitive flag). Both return an empty result without raising.
+#
+# url_filter. Legacy uses ``/(jobs|careers|positions)/`` (path segment with
+# surrounding slashes); this recipe uses ``\b(jobs|careers|positions)\b``
+# (word boundary), which additionally catches landing pages like
+# ``https://x/jobs`` without a trailing slash. The parity test uses
+# detail URLs with a trailing path segment (``/jobs/1``, ``/careers/2``)
+# where both regexes agree; the word-boundary form is the more permissive
+# translation and the intended Phase B contract.
+#
+# Endpoint templating. ``{base_url}`` is resolved from ``CrawlSource.base_url``
+# at execute time.
+recipe_version: "1"
+source_type: official_sitemap
+executor_mode: http
+match:
+  url_patterns: ["sitemap"]
+  host_suffix: ""
+steps:
+  - id: fetch
+    fetch:
+      endpoint: "{base_url}"
+    extract:
+      mode: sitemap
+      url_filter: "\\b(jobs|careers|positions)\\b"
+fallback: llm_skill

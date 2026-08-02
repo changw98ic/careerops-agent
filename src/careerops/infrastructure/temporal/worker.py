@@ -4,7 +4,6 @@ import asyncio
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import cast
 
 from temporalio.client import Client
 from temporalio.worker import Worker
@@ -28,15 +27,15 @@ from careerops.infrastructure.temporal.mail_sync_activities import (
 )
 from careerops.infrastructure.temporal.s5_activities import S5CrawlExecutionActivities
 from careerops.workflows.agent_workflows import AgentRunWorkflow
-from careerops.workflows.m1_workflows import (
-    CompanyDiscoveryWorkflow,
-    CrawlJobSourceWorkflow,
-    RawDocumentPurgeWorkflow,
-)
 from careerops.workflows.loop_trigger_workflows import (
     ApprovalSweepWorkflow,
     MailSyncTriggerWorkflow,
     OutboxDrainWorkflow,
+)
+from careerops.workflows.m1_workflows import (
+    CompanyDiscoveryWorkflow,
+    CrawlJobSourceWorkflow,
+    RawDocumentPurgeWorkflow,
 )
 from careerops.workflows.s5_workflows import CrawlRunWorkflow, CrawlScheduledWorkflow
 from careerops.workflows.smoke import RecoverableSmokeWorkflow
@@ -273,12 +272,14 @@ def main() -> None:
         api_key=settings.model_api_key.get_secret_value(),
         model=settings.model_name,
     )
-    crawl_sink = build_real_crawl_sink(
+    crawl_stack = build_real_crawl_sink(
         engine,
         fetcher=fetch,
         public_ats_fetcher=fetch_public_ats,
         model_client=model_client,
     )
+    crawl_sink = crawl_stack.sink
+    crawl_agent = crawl_stack.agent
     run_repo = PostgresCrawlRunRepository(engine)
     plan_repo = PostgresCrawlPlanRepository(engine)
     source_repo = PostgresCrawlSourceRepository(engine)
@@ -288,7 +289,6 @@ def main() -> None:
     from careerops.application.bounded_tier2 import (
         BoundedTier2Orchestrator,
         RepositoryPermissionChecker,
-        Tier2Agent,
     )
     from careerops.application.crawl_permission_service import (
         CrawlPermissionService,
@@ -327,7 +327,7 @@ def main() -> None:
         budget=tier2_budget,
         permission_checker=RepositoryPermissionChecker(permission_repo),
         permission_repo=permission_repo,
-        agent=cast("Tier2Agent", crawl_sink.tier2_agent),
+        agent=crawl_agent,
     )
 
     from careerops.application.crawl_downstream import CrawlDownstreamService
@@ -433,8 +433,7 @@ def main() -> None:
             )
         )
     finally:
-        tier2_agent = crawl_sink.tier2_agent
-        close_agent = getattr(tier2_agent, "close", None)
+        close_agent = getattr(crawl_agent, "close", None)
         if callable(close_agent):
             close_agent()
         engine.dispose()

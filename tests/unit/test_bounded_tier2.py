@@ -16,11 +16,9 @@ Uses in-memory fakes for repositories (no database required).
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import threading
 import time
-from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
@@ -28,10 +26,9 @@ import pytest
 from careerops.adapters.job_sources import RawJobRecord
 from careerops.application.bounded_tier2 import (
     BoundedTier2Orchestrator,
-    Tier2RunConfig,
-    Tier2RunResult,
-    Tier2StopReason,
     Tier2RoutingDecision,
+    Tier2RunConfig,
+    Tier2StopReason,
     _BodyPrefixCaptchaDetector,
     _MockSessionChecker,
 )
@@ -40,13 +37,11 @@ from careerops.application.llm_job_extraction import (
     EXTRACTION_PROVENANCE,
     LLMJobExtractor,
     _validate_posting,
-    _validate_postings,
 )
 from careerops.application.tier2_budget import Tier2Budget, Tier2Lease
 from careerops.domain.crawl import CrawlDecision
-from careerops.domain.crawl_attempts import CrawlAttemptOutcome, CrawlPermissionState
+from careerops.domain.crawl_attempts import CrawlAttemptOutcome
 from careerops.model_gateway.base import StructuredModelRequest, StructuredModelResponse
-
 
 # ---------------------------------------------------------------------------
 # Fakes
@@ -179,11 +174,13 @@ class _FakeSink:
         crawl_run_id: UUID | None = None,
         plan_version_id: UUID | None = None,
     ) -> dict[str, bool]:
-        self.ingested.append({
-            "record": record,
-            "crawl_run_id": crawl_run_id,
-            "plan_version_id": plan_version_id,
-        })
+        self.ingested.append(
+            {
+                "record": record,
+                "crawl_run_id": crawl_run_id,
+                "plan_version_id": plan_version_id,
+            }
+        )
         return {"is_new_posting": True, "is_new_version": True}
 
 
@@ -319,7 +316,10 @@ class TestTier2Budget:
 
 
 class TestTier2Routing:
-    def test_dynamic_or_unsupported_routes_to_public(self) -> None:
+    def test_dynamic_or_unsupported_routes_to_public_with_evidence(self) -> None:
+        """7.2: DYNAMIC with positive job-source evidence (recipe ran) routes
+        to public Tier 2. ``has_adapter=True`` is the evidence; without it the
+        gate denies (beads: empty Tier 1 must not be directly upgraded)."""
         orch = BoundedTier2Orchestrator(
             sink=_FakeSink(),
             budget=Tier2Budget(),
@@ -328,8 +328,41 @@ class TestTier2Routing:
             _OWNER_ID,
             _SOURCE_ID,
             tier1_outcome=CrawlAttemptOutcome.DYNAMIC_OR_UNSUPPORTED,
+            has_adapter=True,
         )
         assert decision == Tier2RoutingDecision.SKIP_PUBLIC
+
+    def test_dynamic_without_evidence_denied(self) -> None:
+        """An unknown HTTP source (no recipe ran, ``has_adapter=False``) must
+        NOT enter Tier 2 from an empty Tier 1 result — it has no job-source
+        evidence."""
+        orch = BoundedTier2Orchestrator(
+            sink=_FakeSink(),
+            budget=Tier2Budget(),
+        )
+        decision = orch.should_enter_tier2(
+            _OWNER_ID,
+            _SOURCE_ID,
+            tier1_outcome=CrawlAttemptOutcome.DYNAMIC_OR_UNSUPPORTED,
+            has_adapter=False,
+        )
+        assert decision == Tier2RoutingDecision.DENY
+
+    def test_dynamic_with_recipe_fallback_none_denied(self) -> None:
+        """A recipe that explicitly declares ``fallback: none`` pins the source
+        to Tier 1-only even when it ran (``has_adapter=True``)."""
+        orch = BoundedTier2Orchestrator(
+            sink=_FakeSink(),
+            budget=Tier2Budget(),
+        )
+        decision = orch.should_enter_tier2(
+            _OWNER_ID,
+            _SOURCE_ID,
+            tier1_outcome=CrawlAttemptOutcome.DYNAMIC_OR_UNSUPPORTED,
+            has_adapter=True,
+            recipe_fallback="none",
+        )
+        assert decision == Tier2RoutingDecision.DENY
 
     def test_auth_required_without_permission_denied(self) -> None:
         orch = BoundedTier2Orchestrator(
@@ -349,9 +382,7 @@ class TestTier2Routing:
         orch = BoundedTier2Orchestrator(
             sink=_FakeSink(),
             budget=Tier2Budget(),
-            permission_checker=_FakePermissionChecker(
-                granted_sources={str(_SOURCE_ID)}
-            ),
+            permission_checker=_FakePermissionChecker(granted_sources={str(_SOURCE_ID)}),
             session_checker=_MockSessionChecker(),  # always False
         )
         decision = orch.should_enter_tier2(
@@ -363,18 +394,14 @@ class TestTier2Routing:
 
     def test_auth_required_with_granted_and_valid_session_routes(self) -> None:
         class _ValidSession:
-            def get_session_ref(
-                self, owner_id: UUID, source_id: str
-            ) -> str | None:
+            def get_session_ref(self, owner_id: UUID, source_id: str) -> str | None:
                 del owner_id, source_id
                 return f"careerops-login-{_SOURCE_ID}"
 
         orch = BoundedTier2Orchestrator(
             sink=_FakeSink(),
             budget=Tier2Budget(),
-            permission_checker=_FakePermissionChecker(
-                granted_sources={str(_SOURCE_ID)}
-            ),
+            permission_checker=_FakePermissionChecker(granted_sources={str(_SOURCE_ID)}),
             session_checker=_ValidSession(),
         )
         decision = orch.should_enter_tier2(
@@ -397,9 +424,7 @@ class TestTier2Routing:
             CrawlAttemptOutcome.POLICY_DENIED,
         ):
             assert (
-                orch.should_enter_tier2(
-                    _OWNER_ID, _SOURCE_ID, tier1_outcome=outcome
-                )
+                orch.should_enter_tier2(_OWNER_ID, _SOURCE_ID, tier1_outcome=outcome)
                 == Tier2RoutingDecision.DENY
             )
 
@@ -443,7 +468,7 @@ class TestBoundedTier2Execution:
 
     @pytest.mark.asyncio
     async def test_no_slot_available(self) -> None:
-        orch, _, budget = self._make_orch(max_slots=0)
+        orch, _, _ = self._make_orch(max_slots=0)
         result = await orch.run_source(
             Tier2RunConfig(
                 source_id=str(_SOURCE_ID),
@@ -456,7 +481,7 @@ class TestBoundedTier2Execution:
 
     @pytest.mark.asyncio
     async def test_daily_budget_exhausted(self) -> None:
-        orch, _, budget = self._make_orch(daily_budget=0)
+        orch, _, _ = self._make_orch(daily_budget=0)
         result = await orch.run_source(
             Tier2RunConfig(
                 source_id=str(_SOURCE_ID),
@@ -594,9 +619,7 @@ class TestSchemaBoundExtraction:
         assert len(records) == 0
 
     def test_non_dict_items_skipped(self) -> None:
-        client = _FakeModelClient(
-            result={"jobs": ["not-a-dict", {"title": "OK"}]}
-        )
+        client = _FakeModelClient(result={"jobs": ["not-a-dict", {"title": "OK"}]})
         extractor = LLMJobExtractor(client)  # type: ignore[arg-type]
         records = extractor.extract("<html>OK</html>", source_url="https://example.com")
         assert len(records) == 0
@@ -604,10 +627,12 @@ class TestSchemaBoundExtraction:
     def test_repair_attempt_on_validation_failure(self) -> None:
         """When first attempt has errors, a repair is attempted."""
         # First call returns bad data; second call returns good data.
-        seq = _SequenceModelClient([
-            {"jobs": [{"title": "Good"}, {"not_title": "bad"}]},
-            {"jobs": [{"title": "Good"}]},
-        ])
+        seq = _SequenceModelClient(
+            [
+                {"jobs": [{"title": "Good"}, {"not_title": "bad"}]},
+                {"jobs": [{"title": "Good"}]},
+            ]
+        )
         extractor = LLMJobExtractor(seq)  # type: ignore[arg-type]
         records = extractor.extract("<html>Good jobs</html>", source_url="https://example.com")
         # First attempt: 1 valid + 1 error -> repair triggered.
@@ -617,9 +642,7 @@ class TestSchemaBoundExtraction:
 
     def test_fail_closed_when_repair_also_fails(self) -> None:
         """When both attempts produce errors, return partial from first."""
-        client = _FakeModelClient(
-            result={"jobs": [{"bad_field": "no title anywhere"}]}
-        )
+        client = _FakeModelClient(result={"jobs": [{"bad_field": "no title anywhere"}]})
         extractor = LLMJobExtractor(client)  # type: ignore[arg-type]
         records = extractor.extract("<html>jobs</html>", source_url="https://example.com")
         # Both attempts return the same bad data. First attempt: 0 valid + 1 error.
@@ -647,9 +670,7 @@ class TestSchemaBoundExtraction:
         assert extractor.extract("<html>jobs</html>", source_url="https://example.com") == []
 
     def test_provenance_on_every_record(self) -> None:
-        client = _FakeModelClient(
-            result={"jobs": [{"title": "A"}, {"title": "B"}]}
-        )
+        client = _FakeModelClient(result={"jobs": [{"title": "A"}, {"title": "B"}]})
         extractor = LLMJobExtractor(client)  # type: ignore[arg-type]
         records = extractor.extract("<html>A and B jobs</html>", source_url="https://example.com")
         for r in records:
@@ -668,7 +689,12 @@ class TestSchemaBoundExtraction:
 
 class TestValidatePosting:
     def test_valid_posting(self) -> None:
-        item = {"title": "Engineer", "location": "Remote", "url": "https://x.com/j/1", "description": "Do stuff"}
+        item = {
+            "title": "Engineer",
+            "location": "Remote",
+            "url": "https://x.com/j/1",
+            "description": "Do stuff",
+        }
         result = _validate_posting(item, "https://x.com")
         assert isinstance(result, RawJobRecord)
         assert result.title == "Engineer"
@@ -735,6 +761,47 @@ class TestTier2IngestPath:
         for item in sink.ingested:
             assert item["crawl_run_id"] == run_id
             assert item["plan_version_id"] == plan_id
+
+    @pytest.mark.asyncio
+    async def test_source_type_forwarded_to_crawl_bounded(self) -> None:
+        """The ``source_type`` on :class:`Tier2RunConfig` reaches
+        ``crawl_bounded`` so a Tier 2 skill playbook can match by source_type
+        on the only legal Tier 2 entry point (not just by URL)."""
+
+        class _RecordingAgent:
+            received_source_type: str = "<unset>"
+
+            def crawl_bounded(
+                self,
+                source_url: str,
+                *,
+                max_actions: int,
+                max_duration_s: float,
+                max_consecutive_empty: int,
+                session_ref: str | None,
+                consume_action: object,
+                source_type: str = "",
+            ) -> CrawlAgentRunResult:
+                del source_url, max_actions, max_duration_s, max_consecutive_empty
+                del session_ref, consume_action
+                self.received_source_type = source_type
+                return CrawlAgentRunResult(records=(), action_count=0)
+
+        agent = _RecordingAgent()
+        orch = BoundedTier2Orchestrator(
+            sink=_FakeSink(),  # type: ignore[arg-type]
+            budget=Tier2Budget(),
+            agent=agent,  # type: ignore[arg-type]
+        )
+        await orch.run_source(
+            Tier2RunConfig(
+                source_id=str(_SOURCE_ID),
+                base_url="https://wd.com/wd/careers",
+                owner_id=_OWNER_ID,
+                source_type="workday",
+            )
+        )
+        assert agent.received_source_type == "workday"
 
     def test_outcome_mapping(self) -> None:
         """Verify stop reason -> CrawlAttemptOutcome mapping."""
@@ -856,8 +923,7 @@ class TestConcurrentAcquire:
             # Don't release — we want to verify the cap.
 
         threads = [
-            threading.Thread(target=try_acquire, args=(f"src-{i}",))
-            for i in range(contenders)
+            threading.Thread(target=try_acquire, args=(f"src-{i}",)) for i in range(contenders)
         ]
         for t in threads:
             t.start()
@@ -873,7 +939,6 @@ class TestConcurrentAcquire:
         """Acquire-release cycles under concurrency stay within bounds."""
         max_slots = 3
         budget = Tier2Budget(max_concurrent_slots=max_slots, daily_action_budget=999)
-        errors: list[str] = []
         barrier = threading.Barrier(6)
 
         def acquire_release(idx: int) -> None:
@@ -886,10 +951,7 @@ class TestConcurrentAcquire:
                 # If we couldn't acquire, that's fine — slots were full.
                 pass
 
-        threads = [
-            threading.Thread(target=acquire_release, args=(i,))
-            for i in range(6)
-        ]
+        threads = [threading.Thread(target=acquire_release, args=(i,)) for i in range(6)]
         for t in threads:
             t.start()
         for t in threads:

@@ -172,6 +172,54 @@ def _to_crawled_posting(
     )
 
 
+def _records_to_postings(
+    jobs: list[RawJobRecord],
+    request: CrawlJobSourceInput,
+    source_url: str,
+    fetched_at_iso: str,
+    parser_version: str,
+) -> list[CrawledPostingRecord]:
+    """Map structured-recipe ``RawJobRecord`` rows into ``CrawledPostingRecord``s.
+
+    Shared by :meth:`RealCrawlActivitySink.crawl_source` and
+    :meth:`RealCrawlActivitySink.crawl_source_with_signals` so the Tier 1
+    structured path has one flattening + mapping contract. ``raw_data`` is
+    stringified (Temporal JSON converter rejects non-string scalars) and
+    merged under the structured fields. Every text field defaults to ``""``
+    so ``structured_data`` stays ``dict[str, str]`` — this also fixes the
+    earlier style inconsistency where ``description`` lacked the ``or ""``
+    guard that ``title`` / ``location`` already had.
+
+    Signals-only fields (``status_code`` / ``body_prefix`` /
+    ``expected_fields_missing``) are not mapped here; the signals path
+    populates them on :class:`CrawlSourceResult` separately.
+    """
+    postings: list[CrawledPostingRecord] = []
+    for record in jobs:
+        raw: dict[str, str] = {}
+        for k, v in record.raw_data.items():
+            raw[k] = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
+
+        postings.append(
+            CrawledPostingRecord(
+                source_id=request.source_id,
+                external_id=record.external_id,
+                canonical_url=record.url or request.base_url,
+                source_url=source_url,
+                structured_data={
+                    "title": record.title or "",
+                    "location": record.location or "",
+                    "description": record.description or "",
+                    "apply_url": record.url or "",
+                    **raw,
+                },
+                parser_version=parser_version,
+                fetched_at=fetched_at_iso,
+            )
+        )
+    return postings
+
+
 @dataclasses.dataclass(slots=True)
 class CrawlCounters:
     """Per-source ingest counters for the canonical Tier 2 ingest path.
@@ -395,38 +443,14 @@ class RealCrawlActivitySink:
             return []
 
         result = await engine.execute(request, lambda url: self._fetch_for_request(request, url))
-        jobs = result.jobs
         source_url = result.source_url or request.base_url
         # RecipeEngine samples the first-step ``fetched_at``; fall back to now
         # only when the fetcher returned no timestamp.
-        fetched_at_dt = result.fetched_at or datetime.now(tz=UTC)
-        fetched_at = fetched_at_dt.isoformat()
+        fetched_at_iso = (result.fetched_at or datetime.now(tz=UTC)).isoformat()
 
-        postings: list[CrawledPostingRecord] = []
-        for record in jobs:
-            # Flatten to dict[str, str] — Temporal JSON converter rejects
-            # ``object`` values; stringify non-string scalars.
-            raw: dict[str, str] = {}
-            for k, v in record.raw_data.items():
-                raw[k] = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
-
-            postings.append(
-                CrawledPostingRecord(
-                    source_id=request.source_id,
-                    external_id=record.external_id,
-                    canonical_url=record.url or request.base_url,
-                    source_url=source_url,
-                    structured_data={
-                        "title": record.title or "",
-                        "location": record.location or "",
-                        "description": record.description,
-                        "apply_url": record.url or "",
-                        **raw,
-                    },
-                    parser_version=engine.parser_version,
-                    fetched_at=fetched_at,
-                )
-            )
+        postings = _records_to_postings(
+            result.jobs, request, source_url, fetched_at_iso, engine.parser_version
+        )
 
         # Tier 2 fallback: structured parsing yielded nothing (parse drift,
         # JS-rendered page, or an OFFICIAL probe whose recipe could not
@@ -469,36 +493,14 @@ class RealCrawlActivitySink:
             )
 
         result = await engine.execute(request, lambda url: self._fetch_for_request(request, url))
-        jobs = result.jobs
         source_url = result.source_url or request.base_url
         status_code = result.status_code
         body_prefix = result.body_prefix
-        fetched_at_dt = result.fetched_at or datetime.now(tz=UTC)
-        fetched_at = fetched_at_dt.isoformat()
+        fetched_at_iso = (result.fetched_at or datetime.now(tz=UTC)).isoformat()
 
-        postings: list[CrawledPostingRecord] = []
-        for record in jobs:
-            raw: dict[str, str] = {}
-            for k, v in record.raw_data.items():
-                raw[k] = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
-
-            postings.append(
-                CrawledPostingRecord(
-                    source_id=request.source_id,
-                    external_id=record.external_id,
-                    canonical_url=record.url or request.base_url,
-                    source_url=source_url,
-                    structured_data={
-                        "title": record.title or "",
-                        "location": record.location or "",
-                        "description": record.description,
-                        "apply_url": record.url or "",
-                        **raw,
-                    },
-                    parser_version=engine.parser_version,
-                    fetched_at=fetched_at,
-                )
-            )
+        postings = _records_to_postings(
+            result.jobs, request, source_url, fetched_at_iso, engine.parser_version
+        )
 
         # Tier 2 fallback: structured parsing yielded nothing (parse drift
         # on an OFFICIAL probe, JS-rendered page, or a recipe that no longer
@@ -515,7 +517,7 @@ class RealCrawlActivitySink:
             for field_name in _EXPECTED_POSTING_FIELDS:
                 if not sample.get(field_name):
                     missing_fields.append(field_name)
-        elif jobs:
+        elif result.jobs:
             # Jobs were found by the adapter but produced no postings — unusual.
             missing_fields.extend(_EXPECTED_POSTING_FIELDS)
 

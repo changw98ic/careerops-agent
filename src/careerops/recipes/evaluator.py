@@ -181,6 +181,16 @@ def _extract_json_ld(extract: Extract, html_str: object) -> list[dict]:
     and ``TypeError`` on non-string input — both are caught and the executor
     returns ``[]`` so one bad block does not sink the whole crawl (real-page
     robustness; mirrors the legacy per-item fault tolerance).
+
+    External-id alignment (PR #7 review fix): each row carries
+    ``external_id = sha256(url)[:16]`` mirroring the legacy ``JsonLdAdapter``
+    dedup key, so a JobPosting keeps the same id before/after the recipe
+    migration. The url source is the schema.org block's ``url`` field first
+    (the canonical JobPosting field), then the recipe-mapped ``apply_url`` /
+    ``url`` row fields (recipes that rename ``url`` to ``apply_url`` for the
+    Greenhouse contract). Empty when neither is present — every empty-url row
+    collapses to one id, which is correct because there is nothing to
+    distinguish them.
     """
     if not isinstance(html_str, str):
         return []
@@ -200,7 +210,12 @@ def _extract_json_ld(extract: Extract, html_str: object) -> list[dict]:
             wrapped = f"$[?({extract.filter.jsonpath})]"
             if not jsonpath.findall(wrapped, [block]):
                 continue
-        rows.append({name: apply_field(field, block) for name, field in extract.fields.items()})
+        row = {name: apply_field(field, block) for name, field in extract.fields.items()}
+        url_source = block.get("url") or row.get("apply_url") or row.get("url") or ""
+        if not isinstance(url_source, str):
+            url_source = str(url_source)
+        row["external_id"] = hashlib.sha256(url_source.encode()).hexdigest()[:16]
+        rows.append(row)
     return rows
 
 
@@ -257,6 +272,13 @@ def _extract_css(extract: Extract, html_str: object) -> list[dict]:
     A selector that matches nothing yields an empty column; if every column
     is empty the result is ``[]`` (max length 0). ``selectolax``'s node
     ``.text(strip=True)`` extracts the trimmed text.
+
+    External-id alignment (PR #7 review fix): each row carries
+    ``external_id = sha256(title.strip())[:16]`` mirroring the legacy
+    ``StaticHtmlAdapter`` dedup key, so a job card keeps the same id
+    before/after the recipe migration. Empty titles still hash to a stable
+    value (sha256 of empty string) — every untitled row collapses to one id,
+    matching the legacy behaviour.
     """
     if not isinstance(html_str, str):
         return []
@@ -273,6 +295,8 @@ def _extract_css(extract: Extract, html_str: object) -> list[dict]:
         row: dict = {}
         for name, nodes in columns.items():
             row[name] = nodes[i].text(strip=True) if i < len(nodes) else ""
+        title_source = (row.get("title") or "").strip()
+        row["external_id"] = hashlib.sha256(title_source.encode()).hexdigest()[:16]
         rows.append(row)
     return rows
 

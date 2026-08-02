@@ -309,18 +309,103 @@ class RealCrawlActivitySink:
             return self._browser.fetch(url)
         raise RuntimeError("unsupported crawl executor mode")
 
-    async def crawl_source(self, request: CrawlJobSourceInput) -> list[CrawledPostingRecord]:
+    # ------------------------------------------------------------------
+    # OFFICIAL meta-type sub-routing (PR #7 review fix, batch 1).
+    #
+    # ``CrawlSourceType.OFFICIAL`` is an enum meta-type — the DB stores
+    # ``"official"`` and the manifest registers three concrete recipes
+    # (``official_jsonld`` / ``official_sitemap`` / ``official_static``)
+    # keyed by their actual list shape. A direct
+    # ``self._adapters.get("official")`` lookup therefore returns ``None``
+    # and would silently zero every OFFICIAL crawl.
+    #
+    # The correct dispatch is content-driven: fetch ``base_url`` once and
+    # reuse the evaluator's own ``_extract_sitemap`` / ``_extract_json_ld``
+    # (zero drift with the executor) to pick which ``official_*`` recipe
+    # can parse the body. The chosen :class:`RecipeEngine` is then run
+    # through its normal ``execute`` path — which re-fetches ``base_url``.
+    # The double fetch is accepted (correctness > saving one fetch; the
+    # probe payload is the list page itself, typically tens of KB).
+    # ------------------------------------------------------------------
+
+    def _resolve_official_engine(
+        self, request: CrawlJobSourceInput
+    ) -> RecipeEngine | None:
+        """Probe ``base_url`` and return the matching ``official_*`` engine.
+
+        Probe precedence (mirrors the legacy per-shape adapters):
+
+        1. **sitemap** — body parses to ``<urlset>`` / ``<sitemapindex>`` and
+           at least one ``<url><loc>`` survives the recipe's ``url_filter``.
+        2. **json_ld** — body contains a ``<script type="application/ld+json">``
+           block that survives the recipe's ``@['@type']=='JobPosting'`` filter.
+        3. **static** — fallback for any other HTML.
+
+        Returns ``None`` when no ``official_*`` engine is loaded (registry
+        stripped / RECIPES_LIVE=False). Fetch failures propagate to the
+        caller — same contract as the structured path.
+        """
+        sitemap_engine = self._adapters.get("official_sitemap")
+        jsonld_engine = self._adapters.get("official_jsonld")
+        static_engine = self._adapters.get("official_static")
+        if (
+            sitemap_engine is None
+            and jsonld_engine is None
+            and static_engine is None
+        ):
+            return None
+
+        # Local import: evaluator pulls in ``extruct`` / ``selectolax``; keep
+        # it out of the import path of callers that never hit an OFFICIAL
+        # source (e.g. ego-only tests).
+        from careerops.recipes.evaluator import _extract_json_ld, _extract_sitemap
+
+        resp = self._fetch_for_request(request, request.base_url)
+        body = resp.body or ""
+
+        if sitemap_engine is not None:
+            sitemap_recipe = cast("RecipeEngine", sitemap_engine)._recipe
+            sitemap_extract = sitemap_recipe.steps[0].extract
+            if _extract_sitemap(sitemap_extract, body):
+                return cast("RecipeEngine", sitemap_engine)
+
+        if jsonld_engine is not None:
+            jsonld_recipe = cast("RecipeEngine", jsonld_engine)._recipe
+            jsonld_extract = jsonld_recipe.steps[0].extract
+            if _extract_json_ld(jsonld_extract, body):
+                return cast("RecipeEngine", jsonld_engine)
+
+        return cast("RecipeEngine", static_engine) if static_engine is not None else None
+
+    def _resolve_engine_for_request(
+        self, request: CrawlJobSourceInput
+    ) -> RecipeEngine | None:
+        """Pick the :class:`RecipeEngine` for ``request.source_type``.
+
+        Non-OFFICIAL types index directly into the registry.
+        ``"official"`` is the meta-type described in
+        :meth:`_resolve_official_engine` and needs a content probe before a
+        concrete ``official_*`` engine can be chosen.
+        """
+        if request.source_type == "official":
+            return self._resolve_official_engine(request)
         adapter = self._adapters.get(request.source_type)
-        if adapter is None:
+        return cast("RecipeEngine", adapter) if adapter is not None else None
+
+    async def crawl_source(self, request: CrawlJobSourceInput) -> list[CrawledPostingRecord]:
+        engine = self._resolve_engine_for_request(request)
+        if engine is None:
+            # No structured recipe covers this source type. If a Tier 2
+            # agent is wired, delegate (http or ego — both can benefit):
+            # the agent drives the browser itself, so executor_mode only
+            # changes which fetcher the structured path would have used,
+            # not whether the agent can run. Otherwise return empty; the
+            # signals-bearing twin carries the parse-miss diagnostic.
+            if self._agent is not None:
+                agent_result = await self._crawl_via_agent(request)
+                return list(agent_result.postings)
             return []
 
-        # Phase C: the registry holds only :class:`RecipeEngine` instances, so
-        # dispatch is always ``execute(request, fetch)``. The ``cast`` tells
-        # pyright the runtime shape — see the ``__init__`` comment for why
-        # ``self._adapters`` is typed ``dict[str, JobSourceAdapter]`` despite
-        # holding ``RecipeEngine`` values (the ``execute`` contract is not on
-        # the ``JobSourceAdapter`` Protocol).
-        engine = cast("RecipeEngine", adapter)
         result = await engine.execute(
             request, lambda url: self._fetch_for_request(request, url)
         )
@@ -352,10 +437,19 @@ class RealCrawlActivitySink:
                         "apply_url": record.url or "",
                         **raw,
                     },
-                    parser_version=adapter.parser_version,
+                    parser_version=engine.parser_version,
                     fetched_at=fetched_at,
                 )
             )
+
+        # Tier 2 fallback: structured parsing yielded nothing (parse drift,
+        # JS-rendered page, or an OFFICIAL probe whose recipe could not
+        # extract rows). Hand the URL to the agent before declaring empty,
+        # so a discovered dynamic source still gets a reasoned attempt.
+        if not postings and self._agent is not None:
+            agent_result = await self._crawl_via_agent(request)
+            if agent_result.postings:
+                return list(agent_result.postings)
         return postings
 
     async def crawl_source_with_signals(self, request: CrawlJobSourceInput) -> CrawlSourceResult:
@@ -364,39 +458,30 @@ class RealCrawlActivitySink:
         Section 5 extension (task 5.7): wraps the same fetch + adapter logic
         as ``crawl_source`` but captures HTTP status code, body prefix (for
         CAPTCHA/login-wall detection), and expected-field parse-drift signals.
-        The existing ``crawl_source`` method is unchanged — callers that do
-        not need signals continue to use it.
 
-        If the adapter is not found, returns an empty result with status 0.
-        If the fetch raises, the exception propagates to the caller (the
-        execution service catches it and increments the failed counter).
-
-        Tier 2 (real-autonomous-career-loop Phase 4): when a multi-step
-        ``CrawlAgent`` is wired, ego sources are delegated to it (navigate +
-        API capture + LLM extraction) and its ``RawJobRecord`` results are
-        mapped through ``_to_crawled_posting`` so provenance flows into
-        ``parser_version``. The structured Tier 1 path below is unchanged and
-        remains the default when no agent is configured.
+        Tier 2 fallback (PR #7 review fix, batch 1): the agent is no longer
+        gated on ``executor_mode == 'ego'``. Any source type that ends up
+        with no structured recipe (or whose OFFICIAL probe yields no rows)
+        delegates to the injected ``CrawlAgent`` when one is wired —
+        http sources benefit from agent fallback just as much as ego ones.
+        When no agent is wired the result is NOT silently empty: the
+        ``expected_fields_missing`` signal surfaces the miss so the backoff
+        policy / operator can tell this apart from a successful zero-row
+        crawl.
         """
-        # Tier 2 (Phase 4): a multi-step agent is used as a FALLBACK for ego
-        # sources, not a replacement for structured parsing. Structured Tier 1
-        # recipes (``official_jsonld`` / ``official_static`` / ATS recipes)
-        # parse first; only when they yield nothing (parse drift) — or when no
-        # recipe exists for the source type — does the sink delegate to the
-        # injected CrawlAgent.
-        agent_available = request.executor_mode == "ego" and self._agent is not None
-
-        adapter = self._adapters.get(request.source_type)
-        if adapter is None:
-            if agent_available:
+        engine = self._resolve_engine_for_request(request)
+        if engine is None:
+            # No structured recipe covers this source type. Delegate to the
+            # Tier 2 agent when wired (http or ego — both benefit); otherwise
+            # surface the miss via ``expected_fields_missing`` so the empty
+            # result is not mistaken for a successful zero-row crawl.
+            if self._agent is not None:
                 return await self._crawl_via_agent(request)
-            return CrawlSourceResult(postings=())
+            return CrawlSourceResult(
+                postings=(),
+                expected_fields_missing=_EXPECTED_POSTING_FIELDS,
+            )
 
-        # Phase C dispatch: the registry holds only :class:`RecipeEngine`
-        # instances; ``execute`` always runs and its first-step response
-        # supplies the signals. See ``crawl_source`` for the ``cast``
-        # rationale.
-        engine = cast("RecipeEngine", adapter)
         result = await engine.execute(
             request, lambda url: self._fetch_for_request(request, url)
         )
@@ -426,16 +511,16 @@ class RealCrawlActivitySink:
                         "apply_url": record.url or "",
                         **raw,
                     },
-                    parser_version=adapter.parser_version,
+                    parser_version=engine.parser_version,
                     fetched_at=fetched_at,
                 )
             )
 
-        # Tier 2 fallback: the structured adapter parsed zero postings on an
-        # ego source (parse drift, or a JS-rendered page the adapter cannot
-        # read). Delegate to the multi-step agent before declaring the source
-        # empty, so discovered dynamic sources still get a reasoned attempt.
-        if not postings and agent_available:
+        # Tier 2 fallback: structured parsing yielded nothing (parse drift
+        # on an OFFICIAL probe, JS-rendered page, or a recipe that no longer
+        # matches the live DOM). Delegate to the agent before declaring the
+        # source empty.
+        if not postings and self._agent is not None:
             return await self._crawl_via_agent(request)
 
         # Detect parse drift: expected fields missing across all postings.

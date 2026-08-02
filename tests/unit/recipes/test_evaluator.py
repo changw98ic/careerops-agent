@@ -30,10 +30,17 @@ is a core feature. ``evaluate_extract`` in json_path mode therefore ignores
 
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 
 from careerops.recipes.evaluator import apply_field, evaluate_extract, run_steps
 from careerops.recipes.schema import Extract, Field_, Filter, Recipe
+
+
+def _sha16(text: str) -> str:
+    """sha256(text)[:16] — the legacy dedup-key convention."""
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
 def test_json_path_items_and_fields():
@@ -140,7 +147,12 @@ def test_json_ld_filters_jobposting():
     """json_ld mode parses JSON-LD blocks via extruct and applies
     ``extract.filter`` per item by wrapping the item in ``[item]``. A
     Person block is dropped, a JobPosting block survives, and the declared
-    field mapping (``title``) resolves against the surviving block."""
+    field mapping (``title``) resolves against the surviving block.
+
+    Each row carries ``external_id = sha256(url)[:16]`` mirroring the legacy
+    ``JsonLdAdapter`` dedup key. The block here has no ``url`` field so the
+    id falls back to sha256("") — same for every url-less row.
+    """
     html_doc = (
         '<script type="application/ld+json">{"@type":"Person","name":"x"}</script>'
         '<script type="application/ld+json">{"@type":"JobPosting","title":"Eng"}</script>'
@@ -151,11 +163,33 @@ def test_json_ld_filters_jobposting():
         fields={"title": Field_(path="title")},
     )
     rows = evaluate_extract(ex, html_doc)
-    assert rows == [{"title": "Eng"}]
+    assert rows == [{"title": "Eng", "external_id": _sha16("")}]
+
+
+def test_json_ld_external_id_uses_block_url_when_present():
+    """The schema.org ``url`` field on the block is the canonical JobPosting
+    link; the evaluator derives ``external_id`` from it (mirroring legacy
+    ``JsonLdAdapter``) so the same posting keeps the same dedup key after
+    the recipe migration."""
+    html_doc = (
+        '<script type="application/ld+json">'
+        '{"@type":"JobPosting","title":"Eng","url":"https://x/jobs/1"}'
+        "</script>"
+    )
+    ex = Extract(mode="json_ld", fields={"title": Field_(path="title")})
+    rows = evaluate_extract(ex, html_doc)
+    assert rows == [
+        {"title": "Eng", "external_id": _sha16("https://x/jobs/1")},
+    ]
 
 
 def test_json_ld_no_filter_keeps_all_blocks():
-    """Without a filter every JSON-LD block becomes a row."""
+    """Without a filter every JSON-LD block becomes a row.
+
+    external_id falls back to sha256("") for blocks with no ``url`` field
+    (the Person block) — every url-less row shares one id, matching legacy
+    behaviour where the dedup key was derived from whatever the block
+    exposed."""
     html_doc = (
         '<script type="application/ld+json">{"@type":"Person","name":"Alice"}</script>'
         '<script type="application/ld+json">{"@type":"JobPosting","title":"Eng"}</script>'
@@ -165,9 +199,10 @@ def test_json_ld_no_filter_keeps_all_blocks():
         fields={"name": Field_(path="name"), "title": Field_(path="title")},
     )
     rows = evaluate_extract(ex, html_doc)
+    empty_id = _sha16("")
     assert rows == [
-        {"name": "Alice", "title": ""},
-        {"name": "", "title": "Eng"},
+        {"name": "Alice", "title": "", "external_id": empty_id},
+        {"name": "", "title": "Eng", "external_id": empty_id},
     ]
 
 
@@ -229,7 +264,10 @@ def test_sitemap_malformed_xml_returns_empty():
 
 def test_css_zip_pairing():
     """css mode reuses ``Field_.path`` as a CSS selector and zip-pairs columns
-    by index up to the longest column's length."""
+    by index up to the longest column's length.
+
+    Each row carries ``external_id = sha256(title.strip())[:16]`` mirroring
+    the legacy ``StaticHtmlAdapter`` dedup key."""
     doc = (
         "<div>"
         '<h2 class="t">A</h2><span class="l">SF</span>'
@@ -242,14 +280,17 @@ def test_css_zip_pairing():
     )
     rows = evaluate_extract(ex, doc)
     assert rows == [
-        {"title": "A", "location": "SF"},
-        {"title": "B", "location": "NYC"},
+        {"title": "A", "location": "SF", "external_id": _sha16("A")},
+        {"title": "B", "location": "NYC", "external_id": _sha16("B")},
     ]
 
 
 def test_css_unequal_columns_pad_empty():
     """When one column is longer than the other, missing positions are
-    padded with ``""`` so the row count equals the longest column's length."""
+    padded with ``""`` so the row count equals the longest column's length.
+
+    external_id stays derived from the title column even when the location
+    is empty (legacy behaviour: the title is the canonical dedup field)."""
     doc = (
         "<div>"
         '<h2 class="t">A</h2><span class="l">only-one</span>'
@@ -263,9 +304,9 @@ def test_css_unequal_columns_pad_empty():
     )
     rows = evaluate_extract(ex, doc)
     assert rows == [
-        {"title": "A", "location": "only-one"},
-        {"title": "B", "location": ""},
-        {"title": "C", "location": ""},
+        {"title": "A", "location": "only-one", "external_id": _sha16("A")},
+        {"title": "B", "location": "", "external_id": _sha16("B")},
+        {"title": "C", "location": "", "external_id": _sha16("C")},
     ]
 
 

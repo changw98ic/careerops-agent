@@ -221,7 +221,7 @@ class _FakeAgent:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    def crawl(self, source_url: str) -> list[RawJobRecord]:
+    def crawl(self, source_url: str, *, source_type: str = "") -> list[RawJobRecord]:
         self.calls.append(source_url)
         return [
             RawJobRecord(

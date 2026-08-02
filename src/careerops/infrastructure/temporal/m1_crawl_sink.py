@@ -52,7 +52,9 @@ FetcherFn = Callable[[str], FetchedResponse]
 
 
 class CrawlAgentProtocol(Protocol):
-    def crawl(self, source_url: str) -> list[RawJobRecord]: ...
+    def crawl(
+        self, source_url: str, *, source_type: str = ""
+    ) -> list[RawJobRecord]: ...
 
 # Expected fields that every adapter should produce in structured_data.
 # If these are missing and zero jobs were found, it signals parse drift.
@@ -550,11 +552,15 @@ class RealCrawlActivitySink:
         :func:`_to_crawled_posting`, which carries the record's provenance
         (``api-capture`` / ``llm-extraction``) into ``parser_version`` so the
         downstream ``ingest_posting`` writes it to ``job_posting_versions``.
+
+        ``request.source_type`` is forwarded as an explicit hint so the agent
+        can pick the matching Tier 2 skill playbook even when the URL alone is
+        ambiguous (the agent still URL-matches as a fallback).
         """
         fetched_at = datetime.now(tz=UTC)
         if self._agent is None:
             return CrawlSourceResult(postings=())
-        raw_records = self._agent.crawl(request.base_url)
+        raw_records = self._agent.crawl(request.base_url, source_type=request.source_type)
         postings = tuple(
             _to_crawled_posting(raw, request.source_id, request.base_url, fetched_at)
             for raw in raw_records

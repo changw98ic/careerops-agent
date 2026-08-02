@@ -7,9 +7,12 @@ recipe (Tier 1). Each file is a YAML frontmatter block
 Markdown body describing the crawl steps. Skills are *data* (guidance the LLM
 agent reads), not per-site Python code.
 
-This module only loads and validates the format. Wiring skills into the
-CrawlAgent decision loop is a later task — the agent already falls back to a
-generic ReAct loop (Tier 2) when no recipe matches.
+This module only loads and validates the format. ``CrawlAgent`` consumes the
+result: at crawl time it matches the source URL against each skill's
+``match`` hints (``host_suffix`` / ``url_patterns``) and, on a hit, prepends
+the playbook to the ReAct system prompt so the model follows known-good steps
+instead of blind ReAct. On a miss the agent falls back to the generic Tier 2
+loop unchanged.
 """
 
 from __future__ import annotations

@@ -52,9 +52,8 @@ FetcherFn = Callable[[str], FetchedResponse]
 
 
 class CrawlAgentProtocol(Protocol):
-    def crawl(
-        self, source_url: str, *, source_type: str = ""
-    ) -> list[RawJobRecord]: ...
+    def crawl(self, source_url: str, *, source_type: str = "") -> list[RawJobRecord]: ...
+
 
 # Expected fields that every adapter should produce in structured_data.
 # If these are missing and zero jobs were found, it signals parse drift.
@@ -95,12 +94,12 @@ DEFAULT_RECIPES_DIR = Path(__file__).resolve().parents[4] / "vendor" / "crawl-re
 # ``self._adapters`` from :func:`build_recipe_registry` and dispatches every
 # request through ``RecipeEngine.execute``.
 #
-# The gate is retained as an emergency stop: flipping it to ``False`` makes
+# The gate is retained as an emergency stop: flipping it to ``True`` makes
 # :func:`build_recipe_registry` return ``{}`` so the sink reports the source
 # type as unsupported (Tier 2 fallback if an agent is wired, otherwise an
 # empty result) without touching the recipe catalog. That keeps the
 # rollback lever code-only rather than requiring a recipe revert.
-RECIPES_LIVE: bool = True
+RECIPES_DISABLED: bool = False
 
 
 def build_recipe_registry(recipes_dir: Path | None = None) -> dict[str, RecipeEngine]:
@@ -110,19 +109,20 @@ def build_recipe_registry(recipes_dir: Path | None = None) -> dict[str, RecipeEn
     in environments that ship without the vendor catalog (CI sandboxes, unit
     tests, stripped containers).
 
-    Gated by :data:`RECIPES_LIVE` (Phase C default ``True``): while ``False``,
-    this returns ``{}`` unconditionally so the live crawl sink reports every
-    source type as unsupported. See :data:`RECIPES_LIVE` for the rationale.
+    Gated by :data:`RECIPES_DISABLED` (Phase C default ``False``): when
+    ``True``, this returns ``{}`` unconditionally so the live crawl sink
+    reports every source type as unsupported. See :data:`RECIPES_DISABLED`
+    for the rationale.
 
     Each loaded :class:`Recipe` becomes a :class:`RecipeEngine` keyed by its
     ``source_type``. There is no longer a legacy adapter registry to merge
     over: ``RealCrawlActivitySink.__init__`` consumes this dict verbatim.
     """
-    # Emergency-stop gate (see :data:`RECIPES_LIVE`). Phase C removed the
+    # Emergency-stop gate (see :data:`RECIPES_DISABLED`). Phase C removed the
     # legacy adapters entirely, so disabling recipes here leaves the sink
     # with no structured adapters — every request then falls through to the
     # Tier 2 agent (when wired) or returns an empty result.
-    if not RECIPES_LIVE:
+    if RECIPES_DISABLED:
         return {}
     catalog = recipes_dir or DEFAULT_RECIPES_DIR
     if not (catalog / "manifest.json").exists():
@@ -186,9 +186,7 @@ class CrawlCounters:
     discovered: int = 0
     updated: int = 0
     failed: int = 0
-    canonical_job_ids: set[UUID] = dataclasses.field(
-        default_factory=lambda: set[UUID]()
-    )
+    canonical_job_ids: set[UUID] = dataclasses.field(default_factory=lambda: set[UUID]())
 
 
 async def ingest_crawled_records(
@@ -228,9 +226,7 @@ async def ingest_crawled_records(
         elif result.get("is_new_version"):
             counters.updated += 1
         canonical_job_id = result.get("canonical_job_id")
-        if canonical_job_id and (
-            result.get("is_new_posting") or result.get("is_new_version")
-        ):
+        if canonical_job_id and (result.get("is_new_posting") or result.get("is_new_version")):
             counters.canonical_job_ids.add(UUID(str(canonical_job_id)))
     return counters
 
@@ -273,9 +269,7 @@ class RealCrawlActivitySink:
         if adapters is not None:
             self._adapters = adapters
         else:
-            self._adapters = cast(
-                "dict[str, JobSourceAdapter]", build_recipe_registry()
-            )
+            self._adapters = cast("dict[str, JobSourceAdapter]", build_recipe_registry())
         # Allow injecting a fake fetcher for tests.
         self._fetch: FetcherFn = fetcher or fetch
         self._public_ats_fetch = public_ats_fetcher
@@ -330,9 +324,7 @@ class RealCrawlActivitySink:
     # probe payload is the list page itself, typically tens of KB).
     # ------------------------------------------------------------------
 
-    def _resolve_official_engine(
-        self, request: CrawlJobSourceInput
-    ) -> RecipeEngine | None:
+    def _resolve_official_engine(self, request: CrawlJobSourceInput) -> RecipeEngine | None:
         """Probe ``base_url`` and return the matching ``official_*`` engine.
 
         Probe precedence (mirrors the legacy per-shape adapters):
@@ -344,17 +336,13 @@ class RealCrawlActivitySink:
         3. **static** — fallback for any other HTML.
 
         Returns ``None`` when no ``official_*`` engine is loaded (registry
-        stripped / RECIPES_LIVE=False). Fetch failures propagate to the
+        stripped / RECIPES_DISABLED=True). Fetch failures propagate to the
         caller — same contract as the structured path.
         """
         sitemap_engine = self._adapters.get("official_sitemap")
         jsonld_engine = self._adapters.get("official_jsonld")
         static_engine = self._adapters.get("official_static")
-        if (
-            sitemap_engine is None
-            and jsonld_engine is None
-            and static_engine is None
-        ):
+        if sitemap_engine is None and jsonld_engine is None and static_engine is None:
             return None
 
         # Local import: evaluator pulls in ``extruct`` / ``selectolax``; keep
@@ -379,9 +367,7 @@ class RealCrawlActivitySink:
 
         return cast("RecipeEngine", static_engine) if static_engine is not None else None
 
-    def _resolve_engine_for_request(
-        self, request: CrawlJobSourceInput
-    ) -> RecipeEngine | None:
+    def _resolve_engine_for_request(self, request: CrawlJobSourceInput) -> RecipeEngine | None:
         """Pick the :class:`RecipeEngine` for ``request.source_type``.
 
         Non-OFFICIAL types index directly into the registry.
@@ -408,9 +394,7 @@ class RealCrawlActivitySink:
                 return list(agent_result.postings)
             return []
 
-        result = await engine.execute(
-            request, lambda url: self._fetch_for_request(request, url)
-        )
+        result = await engine.execute(request, lambda url: self._fetch_for_request(request, url))
         jobs = result.jobs
         source_url = result.source_url or request.base_url
         # RecipeEngine samples the first-step ``fetched_at``; fall back to now
@@ -484,9 +468,7 @@ class RealCrawlActivitySink:
                 expected_fields_missing=_EXPECTED_POSTING_FIELDS,
             )
 
-        result = await engine.execute(
-            request, lambda url: self._fetch_for_request(request, url)
-        )
+        result = await engine.execute(request, lambda url: self._fetch_for_request(request, url))
         jobs = result.jobs
         source_url = result.source_url or request.base_url
         status_code = result.status_code
@@ -601,14 +583,18 @@ class RealCrawlActivitySink:
         source_id = UUID(record.source_id)
 
         with self._engine.begin() as conn:
-            source_row = conn.execute(
-                sa.select(
-                    job_sources.c.company_id,
-                    companies.c.name.label("company_name"),
+            source_row = (
+                conn.execute(
+                    sa.select(
+                        job_sources.c.company_id,
+                        companies.c.name.label("company_name"),
+                    )
+                    .join(companies, companies.c.id == job_sources.c.company_id)
+                    .where(job_sources.c.id == source_id)
                 )
-                .join(companies, companies.c.id == job_sources.c.company_id)
-                .where(job_sources.c.id == source_id)
-            ).mappings().first()
+                .mappings()
+                .first()
+            )
         if source_row is None:
             raise RuntimeError(f"crawl source {source_id} has no company")
 

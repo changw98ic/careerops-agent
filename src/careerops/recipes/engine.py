@@ -22,8 +22,9 @@ list step's signals propagate to the backoff layer.
 
 This module is the single bridge between the recipes package (pure
 declarative evaluation) and the adapters package (the crawl pipeline's
-record contracts). Phase B will swap ``GreenhouseAdapter`` / ``LeverAdapter``
-for ``RecipeEngine`` instances behind the same ``JobSourceAdapter`` surface.
+record contracts). Phase C removed the legacy hard-coded adapter classes;
+every structured crawl now flows through ``RecipeEngine.execute`` via
+``RealCrawlActivitySink``.
 """
 
 from __future__ import annotations
@@ -187,7 +188,7 @@ class RecipeEngine:
             base_url_attr = getattr(request, "base_url", "") or ""
             base_ns["base_url"] = base_url_attr
 
-        steps_ns: dict[str, list[dict]] = run_steps(
+        steps_ns: dict[str, list[dict[str, Any]]] = run_steps(
             self._recipe.steps,
             fetch_one,
             base_ns,
@@ -196,7 +197,8 @@ class RecipeEngine:
         # Multi-step merge is already applied in-place by ``run_steps``; the
         # primary rows are those of the first (list) step. Taking
         # ``next(iter(...))`` is order-preserving on dict (Python 3.7+).
-        primary: list[dict] = next(iter(steps_ns.values()), []) if steps_ns else []
+        # ``steps_ns`` truthy ⇒ values view non-empty ⇒ ``next`` cannot raise.
+        primary: list[dict[str, Any]] = next(iter(steps_ns.values())) if steps_ns else []
         records = tuple(_row_to_record(row) for row in primary)
 
         return AdapterFetchResult(

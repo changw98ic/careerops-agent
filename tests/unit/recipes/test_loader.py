@@ -72,6 +72,90 @@ def test_load_manifest_empty_recipes_key(tmp_path):
     assert load_manifest(tmp_path) == []
 
 
+# ---------------------------------------------------------------------------
+# Manifest safety: path confinement + metadata consistency (PR #7 fix batch 4)
+# ---------------------------------------------------------------------------
+
+
+def test_load_manifest_rejects_dotdot_path(tmp_path):
+    """A manifest path containing ``..`` must be rejected — it could escape
+    the recipes directory and read arbitrary files via :func:`load_recipe`."""
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({"recipes": [{"id": "evil", "path": "../../etc/passwd"}]}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="must not escape"):
+        load_manifest(tmp_path)
+
+
+def test_load_manifest_rejects_absolute_path(tmp_path):
+    """Absolute manifest paths are rejected (path must be relative)."""
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({"recipes": [{"id": "evil", "path": "/etc/passwd"}]}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="must be relative"):
+        load_manifest(tmp_path)
+
+
+def test_load_manifest_rejects_source_type_mismatch(tmp_path):
+    """The manifest's declared ``source_type`` must match the recipe's actual
+    ``source_type`` — otherwise the registry key silently mislabels crawls."""
+    _write_recipe(tmp_path / "r.yaml")  # recipe has source_type: greenhouse
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({"recipes": [{"id": "r", "path": "r.yaml", "source_type": "lever"}]}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="declares source_type 'lever'"):
+        load_manifest(tmp_path)
+
+
+def test_load_manifest_rejects_recipe_version_mismatch(tmp_path):
+    """The manifest's declared ``recipe_version`` must match the recipe's."""
+    _write_recipe(tmp_path / "r.yaml")  # recipe_version: "1"
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "recipes": [
+                    {
+                        "id": "r",
+                        "path": "r.yaml",
+                        "source_type": "greenhouse",
+                        "recipe_version": "9",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="declares recipe_version"):
+        load_manifest(tmp_path)
+
+
+def test_load_manifest_allows_consistent_metadata(tmp_path):
+    """When the manifest metadata matches the YAML, loading succeeds (the
+    consistency check is a guard, not a stricter requirement)."""
+    _write_recipe(tmp_path / "r.yaml")
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "recipes": [
+                    {
+                        "id": "r",
+                        "path": "r.yaml",
+                        "source_type": "greenhouse",
+                        "recipe_version": "1",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    recipes = load_manifest(tmp_path)
+    assert len(recipes) == 1
+    assert recipes[0].source_type == "greenhouse"
+
+
 def test_valid_jsonpath_with_no_match_is_accepted(tmp_path):
     # ``$.jobs[*].title`` is well-formed; against empty data it yields [].
     # The loader must NOT reject it (only syntactic breakage is rejected).

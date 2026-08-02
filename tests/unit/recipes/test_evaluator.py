@@ -71,6 +71,19 @@ def test_field_fallback_chain():
     assert apply_field(f, {}) == ""
 
 
+def test_field_fallback_skips_empty_string_value():
+    """An empty-string primary value falls through to the next candidate —
+    parity with the legacy adapters' Python ``or`` short-circuit (PR #7 review
+    fix batch 4). ``descriptionPlain=""`` must NOT win over ``description``."""
+    f = Field_(path="descriptionPlain", fallback=["descriptionHtml", "description"])
+    # Primary present but empty → next candidate wins.
+    assert apply_field(f, {"descriptionPlain": "", "description": "real"}) == "real"
+    # First non-empty value in the chain wins.
+    assert apply_field(f, {"descriptionPlain": "", "descriptionHtml": "<p>x</p>"}) == "<p>x</p>"
+    # Every candidate empty/missing → "".
+    assert apply_field(f, {"descriptionPlain": "", "descriptionHtml": ""}) == ""
+
+
 def test_transform_html_unescape():
     f = Field_(path="content", transform="html_unescape")
     assert apply_field(f, {"content": "a &amp; b"}) == "a & b"
@@ -148,8 +161,10 @@ def test_json_ld_filters_jobposting():
     field mapping (``title``) resolves against the surviving block.
 
     Each row carries ``external_id = sha256(url)[:16]`` mirroring the legacy
-    ``JsonLdAdapter`` dedup key. The block here has no ``url`` field so the
-    id falls back to sha256("") — same for every url-less row.
+    ``JsonLdAdapter`` dedup key. The block here has no ``url`` field, so the
+    id is ``""`` — mirroring the legacy ``if url else ""`` guard (PR #7 review
+    fix batch 4): url-less blocks must NOT collapse onto a single
+    ``sha256("")`` id.
     """
     html_doc = (
         '<script type="application/ld+json">{"@type":"Person","name":"x"}</script>'
@@ -161,7 +176,7 @@ def test_json_ld_filters_jobposting():
         fields={"title": Field_(path="title")},
     )
     rows = evaluate_extract(ex, html_doc)
-    assert rows == [{"title": "Eng", "external_id": _sha16("")}]
+    assert rows == [{"title": "Eng", "external_id": ""}]
 
 
 def test_json_ld_external_id_uses_block_url_when_present():
@@ -184,10 +199,10 @@ def test_json_ld_external_id_uses_block_url_when_present():
 def test_json_ld_no_filter_keeps_all_blocks():
     """Without a filter every JSON-LD block becomes a row.
 
-    external_id falls back to sha256("") for blocks with no ``url`` field
-    (the Person block) — every url-less row shares one id, matching legacy
-    behaviour where the dedup key was derived from whatever the block
-    exposed."""
+    Blocks with no ``url`` field get ``external_id == ""`` — the legacy
+    ``if url else ""`` guard (PR #7 review fix batch 4): a missing url yields
+    an empty id rather than collapsing every url-less block onto a single
+    ``sha256("")`` key."""
     html_doc = (
         '<script type="application/ld+json">{"@type":"Person","name":"Alice"}</script>'
         '<script type="application/ld+json">{"@type":"JobPosting","title":"Eng"}</script>'
@@ -197,10 +212,9 @@ def test_json_ld_no_filter_keeps_all_blocks():
         fields={"name": Field_(path="name"), "title": Field_(path="title")},
     )
     rows = evaluate_extract(ex, html_doc)
-    empty_id = _sha16("")
     assert rows == [
-        {"name": "Alice", "title": "", "external_id": empty_id},
-        {"name": "", "title": "Eng", "external_id": empty_id},
+        {"name": "Alice", "title": "", "external_id": ""},
+        {"name": "", "title": "Eng", "external_id": ""},
     ]
 
 
@@ -665,9 +679,7 @@ def test_run_steps_rate_limit_sleeps_before_each_fetch(monkeypatch):
     every ``fetch_one`` call (list + per-item detail). Two fetches → two
     sleeps, each ``60 / 60 == 1.0`` seconds."""
     sleeps: list[float] = []
-    monkeypatch.setattr(
-        "careerops.recipes.evaluator.time.sleep", lambda s: sleeps.append(s)
-    )
+    monkeypatch.setattr("careerops.recipes.evaluator.time.sleep", lambda s: sleeps.append(s))
 
     r = Recipe.model_validate(yaml.safe_load(GREENHOUSE_YAML))
     list_json = {"jobs": [{"id": "1", "title": "A", "description": ""}]}
@@ -690,9 +702,7 @@ def test_run_steps_no_rate_limit_does_not_sleep(monkeypatch):
     """Without ``rate_limit`` (or an empty dict), the run does not sleep at
     all — unit tests stay fast."""
     sleeps: list[float] = []
-    monkeypatch.setattr(
-        "careerops.recipes.evaluator.time.sleep", lambda s: sleeps.append(s)
-    )
+    monkeypatch.setattr("careerops.recipes.evaluator.time.sleep", lambda s: sleeps.append(s))
 
     r = Recipe.model_validate(yaml.safe_load(GREENHOUSE_YAML))
     list_json = {"jobs": [{"id": "1", "title": "A", "description": ""}]}
@@ -715,9 +725,7 @@ def test_run_steps_rate_limit_zero_or_negative_is_noop(monkeypatch):
     a malformed recipe (e.g. ``{requests_per_minute: 0}``) cannot stall the
     crawl with infinite sleeps."""
     sleeps: list[float] = []
-    monkeypatch.setattr(
-        "careerops.recipes.evaluator.time.sleep", lambda s: sleeps.append(s)
-    )
+    monkeypatch.setattr("careerops.recipes.evaluator.time.sleep", lambda s: sleeps.append(s))
 
     r = Recipe.model_validate(yaml.safe_load(GREENHOUSE_YAML))
     list_json = {"jobs": [{"id": "1", "title": "A", "description": ""}]}

@@ -8,14 +8,13 @@
 #
 # Selector scope. The legacy regex ``class=["'][^"']*job[-_]?title`` accepts
 # ``job_title`` / ``job-title`` / ``jobtitle`` (optional ``-`` or ``_``
-# separator, or none). The CSS substring selector ``[class*=job_title]``
-# matches the underscore form — the most common convention in real job-board
-# markup. Sites that use dash-form (``job-title``) or concatenated
-# (``jobtitle``) class names are a recipe-refinement candidate (a selector
-# list ``[class*=job_title], [class*=job-title], [class*=jobtitle]`` would
-# cover all three); kept simple here per the Task 9 brief, and the DSL is NOT
-# extended to keep that refinement declarative. The parity test uses the
-# underscore form, which both the legacy regex and the css selector agree on.
+# separator, or none). The CSS selector list below mirrors that coverage via
+# three ``[class*=...]`` substring selectors joined by ``,`` (selectolax
+# supports CSS selector lists): ``[class*=job_title], [class*=job-title],
+# [class*=jobtitle]``. Document order across the union is preserved by
+# selectolax, so the index-aligned zip-pairing still maps the Nth title to the
+# Nth location. (PR #7 review fix batch 4: previously only the underscore form
+# matched, silently dropping dash-form / concatenated job-board markup.)
 #
 # External id. Not declared as a field — the legacy adapter computes
 # ``sha256(title.strip())[:16]`` in code, and the DSL has no sha256 transform.
@@ -38,6 +37,6 @@ steps:
     extract:
       mode: css
       fields:
-        title: {path: "[class*=job_title]"}
-        location: {path: "[class*=job_location]"}
+        title: {path: "[class*=job_title], [class*=job-title], [class*=jobtitle]"}
+        location: {path: "[class*=job_location], [class*=job-location], [class*=joblocation]"}
 fallback: llm_skill

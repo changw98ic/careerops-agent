@@ -55,12 +55,18 @@ import logging
 import re
 import time
 from collections.abc import Callable
+from typing import Any, cast
 from urllib.parse import urlsplit, urlunsplit
 from xml.etree import ElementTree
 
 import jsonpath
 
 from careerops.recipes.schema import Extract, Field_, Step
+
+# Type alias for the flat ``field -> value`` rows every extractor produces.
+# Each row maps a declared field name to its stringified value (plus the
+# executor-injected ``external_id`` key for modes that compute it inline).
+Row = dict[str, Any]
 
 logger = logging.getLogger(__name__)
 
@@ -82,8 +88,11 @@ def apply_field(field: Field_, item: object) -> str:
 
     Walks the candidate chain ``[field.path, *field.fallback]`` in order; for
     each candidate evaluates ``jsonpath.findall(f"$.{candidate}", item)`` and
-    takes the first match of the *first* candidate that returns a non-empty
-    list. Missing candidates yield ``[]`` and are skipped. When every
+    takes the first **non-empty** value of the first candidate that yields one.
+    Missing candidates yield ``[]`` and are skipped; a candidate whose match is
+    an empty string is also skipped (PR #7 review fix: this mirrors the legacy
+    adapters' Python ``or`` short-circuit, where ``descriptionPlain=""``
+    falls through to ``description`` rather than winning as ``""``). When every
     candidate misses the result is ``""``.
 
     Non-string scalars (numbers / bools) are coerced via ``str()`` so every
@@ -97,12 +106,24 @@ def apply_field(field: Field_, item: object) -> str:
     if not isinstance(item, dict):
         return ""
 
+    # ``cast``: ``isinstance(item, dict)`` narrows to ``dict[Unknown, Unknown]``
+    # which trips ``reportUnknownArgumentType`` on the ``findall`` call below;
+    # the executor treats every item as a ``str -> Any`` mapping.
+    item_dict: dict[str, Any] = cast("dict[str, Any]", item)
+
     candidates = [field.path, *field.fallback]
     raw: object = None
     for candidate in candidates:
-        values = jsonpath.findall(f"$.{candidate}", item)
-        if values:
-            raw = values[0]
+        # ``jsonpath.findall`` is typed ``list[Unknown]``; assigning to an
+        # explicit ``list[Any]`` absorbs the unknown element type.
+        values: list[Any] = jsonpath.findall(f"$.{candidate}", item_dict)
+        for value in values:
+            # Skip empty-string matches so the fallback chain continues
+            # (legacy ``or`` parity). ``None`` and ``""`` both miss.
+            if value is not None and value != "":
+                raw = value
+                break
+        if raw is not None:
             break
 
     text = "" if raw is None else str(raw)
@@ -111,7 +132,7 @@ def apply_field(field: Field_, item: object) -> str:
     return text
 
 
-def evaluate_extract(extract: Extract, data: object) -> list[dict]:
+def evaluate_extract(extract: Extract, data: object) -> list[Row]:
     """Resolve an :class:`Extract` block against ``data`` into rows.
 
     Dispatch on ``extract.mode``:
@@ -143,13 +164,16 @@ def evaluate_extract(extract: Extract, data: object) -> list[dict]:
     raise NotImplementedError(extract.mode)
 
 
-def _extract_json_path(extract: Extract, data: object) -> list[dict]:
+def _extract_json_path(extract: Extract, data: object) -> list[Row]:
     """``json_path`` mode (Task 3). ``extract.filter`` is intentionally
     ignored — see module docstring."""
     if not isinstance(data, (dict, list)):
         return []
     items_path = extract.items_path or "$"
-    matched = jsonpath.findall(items_path, data)
+    # ``cast``: ``data`` narrowed to ``dict[Unknown, Unknown] | list[Unknown]``
+    # trips the ``findall`` argument check; the evaluator is agnostic to the
+    # value types inside the parsed payload.
+    matched: list[Any] = jsonpath.findall(items_path, cast("Any", data))
 
     # ``items_path`` semantics: it points AT the collection of items, not into
     # it. ``$.jobs`` therefore resolves to a single matched node whose *value*
@@ -158,16 +182,20 @@ def _extract_json_path(extract: Extract, data: object) -> list[dict]:
     # and we unwrap it. The ``$.jobs[*]`` form (already a flat list of dicts)
     # and a top-level array (``$`` against ``[a, b]``) are both handled too.
     # Verified against python-jsonpath 2.2.1.
-    items = matched[0] if len(matched) == 1 and isinstance(matched[0], list) else matched
+    items: list[Any] = (
+        cast("list[Any]", matched[0])
+        if len(matched) == 1 and isinstance(matched[0], list)
+        else matched
+    )
 
-    rows: list[dict] = []
+    rows: list[Row] = []
     for item in items:
-        row = {name: apply_field(field, item) for name, field in extract.fields.items()}
+        row: Row = {name: apply_field(field, item) for name, field in extract.fields.items()}
         rows.append(row)
     return rows
 
 
-def _extract_json_ld(extract: Extract, html_str: object) -> list[dict]:
+def _extract_json_ld(extract: Extract, html_str: object) -> list[Row]:
     """``json_ld`` mode (Task 5).
 
     Parses every ``<script type="application/ld+json">`` block via
@@ -188,39 +216,46 @@ def _extract_json_ld(extract: Extract, html_str: object) -> list[dict]:
     dedup key, so a JobPosting keeps the same id before/after the recipe
     migration. The url source is the schema.org block's ``url`` field first
     (the canonical JobPosting field), then the recipe-mapped ``apply_url`` /
-    ``url`` row fields (recipes that rename ``url`` to ``apply_url`` for the
-    Greenhouse contract). Empty when neither is present — every empty-url row
-    collapses to one id, which is correct because there is nothing to
-    distinguish them.
+    ``url`` row fields. When no url is present on any source, the row's
+    ``external_id`` is ``""`` — mirroring the legacy ``if url else ""`` guard
+    so url-less blocks do not collapse onto a single ``sha256("")`` id (PR #7
+    review fix batch 4).
     """
     if not isinstance(html_str, str):
         return []
-    import extruct
+    import extruct  # pyright: ignore[reportMissingTypeStubs]
 
     try:
-        blocks = extruct.extract(html_str, syntaxes=["json-ld"]).get("json-ld", [])
+        blocks: list[Any] = extruct.extract(html_str, syntaxes=["json-ld"]).get("json-ld", [])
     except Exception as exc:  # JSONDecodeError on malformed scripts, others
         logger.warning("recipes.json_ld extract failed: %s", exc)
         return []
 
-    rows: list[dict] = []
+    rows: list[Row] = []
     for block in blocks:
         if not isinstance(block, dict):
             continue
+        block_dict: dict[str, Any] = cast("dict[str, Any]", block)
         if extract.filter is not None:
             wrapped = f"$[?({extract.filter.jsonpath})]"
-            if not jsonpath.findall(wrapped, [block]):
+            if not jsonpath.findall(wrapped, [block_dict]):
                 continue
-        row = {name: apply_field(field, block) for name, field in extract.fields.items()}
-        url_source = block.get("url") or row.get("apply_url") or row.get("url") or ""
+        row: Row = {name: apply_field(field, block_dict) for name, field in extract.fields.items()}
+        url_source = block_dict.get("url") or row.get("apply_url") or row.get("url") or ""
         if not isinstance(url_source, str):
             url_source = str(url_source)
-        row["external_id"] = hashlib.sha256(url_source.encode()).hexdigest()[:16]
+        # Legacy-parity empty-url guard: ``sha256("")`` would give every
+        # url-less block the same id; the legacy adapter returned ``""`` for
+        # missing urls, so we mirror that here.
+        if url_source:
+            row["external_id"] = hashlib.sha256(url_source.encode()).hexdigest()[:16]
+        else:
+            row["external_id"] = ""
         rows.append(row)
     return rows
 
 
-def _extract_sitemap(extract: Extract, xml_str: object) -> list[dict]:
+def _extract_sitemap(extract: Extract, xml_str: object) -> list[Row]:
     """``sitemap`` mode (Task 5).
 
     Parses an XML sitemap and emits one row per ``<url><loc>`` whose text
@@ -249,7 +284,7 @@ def _extract_sitemap(extract: Extract, xml_str: object) -> list[dict]:
         return []
 
     url_re = re.compile(extract.url_filter) if extract.url_filter else None
-    rows: list[dict] = []
+    rows: list[Row] = []
     for loc in root.findall(".//sm:url/sm:loc", _SITEMAP_NS):
         url = (loc.text or "").strip()
         if not url:
@@ -260,7 +295,7 @@ def _extract_sitemap(extract: Extract, xml_str: object) -> list[dict]:
     return rows
 
 
-def _extract_css(extract: Extract, html_str: object) -> list[dict]:
+def _extract_css(extract: Extract, html_str: object) -> list[Row]:
     """``css`` mode (Task 5).
 
     ``Field_.path`` is reused as a CSS selector (the schema field keeps its
@@ -286,14 +321,14 @@ def _extract_css(extract: Extract, html_str: object) -> list[dict]:
     from selectolax.parser import HTMLParser
 
     tree = HTMLParser(html_str)
-    columns: dict[str, list] = {
+    columns: dict[str, list[Any]] = {
         name: tree.css(field.path) for name, field in extract.fields.items()
     }
     maxlen = max((len(nodes) for nodes in columns.values()), default=0)
 
-    rows: list[dict] = []
+    rows: list[Row] = []
     for i in range(maxlen):
-        row: dict = {}
+        row: Row = {}
         for name, nodes in columns.items():
             row[name] = nodes[i].text(strip=True) if i < len(nodes) else ""
         title_source = (row.get("title") or "").strip()
@@ -331,7 +366,7 @@ def _extract_css(extract: Extract, html_str: object) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-class _SafeDict(dict):
+class _SafeDict(dict[str, str]):
     """``str.format_map`` mapping that preserves unknown ``{keys}`` literally.
 
     Used for endpoint templating: a detail step referencing ``{list_endpoint}``
@@ -343,12 +378,12 @@ class _SafeDict(dict):
         return "{" + key + "}"
 
 
-def _render(template: str, ctx: dict) -> str:
+def _render(template: str, ctx: dict[str, Any]) -> str:
     """Render ``template`` via ``str.format_map`` with missing keys preserved."""
     return template.format_map(_SafeDict(ctx))
 
 
-def _eval_pathlist(expr: str, ns: dict) -> list:
+def _eval_pathlist(expr: str, ns: dict[str, Any]) -> list[Any]:
     """``jsonpath.findall`` + single-list-node unwrap.
 
     ``$.steps.list`` resolves to one node whose *value* is the array, so
@@ -357,13 +392,13 @@ def _eval_pathlist(expr: str, ns: dict) -> list:
     return a flat list of items. The unwrap makes both forms iterable as item
     lists. Verified against python-jsonpath 2.2.1.
     """
-    matched = jsonpath.findall(expr, ns)
+    matched: list[Any] = jsonpath.findall(expr, ns)
     if len(matched) == 1 and isinstance(matched[0], list):
-        return matched[0]
+        return cast("list[Any]", matched[0])
     return matched
 
 
-def _merge_into(parent_row: dict, detail_rows: list[dict], strategy: str) -> None:
+def _merge_into(parent_row: Row, detail_rows: list[Row], strategy: str) -> None:
     """Merge ``detail_rows`` into ``parent_row`` per ``strategy`` (in place).
 
     ``parent_row`` is a reference to a row inside a prior step's output
@@ -396,7 +431,7 @@ def run_steps(
     fetch_one: Callable[[str], object],
     base_ns: dict[str, str],
     rate_limit: dict[str, int] | None = None,
-) -> dict[str, list[dict]]:
+) -> dict[str, list[Row]]:
     """Execute a recipe's ``steps`` in order, returning ``{step_id: [rows]}``.
 
     ``fetch_one(endpoint) -> object`` is the injected fetcher (returns the
@@ -453,19 +488,20 @@ def run_steps(
             time.sleep(interval)
         return fetch_one(endpoint)
 
-    ns: dict = {"steps": {}}
+    ns: dict[str, Any] = {"steps": {}}
     ctx = dict(base_ns)
     for step in steps:
-        rows: list[dict] = []
+        rows: list[Row] = []
         if step.when is not None and not _eval_pathlist(step.when, ns):
             ns["steps"][step.id] = rows
             continue
         if step.foreach is not None:
-            targets = _eval_pathlist(step.foreach, ns)
+            targets: list[Any] = _eval_pathlist(step.foreach, ns)
             for item in targets:
                 local = dict(ctx)
-                if isinstance(item, dict):
-                    local.update({k: str(v) for k, v in item.items()})
+                item_row: Row | None = cast("Row", item) if isinstance(item, dict) else None
+                if item_row is not None:
+                    local.update({k: str(v) for k, v in item_row.items()})
                 ep = _render(step.fetch.endpoint, local)
                 # Per-item fault tolerance: a single detail fetch failure must
                 # not sink the whole run. Skip the failed item (no row emit,
@@ -475,7 +511,7 @@ def run_steps(
                 # remains useful on detail failure."
                 try:
                     data = _throttled_fetch(ep)
-                    drows = evaluate_extract(step.extract, data)
+                    drows: list[Row] = evaluate_extract(step.extract, data)
                 except Exception as exc:  # broad guard: see comment above
                     logger.warning(
                         "recipes.foreach item failed (step=%s endpoint=%s): %s",
@@ -485,8 +521,8 @@ def run_steps(
                     )
                     continue
                 rows.extend(drows)
-                if step.merge is not None and isinstance(item, dict):
-                    _merge_into(item, drows, step.merge.strategy)
+                if step.merge is not None and item_row is not None:
+                    _merge_into(item_row, drows, step.merge.strategy)
         else:
             ep = _render(step.fetch.endpoint, ctx)
             # Whole-step fault tolerance (spec §D): a list-step fetch or

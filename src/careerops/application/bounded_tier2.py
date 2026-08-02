@@ -158,9 +158,7 @@ class SessionChecker(Protocol):
 class PermissionChecker(Protocol):
     """Checks whether a source's crawl permission is currently granted."""
 
-    def is_permission_granted(
-        self, owner_id: UUID, source_id: UUID
-    ) -> bool: ...
+    def is_permission_granted(self, owner_id: UUID, source_id: UUID) -> bool: ...
 
 
 class PolicyEvaluator(Protocol):
@@ -256,19 +254,12 @@ class RepositoryPermissionChecker:
     def __init__(self, permission_repo: CrawlPermissionRepository) -> None:
         self._repo = permission_repo
 
-    def is_permission_granted(
-        self, owner_id: UUID, source_id: UUID
-    ) -> bool:
+    def is_permission_granted(self, owner_id: UUID, source_id: UUID) -> bool:
         now = datetime.now(tz=UTC)
         return any(
             permission.state is CrawlPermissionState.GRANTED
-            and (
-                permission.expires_at is None
-                or permission.expires_at > now
-            )
-            for permission in self._repo.list_for_source(
-                owner_id, source_id, limit=10
-            )
+            and (permission.expires_at is None or permission.expires_at > now)
+            for permission in self._repo.list_for_source(owner_id, source_id, limit=10)
         )
 
 
@@ -441,18 +432,14 @@ class BoundedTier2Orchestrator:
             source_uuid = UUID(config.source_id)
             if (
                 self._permission_checker is None
-                or not self._permission_checker.is_permission_granted(
-                    config.owner_id, source_uuid
-                )
+                or not self._permission_checker.is_permission_granted(config.owner_id, source_uuid)
             ):
                 return Tier2RunResult(
                     source_id=config.source_id,
                     stop_reason=Tier2StopReason.PERMISSION_REVOKED,
                     error="source-specific crawl permission is not granted",
                 )
-            session_ref = self._session.get_session_ref(
-                config.owner_id, config.source_id
-            )
+            session_ref = self._session.get_session_ref(config.owner_id, config.source_id)
             if session_ref is None:
                 return Tier2RunResult(
                     source_id=config.source_id,
@@ -527,10 +514,9 @@ class BoundedTier2Orchestrator:
             # Check if the error indicates CAPTCHA or account risk.
             if self._captcha.has_captcha_signal(error):
                 stop_reason = Tier2StopReason.CAPTCHA
-            elif (
-                isinstance(self._captcha, _BodyPrefixCaptchaDetector)
-                and self._captcha.has_account_risk_signal(error)
-            ):
+            elif isinstance(
+                self._captcha, _BodyPrefixCaptchaDetector
+            ) and self._captcha.has_account_risk_signal(error):
                 stop_reason = Tier2StopReason.ACCOUNT_RISK
             else:
                 stop_reason = Tier2StopReason.NO_POSTINGS
@@ -564,9 +550,7 @@ class BoundedTier2Orchestrator:
             ):
                 stop_reason = Tier2StopReason.PERMISSION_REVOKED
                 error = "permission revoked during crawl"
-            elif self._session.get_session_ref(
-                config.owner_id, config.source_id
-            ) is None:
+            elif self._session.get_session_ref(config.owner_id, config.source_id) is None:
                 stop_reason = Tier2StopReason.SESSION_EXPIRED
                 error = "authenticated session expired during crawl"
 

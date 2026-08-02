@@ -355,12 +355,11 @@ class RuntimeResources:
             PostgresPermissionAttentionSink,
             PostgresPermissionAuditSink,
         )
+
         self.crawl_permission_service = CrawlPermissionService(
             self.crawl_permission_repo,
             self.crawl_source_repo,
-            audit_sink=PostgresPermissionAuditSink(
-                PostgresAuditWriterEngine(self.database)
-            ),
+            audit_sink=PostgresPermissionAuditSink(PostgresAuditWriterEngine(self.database)),
             attention_sink=PostgresPermissionAttentionSink(
                 self.agent_action_repo,
                 self.notification_repo,
@@ -374,9 +373,7 @@ class RuntimeResources:
         self.bounded_tier2 = BoundedTier2Orchestrator(
             sink=crawl_sink,
             budget=self.tier2_budget,
-            permission_checker=RepositoryPermissionChecker(
-                self.crawl_permission_repo
-            ),
+            permission_checker=RepositoryPermissionChecker(self.crawl_permission_repo),
             permission_repo=self.crawl_permission_repo,
             agent=crawl_agent,
         )

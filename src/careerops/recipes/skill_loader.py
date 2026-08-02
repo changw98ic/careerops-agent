@@ -18,6 +18,7 @@ loop unchanged.
 from __future__ import annotations
 
 import dataclasses
+import json
 import re
 from pathlib import Path
 from typing import cast
@@ -97,13 +98,66 @@ def load_skill(path: Path) -> Skill:
     )
 
 
-def load_skills(skills_dir: Path) -> dict[str, Skill]:
-    """Load every ``<dir>/SKILL.md`` under ``skills_dir``, keyed by ``source_type``.
+def _load_manifest_skills(skills_dir: Path, manifest_path: Path) -> dict[str, Skill] | None:
+    """Load skills declared in ``manifest_path``'s ``skills`` index.
 
-    Directories prefixed with ``_`` (e.g. ``_template``) are skipped: they are
-    authoring aids, not deployable skills, so they never appear in the catalog
-    even though they hold a valid ``SKILL.md``.
+    The catalog manifest (``vendor/crawl-recipes/manifest.json``) is the single
+    source of truth for what ships: a skill present on disk but absent from the
+    manifest's ``skills`` array is NOT loaded (PR #7 review round 2). This
+    keeps the manifest authoritative — CONTRIBUTING states every addition must
+    be referenced from ``manifest.json`` so the loader can discover it.
+
+    Path confinement mirrors the recipe loader: each manifest ``path`` MUST be
+    relative and MUST NOT escape the catalog root (no ``..`` segments, no
+    absolute paths), so a malformed manifest cannot read arbitrary files.
+
+    Returns ``None`` when the manifest has no ``skills`` key (older catalog or
+    a recipes-only manifest) so the caller can fall back to glob discovery.
     """
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    entries = manifest.get("skills")
+    if entries is None:
+        return None
+
+    catalog_root = manifest_path.parent
+    out: dict[str, Skill] = {}
+    for entry in entries:
+        rel = str(entry.get("path") or "")
+        if not rel:
+            continue  # malformed entry; skip rather than crash the agent
+        p = Path(rel)
+        if p.is_absolute() or any(part == ".." for part in p.parts):
+            # Path confinement: never let a manifest walk above the catalog.
+            continue
+        skill_path = catalog_root / p
+        if not skill_path.exists():
+            continue
+        skill = load_skill(skill_path)
+        out[skill.source_type] = skill
+    return out
+
+
+def load_skills(skills_dir: Path) -> dict[str, Skill]:
+    """Load the deployable skills, keyed by ``source_type``.
+
+    Discovery is manifest-driven (PR #7 review round 2): the catalog's
+    ``manifest.json`` (at ``skills_dir.parent / "manifest.json"``) holds a
+    ``skills`` index whose ``path`` entries point at each ``SKILL.md``. Only
+    manifest-listed skills load — a file on disk but not in the manifest is an
+    authoring artefact, not a deployable skill, and is ignored.
+
+    Falls back to globbing ``*/SKILL.md`` (skipping ``_``-prefixed authoring
+    dirs) only when there is no manifest or it predates the ``skills`` key.
+    This keeps the loader usable against a bare ``skills/`` directory (tests,
+    stripped layouts) while making the manifest the authoritative index
+    wherever it exists.
+    """
+    manifest_path = Path(skills_dir).parent / "manifest.json"
+    if manifest_path.exists():
+        manifest_skills = _load_manifest_skills(Path(skills_dir), manifest_path)
+        if manifest_skills is not None:
+            return manifest_skills
+
     out: dict[str, Skill] = {}
     for skill_path in Path(skills_dir).glob("*/SKILL.md"):
         if skill_path.parent.name.startswith("_"):

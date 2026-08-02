@@ -1,4 +1,4 @@
-"""OFFICIAL meta-type sub-routing + http Tier 2 fallback (PR #7 review fix, batch 1).
+"""OFFICIAL meta-type sub-routing + Tier 1 signal contract (PR #7 review fix).
 
 Background: ``CrawlSourceType.OFFICIAL`` is an enum meta-type. The recipe
 manifest registers three concrete recipes (``official_jsonld`` /
@@ -16,10 +16,15 @@ These tests pin the post-fix behaviour end-to-end through the real
   ``official_jsonld`` engine, ``external_id = sha256(url)[:16]``.
 * ``source_type="official"`` + a static-HTML body → ``official_static``
   engine, ``external_id = sha256(title)[:16]``.
-* ``source_type="unknown"`` + a wired agent → agent fallback runs (http
-  mode, no longer gated on ``executor_mode == 'ego'``).
-* ``source_type="unknown"`` + no agent → ``crawl_source_with_signals``
-  returns a non-empty ``expected_fields_missing`` signal (not silent).
+* ``source_type="official"`` + a clean 200 empty body → ``had_recipe=True``
+  (so the classifier tags it VERIFIED_EMPTY, not NOT_JOB_SOURCE).
+* ``supports_source_type("official")`` recognises the meta-type.
+* ``source_type="unknown"`` → ``crawl_source_with_signals`` returns
+  ``had_recipe=False`` + ``expected_fields_missing=("title",)``. The sink
+  performs NO Tier 2 escalation (round 2); an unknown source never silently
+  enters the agent — the admission gate decides that upstream.
+* ``detect()`` URL fallback: an unknown ``source_type`` whose URL matches a
+  recipe's ``Match`` block is still parsed by Tier 1 (``had_recipe=True``).
 """
 
 from __future__ import annotations
@@ -31,11 +36,7 @@ from datetime import UTC, datetime
 import pytest
 
 from careerops.adapters.http_fetcher import FetchedResponse
-from careerops.adapters.job_sources import RawJobRecord
-from careerops.infrastructure.temporal.m1_crawl_sink import (
-    CrawlSourceResult,
-    RealCrawlActivitySink,
-)
+from careerops.infrastructure.temporal.m1_crawl_sink import RealCrawlActivitySink
 from careerops.workflows.m1_contracts import CrawlJobSourceInput
 
 
@@ -48,7 +49,7 @@ def _sha16(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 JSONLD_BODY = (
-    '<html><head>'
+    "<html><head>"
     '<script type="application/ld+json">'
     '{"@type":"JobPosting","title":"Senior Eng","url":"https://acme.test/jobs/1"}'
     "</script>"
@@ -163,7 +164,9 @@ async def test_official_sitemap_source_picks_sitemap_recipe():
     result = await sink.crawl_source_with_signals(_official_request("sitemap"))
 
     urls = sorted(p.external_id for p in result.postings)
-    assert urls == sorted([_sha16("https://acme.test/jobs/1"), _sha16("https://acme.test/careers/2")])
+    assert urls == sorted(
+        [_sha16("https://acme.test/jobs/1"), _sha16("https://acme.test/careers/2")]
+    )
     # parser_version names the chosen recipe — proves official_sitemap ran.
     assert all(p.parser_version == "recipe:official_sitemap:1" for p in result.postings)
     # the about URL was filtered out
@@ -209,76 +212,59 @@ async def test_official_subrouting_is_decided_by_body_not_by_registry_key():
 
 
 # ---------------------------------------------------------------------------
-# http Tier 2 fallback — no longer gated on executor_mode == 'ego'.
+# supports_source_type meta-type recognition + clean-empty OFFICIAL signal.
 # ---------------------------------------------------------------------------
 
 
-class _FakeAgent:
-    """Stand-in for ``CrawlAgent``. Records the URL it was called with and
-    returns one canned ``RawJobRecord`` so callers can verify the agent path
-    actually ran."""
+def test_supports_source_type_recognises_official_meta_type():
+    """``supports_source_type("official")`` returns ``True`` whenever any
+    ``official_*`` recipe is loaded, so the classifier tags a clean 200-empty
+    OFFICIAL crawl as VERIFIED_EMPTY rather than NOT_JOB_SOURCE."""
+    sink = RealCrawlActivitySink(fetcher=_fetcher_returning("<html></html>"))
+    assert sink.supports_source_type("official") is True
+    assert sink.supports_source_type("greenhouse") is True
+    assert sink.supports_source_type("unknown_xyz") is False
 
-    def __init__(self) -> None:
-        self.calls: list[str] = []
 
-    def crawl(self, source_url: str, *, source_type: str = "") -> list[RawJobRecord]:
-        self.calls.append(source_url)
-        return [
-            RawJobRecord(
-                external_id="agent-id-1",
-                title="Agent-extracted",
-                location="Remote",
-                url=source_url,
-                description="from agent",
-                provenance="llm-extraction",
-            )
-        ]
+def test_supports_source_type_false_when_no_official_recipes_loaded():
+    """With an empty adapter dict the meta-type has nothing behind it."""
+    sink = RealCrawlActivitySink(adapters={}, fetcher=_fetcher_returning(""))
+    assert sink.supports_source_type("official") is False
 
 
 @pytest.mark.asyncio
-async def test_http_unknown_source_falls_back_to_agent_when_wired():
-    """An http source whose source_type has no recipe must delegate to the
-    injected agent (previously gated on ``executor_mode == 'ego'`` and so
-    silently empty for http)."""
-    agent = _FakeAgent()
+async def test_official_clean_200_empty_signals_had_recipe():
+    """A clean 200 OFFICIAL page whose recipe ran but found no jobs carries
+    ``had_recipe=True`` and no missing fields — the classifier maps that to
+    VERIFIED_EMPTY (not NOT_JOB_SOURCE), because the recipe actually ran."""
+    # A JSON-LD body with no JobPosting block: official_jsonld's extract
+    # yields zero rows, but the recipe DID run, so had_recipe=True.
     sink = RealCrawlActivitySink(
-        # No recipe matches source_type 'unknown_xyz'; an empty adapter dict
-        # forces every lookup to miss so we exercise the fallback directly.
-        adapters={},
-        fetcher=_fetcher_returning("<html></html>"),
-        agent=agent,
+        fetcher=_fetcher_returning(
+            '<html><head><script type="application/ld+json">'
+            '{"@type":"WebSite","name":"Acme"}</script>'
+            "</head><body></body></html>"
+        )
     )
-    request = CrawlJobSourceInput(
-        source_id="src-1",
-        company_id="c",
-        company_name="C",
-        source_type="unknown_xyz",
-        base_url="https://acme.test/jobs",
-        executor_mode="http",
-    )
+    result = await sink.crawl_source_with_signals(_official_request("jsonld"))
+    assert result.postings == ()
+    assert result.status_code == 200
+    assert result.expected_fields_missing == ()
+    assert result.had_recipe is True
 
-    # crawl_source returns the agent's postings as a list.
-    postings = await sink.crawl_source(request)
-    assert len(postings) == 1
-    assert postings[0].structured_data["title"] == "Agent-extracted"
-    assert agent.calls == ["https://acme.test/jobs"]
 
-    # crawl_source_with_signals returns the same via CrawlSourceResult.
-    agent.calls.clear()
-    result = await sink.crawl_source_with_signals(request)
-    assert isinstance(result, CrawlSourceResult)
-    assert len(result.postings) == 1
-    assert result.postings[0].external_id == "agent-id-1"
-    assert agent.calls == ["https://acme.test/jobs"]
+# ---------------------------------------------------------------------------
+# Unknown source: Tier 1 signals only, NO Tier 2 escalation in the sink.
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_http_unknown_source_without_agent_signals_miss_not_silently_empty():
-    """When no agent is wired and no recipe matches, the signals-bearing
-    result surfaces ``expected_fields_missing`` so the backoff policy /
-    operator can tell this apart from a successful zero-row crawl. The
-    bare ``crawl_source`` returns an empty list (its contract is list-only;
-    it has no signal channel)."""
+async def test_unknown_source_returns_tier1_signals_not_silently_empty():
+    """A source with no recipe (``had_recipe=False``) returns an empty result
+    carrying ``expected_fields_missing`` so the classifier tags it
+    NOT_JOB_SOURCE and the admission gate refuses to escalate. The sink
+    performs NO Tier 2 escalation itself (PR #7 round 2). The bare
+    ``crawl_source`` returns ``[]`` (its contract is list-only)."""
     sink = RealCrawlActivitySink(
         adapters={},
         fetcher=_fetcher_returning("<html></html>"),
@@ -292,11 +278,35 @@ async def test_http_unknown_source_without_agent_signals_miss_not_silently_empty
         executor_mode="http",
     )
 
-    # signals version: not silent — expected_fields_missing is populated.
+    # signals version: not silent — expected_fields_missing populated, no recipe.
     result = await sink.crawl_source_with_signals(request)
     assert result.postings == ()
     assert result.expected_fields_missing == ("title",)
+    assert result.had_recipe is False
 
     # bare version: empty list, no signal channel (by contract).
     postings = await sink.crawl_source(request)
     assert postings == []
+
+
+@pytest.mark.asyncio
+async def test_detect_url_fallback_routes_mislabelled_source():
+    """A source whose ``source_type`` is unknown but whose ``base_url`` matches
+    a recipe's ``Match`` block (e.g. a Greenhouse board URL) is still parsed by
+    Tier 1 via ``detect()``, and the run carries ``had_recipe=True`` as
+    positive evidence for the admission gate."""
+    sink = RealCrawlActivitySink(fetcher=_fetcher_returning("[]"))
+    request = CrawlJobSourceInput(
+        source_id="src-1",
+        company_id="c",
+        company_name="C",
+        # Mislabelled type, but the URL matches the greenhouse recipe's
+        # ``url_patterns: [boards.greenhouse.io]`` so detect() routes it.
+        source_type="unknown_xyz",
+        base_url="https://boards.greenhouse.io/acme",
+        executor_mode="http",
+    )
+    result = await sink.crawl_source_with_signals(request)
+    # The greenhouse recipe matched via detect(); it ran even on an empty body.
+    assert result.had_recipe is True
+    assert result.status_code == 200

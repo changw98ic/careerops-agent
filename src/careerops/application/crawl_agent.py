@@ -233,6 +233,7 @@ class _BoundedBrowserTool:
             headers=headers,
         )
 
+
 # Common JSON paths to the job array in a job-list API response, tried in order.
 _JOB_ARRAY_PATHS: tuple[tuple[str, ...], ...] = (
     ("content", "datas"),
@@ -491,9 +492,7 @@ class CrawlAgent:
             self._tool = original_tool
 
         deduped: dict[str, RawJobRecord] = {
-            record.external_id: record
-            for record in records
-            if record.external_id
+            record.external_id: record for record in records if record.external_id
         }
         return CrawlAgentRunResult(
             records=tuple(deduped.values()),
@@ -506,16 +505,12 @@ class CrawlAgent:
         if self._metrics is None:
             return False
         self._metrics.note_page(records)
-        return (
-            self._metrics.consecutive_empty_pages
-            >= self._metrics.max_consecutive_empty
-        )
+        return self._metrics.consecutive_empty_pages >= self._metrics.max_consecutive_empty
 
     def _empty_page_limit_reached(self) -> bool:
         return (
             self._metrics is not None
-            and self._metrics.consecutive_empty_pages
-            >= self._metrics.max_consecutive_empty
+            and self._metrics.consecutive_empty_pages >= self._metrics.max_consecutive_empty
         )
 
     def crawl(
@@ -685,20 +680,12 @@ class CrawlAgent:
         for skill in self._skills.values():
             match = skill.match
             host_suffix = match.get("host_suffix")
-            if (
-                isinstance(host_suffix, str)
-                and host_suffix
-                and host_suffix.lower() in lowered
-            ):
+            if isinstance(host_suffix, str) and host_suffix and host_suffix.lower() in lowered:
                 return skill
             url_patterns = match.get("url_patterns")
             if isinstance(url_patterns, list):
                 for pattern in url_patterns:
-                    if (
-                        isinstance(pattern, str)
-                        and pattern
-                        and pattern.lower() in lowered
-                    ):
+                    if isinstance(pattern, str) and pattern and pattern.lower() in lowered:
                         return skill
         return None
 

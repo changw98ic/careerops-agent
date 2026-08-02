@@ -316,13 +316,16 @@ class RuntimeResources:
         from careerops.application.crawl_execution import CrawlExecutionService
         from careerops.infrastructure.temporal.crawl_stack import build_real_crawl_sink
 
-        crawl_sink = build_real_crawl_sink(
+        crawl_stack = build_real_crawl_sink(
             self.database,
             fetcher=fetch,
             public_ats_fetcher=fetch_public_ats,
             model_client=self.model_client,
         )
+        crawl_sink = crawl_stack.sink
+        crawl_agent = crawl_stack.agent
         self.crawl_sink = crawl_sink
+        self.crawl_agent = crawl_agent
         # Phase 7.1: Tier 2 budget coordinator (Postgres-backed, durable across
         # worker restarts).  Injected into BoundedTier2Orchestrator when the
         # remaining Tier 2 dependencies (session checker, eligibility checker)
@@ -336,11 +339,12 @@ class RuntimeResources:
 
         # Phase 7: Bounded Tier 2 orchestrator — wires budget, permission
         # checker, session checker, and policy into a single entry point
-        # for the crawl execution loop.
+        # for the crawl execution loop. The agent is injected directly (PR #7
+        # review round 2): the sink no longer holds it, so it travels from the
+        # stack factory straight into the orchestrator that drives it.
         from careerops.application.bounded_tier2 import (
             BoundedTier2Orchestrator,
             RepositoryPermissionChecker,
-            Tier2Agent,
         )
         from careerops.application.crawl_permission_service import (
             CrawlPermissionService,
@@ -374,7 +378,7 @@ class RuntimeResources:
                 self.crawl_permission_repo
             ),
             permission_repo=self.crawl_permission_repo,
-            agent=cast("Tier2Agent", crawl_sink.tier2_agent),
+            agent=crawl_agent,
         )
 
         self.crawl_execution_service = CrawlExecutionService(
@@ -406,8 +410,7 @@ class RuntimeResources:
         if self._closed:
             return
         self._closed = True
-        tier2_agent = self.crawl_sink.tier2_agent
-        close_agent = getattr(tier2_agent, "close", None)
+        close_agent = getattr(self.crawl_agent, "close", None)
         if callable(close_agent):
             await asyncio.to_thread(close_agent)
         await self.redis.aclose(close_connection_pool=True)

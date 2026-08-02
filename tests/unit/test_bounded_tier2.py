@@ -319,7 +319,10 @@ class TestTier2Budget:
 
 
 class TestTier2Routing:
-    def test_dynamic_or_unsupported_routes_to_public(self) -> None:
+    def test_dynamic_or_unsupported_routes_to_public_with_evidence(self) -> None:
+        """7.2: DYNAMIC with positive job-source evidence (recipe ran) routes
+        to public Tier 2. ``has_adapter=True`` is the evidence; without it the
+        gate denies (beads: empty Tier 1 must not be directly upgraded)."""
         orch = BoundedTier2Orchestrator(
             sink=_FakeSink(),
             budget=Tier2Budget(),
@@ -328,8 +331,41 @@ class TestTier2Routing:
             _OWNER_ID,
             _SOURCE_ID,
             tier1_outcome=CrawlAttemptOutcome.DYNAMIC_OR_UNSUPPORTED,
+            has_adapter=True,
         )
         assert decision == Tier2RoutingDecision.SKIP_PUBLIC
+
+    def test_dynamic_without_evidence_denied(self) -> None:
+        """An unknown HTTP source (no recipe ran, ``has_adapter=False``) must
+        NOT enter Tier 2 from an empty Tier 1 result — it has no job-source
+        evidence."""
+        orch = BoundedTier2Orchestrator(
+            sink=_FakeSink(),
+            budget=Tier2Budget(),
+        )
+        decision = orch.should_enter_tier2(
+            _OWNER_ID,
+            _SOURCE_ID,
+            tier1_outcome=CrawlAttemptOutcome.DYNAMIC_OR_UNSUPPORTED,
+            has_adapter=False,
+        )
+        assert decision == Tier2RoutingDecision.DENY
+
+    def test_dynamic_with_recipe_fallback_none_denied(self) -> None:
+        """A recipe that explicitly declares ``fallback: none`` pins the source
+        to Tier 1-only even when it ran (``has_adapter=True``)."""
+        orch = BoundedTier2Orchestrator(
+            sink=_FakeSink(),
+            budget=Tier2Budget(),
+        )
+        decision = orch.should_enter_tier2(
+            _OWNER_ID,
+            _SOURCE_ID,
+            tier1_outcome=CrawlAttemptOutcome.DYNAMIC_OR_UNSUPPORTED,
+            has_adapter=True,
+            recipe_fallback="none",
+        )
+        assert decision == Tier2RoutingDecision.DENY
 
     def test_auth_required_without_permission_denied(self) -> None:
         orch = BoundedTier2Orchestrator(
@@ -735,6 +771,47 @@ class TestTier2IngestPath:
         for item in sink.ingested:
             assert item["crawl_run_id"] == run_id
             assert item["plan_version_id"] == plan_id
+
+    @pytest.mark.asyncio
+    async def test_source_type_forwarded_to_crawl_bounded(self) -> None:
+        """The ``source_type`` on :class:`Tier2RunConfig` reaches
+        ``crawl_bounded`` so a Tier 2 skill playbook can match by source_type
+        on the only legal Tier 2 entry point (not just by URL)."""
+
+        class _RecordingAgent:
+            received_source_type: str = "<unset>"
+
+            def crawl_bounded(
+                self,
+                source_url: str,
+                *,
+                max_actions: int,
+                max_duration_s: float,
+                max_consecutive_empty: int,
+                session_ref: str | None,
+                consume_action: object,
+                source_type: str = "",
+            ) -> CrawlAgentRunResult:
+                del source_url, max_actions, max_duration_s, max_consecutive_empty
+                del session_ref, consume_action
+                self.received_source_type = source_type
+                return CrawlAgentRunResult(records=(), action_count=0)
+
+        agent = _RecordingAgent()
+        orch = BoundedTier2Orchestrator(
+            sink=_FakeSink(),  # type: ignore[arg-type]
+            budget=Tier2Budget(),
+            agent=agent,  # type: ignore[arg-type]
+        )
+        await orch.run_source(
+            Tier2RunConfig(
+                source_id=str(_SOURCE_ID),
+                base_url="https://wd.com/wd/careers",
+                owner_id=_OWNER_ID,
+                source_type="workday",
+            )
+        )
+        assert agent.received_source_type == "workday"
 
     def test_outcome_mapping(self) -> None:
         """Verify stop reason -> CrawlAttemptOutcome mapping."""

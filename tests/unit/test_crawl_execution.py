@@ -25,6 +25,11 @@ from careerops.application.backoff_policy import (
     BackoffState,
     SourceFetchOutcome,
 )
+from careerops.application.bounded_tier2 import (
+    Tier2RoutingDecision,
+    Tier2RunResult,
+    Tier2StopReason,
+)
 from careerops.application.crawl_execution import CrawlExecutionService
 from careerops.domain.crawl import (
     CrawlDecision,
@@ -32,6 +37,7 @@ from careerops.domain.crawl import (
     CrawlPolicyInput,
     CrawlRunState,
 )
+from careerops.domain.crawl_attempts import CrawlAttemptOutcome
 from careerops.domain.crawl_plans import (
     CrawlPlanVersion,
     CrawlPolicyStatus,
@@ -137,6 +143,7 @@ class TestCrawlExecutionService:
         policy_fn: Callable[[CrawlPolicyInput], CrawlPolicyDecision] | None = None,
         backoff_policy: BackoffPolicy | None = None,
         source_queue: MagicMock | None = None,
+        tier2: object | None = None,
     ) -> tuple[CrawlExecutionService, MagicMock, MagicMock, MagicMock, MagicMock]:
         """Create a service with mock repos and sink."""
         run_repo = MagicMock()
@@ -156,6 +163,7 @@ class TestCrawlExecutionService:
             policy_fn=policy_fn,
             backoff_policy=backoff_policy,
             source_queue=source_queue,
+            tier2=tier2,  # type: ignore[arg-type]
         )
         return service, run_repo, plan_repo, source_repo, sink
 
@@ -458,6 +466,168 @@ class TestCrawlExecutionService:
         assert policy_input.source_url == source.base_url
         assert policy_input.terms_status == source.terms_status.value
         assert policy_input.domain == "boards.greenhouse.io"
+
+
+class TestTier2AdmissionGate:
+    """PR #7 review round 2: the admission gate lives in CrawlExecutionService.
+
+    The sink is a pure Tier 1 signal source; escalation is decided here using
+    ``result.had_recipe`` (positive job-source evidence) and
+    ``result.recipe_fallback`` (recipe opt-out). These tests pin the wiring:
+    the service forwards those signals + ``source_type`` to the orchestrator.
+    """
+
+    def _build_run(
+        self, owner_id: UUID, source: CrawlSource, plan_id: UUID
+    ) -> tuple[CrawlExecutionService, MagicMock, MagicMock, MagicMock, MagicMock, MagicMock]:
+        plan = _make_plan(plan_id=plan_id, owner_id=owner_id, sources=(source.id,))
+        run = _make_run(plan_version_id=plan_id)
+
+        tier2 = MagicMock()
+        tier2.run_source = AsyncMock(
+            return_value=Tier2RunResult(
+                source_id=str(source.id),
+                stop_reason=Tier2StopReason.COMPLETED,
+                postings_found=1,
+                postings_new=1,
+            )
+        )
+        service, run_repo, plan_repo, source_repo, sink = self._make_service(tier2=tier2)
+        run_repo.get_by_id.return_value = run
+        plan_repo.get_by_id.return_value = plan
+        source_repo.get_by_id.return_value = source
+        running_run = _make_run(run_id=run.id, plan_version_id=plan_id, state=CrawlRunState.RUNNING)
+        succeeded_run = _make_run(
+            run_id=run.id, plan_version_id=plan_id, state=CrawlRunState.SUCCEEDED
+        )
+        run_repo.update_terminal.side_effect = [running_run, succeeded_run]
+        return service, run_repo, plan_repo, source_repo, sink, tier2
+
+    def _make_service(
+        self, *, tier2: object | None = None
+    ) -> tuple[CrawlExecutionService, MagicMock, MagicMock, MagicMock, MagicMock]:
+        run_repo = MagicMock()
+        plan_repo = MagicMock()
+        source_repo = MagicMock()
+        sink = MagicMock()
+        sink.crawl_source_with_signals = AsyncMock(return_value=_make_empty_signals_result())
+        sink.ingest_posting = AsyncMock(
+            return_value={"is_new_posting": True, "is_new_version": True}
+        )
+        service = CrawlExecutionService(
+            run_repository=run_repo,
+            plan_repository=plan_repo,
+            source_repository=source_repo,
+            sink=sink,
+            tier2=tier2,  # type: ignore[arg-type]
+        )
+        return service, run_repo, plan_repo, source_repo, sink
+
+    @pytest.mark.asyncio
+    async def test_unknown_source_classified_not_job_source_no_tier2(self) -> None:
+        """An unknown HTTP source (``had_recipe=False``) classifies as
+        NOT_JOB_SOURCE and never reaches Tier 2 — ``run_source`` is not
+        called, and ``should_enter_tier2`` is not even consulted (NOT_JOB_SOURCE
+        is outside the escalation set)."""
+        owner_id = uuid4()
+        source = _make_source(owner_id=owner_id, source_type=CrawlSourceType.OFFICIAL)
+        service, run_repo, _plan_repo, _source_repo, sink, tier2 = self._build_run(
+            owner_id, source, uuid4()
+        )
+        # Unknown recipe outcome: had_recipe=False + missing fields. The sink
+        # mock controls the result; had_recipe=False is what makes this
+        # NOT_JOB_SOURCE regardless of source_type.
+        sink.crawl_source_with_signals.return_value = CrawlSourceResult(
+            postings=(),
+            status_code=200,
+            expected_fields_missing=("title",),
+            had_recipe=False,
+        )
+
+        await service.execute(owner_id, run_repo.get_by_id.return_value.id)
+
+        tier2.run_source.assert_not_called()
+        tier2.should_enter_tier2.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_recipe_parse_drift_routes_to_tier2_with_source_type(self) -> None:
+        """A recipe that ran (``had_recipe=True``) but drifted (missing fields)
+        classifies DYNAMIC_OR_UNSUPPORTED; the admission gate grants SKIP_PUBLIC
+        and ``run_source`` receives the source's ``source_type``."""
+        owner_id = uuid4()
+        source = _make_source(owner_id=owner_id, source_type=CrawlSourceType.GREENHOUSE)
+        service, run_repo, _plan_repo, _source_repo, sink, tier2 = self._build_run(
+            owner_id, source, uuid4()
+        )
+        sink.crawl_source_with_signals.return_value = CrawlSourceResult(
+            postings=(),
+            status_code=200,
+            expected_fields_missing=("title",),
+            had_recipe=True,
+            recipe_fallback="llm_skill",
+        )
+        tier2.should_enter_tier2.return_value = Tier2RoutingDecision.SKIP_PUBLIC
+
+        await service.execute(owner_id, run_repo.get_by_id.return_value.id)
+
+        # Evidence forwarded to the admission gate.
+        gate_call = tier2.should_enter_tier2.call_args
+        assert gate_call[1]["has_adapter"] is True
+        assert gate_call[1]["recipe_fallback"] == "llm_skill"
+        assert gate_call[1]["tier1_outcome"] is CrawlAttemptOutcome.DYNAMIC_OR_UNSUPPORTED
+        # run_source received the source_type for skill matching.
+        tier2.run_source.assert_awaited_once()
+        config = tier2.run_source.call_args[0][0]
+        assert config.source_type == CrawlSourceType.GREENHOUSE.value
+
+    @pytest.mark.asyncio
+    async def test_official_clean_empty_is_verified_empty_no_tier2(self) -> None:
+        """A clean 200 OFFICIAL page whose recipe ran (``had_recipe=True``) with
+        no missing fields classifies VERIFIED_EMPTY — Tier 2 is not entered."""
+        owner_id = uuid4()
+        source = _make_source(owner_id=owner_id, source_type=CrawlSourceType.OFFICIAL)
+        service, run_repo, _plan_repo, _source_repo, sink, tier2 = self._build_run(
+            owner_id, source, uuid4()
+        )
+        sink.crawl_source_with_signals.return_value = CrawlSourceResult(
+            postings=(),
+            status_code=200,
+            expected_fields_missing=(),
+            had_recipe=True,
+        )
+
+        await service.execute(owner_id, run_repo.get_by_id.return_value.id)
+
+        tier2.run_source.assert_not_called()
+        tier2.should_enter_tier2.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_recipe_fallback_none_denies_tier2(self) -> None:
+        """A recipe declaring ``fallback: none`` denies Tier 2 even when it ran
+        (``had_recipe=True``) and drifted — the admission gate must honour the
+        opt-out. ``run_source`` is not called."""
+        owner_id = uuid4()
+        source = _make_source(owner_id=owner_id, source_type=CrawlSourceType.GREENHOUSE)
+        service, run_repo, _plan_repo, _source_repo, sink, tier2 = self._build_run(
+            owner_id, source, uuid4()
+        )
+        sink.crawl_source_with_signals.return_value = CrawlSourceResult(
+            postings=(),
+            status_code=200,
+            expected_fields_missing=("title",),
+            had_recipe=True,
+            recipe_fallback="none",
+        )
+        # The gate returns DENY for fallback=none (asserted at the orchestrator
+        # level in test_bounded_tier2); here we feed that decision back in.
+        tier2.should_enter_tier2.return_value = Tier2RoutingDecision.DENY
+
+        await service.execute(owner_id, run_repo.get_by_id.return_value.id)
+
+        gate_call = tier2.should_enter_tier2.call_args
+        assert gate_call[1]["recipe_fallback"] == "none"
+        assert gate_call[1]["has_adapter"] is True
+        tier2.run_source.assert_not_called()
 
 
 class TestBackoffPolicyIntegration:

@@ -384,6 +384,9 @@ class CrawlExecutionService:
 
                 # A configured ego source whose public structured probe
                 # produced no postings is dynamic evidence, not VERIFIED_EMPTY.
+                # The rewrap preserves ``had_recipe`` / ``recipe_fallback`` so
+                # the Tier 2 admission gate still sees that a recipe ran
+                # (positive evidence) when it re-evaluates the source.
                 if (
                     source.executor_mode is CrawlExecutorMode.EGO
                     and not result.postings
@@ -395,16 +398,20 @@ class CrawlExecutionService:
                         status_code=result.status_code,
                         body_prefix=result.body_prefix,
                         expected_fields_missing=("dynamic_rendering_required",),
+                        had_recipe=result.had_recipe,
+                        recipe_fallback=result.recipe_fallback,
                     )
 
                 # Record the Tier 1 outcome before any Tier 2 escalation.
+                # ``has_adapter`` uses ``result.had_recipe`` (not the registry
+                # key lookup) because ``detect()``-routed recipes sit at a
+                # source_type the registry does not key on; ``had_recipe`` is
+                # the authoritative "did structured Tier 1 parsing run" signal.
                 tier1_outcome = classify_outcome(
                     ClassificationInput(
                         result=result,
                         policy_decision=policy_result.decision,
-                        has_adapter=self._sink.supports_source_type(
-                            source.source_type.value
-                        ),
+                        has_adapter=result.had_recipe,
                     )
                 )
                 if self._source_queue is not None:
@@ -413,9 +420,7 @@ class CrawlExecutionService:
                         source_id,
                         result,
                         policy_decision=policy_result.decision,
-                        has_adapter=self._sink.supports_source_type(
-                            source.source_type.value
-                        ),
+                        has_adapter=result.had_recipe,
                         crawl_run_id=run.id,
                         now=started_at,
                     )
@@ -429,6 +434,8 @@ class CrawlExecutionService:
                             owner_id,
                             source_id,
                             tier1_outcome=tier1_outcome,
+                            has_adapter=result.had_recipe,
+                            recipe_fallback=result.recipe_fallback,
                         )
                         if self._tier2 is not None
                         else Tier2RoutingDecision.DENY
@@ -470,6 +477,7 @@ class CrawlExecutionService:
                                     routing
                                     is Tier2RoutingDecision.SKIP_AUTHENTICATED
                                 ),
+                                source_type=source.source_type.value,
                             )
                         )
                         counters = dataclasses.replace(

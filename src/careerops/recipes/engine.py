@@ -135,6 +135,50 @@ class RecipeEngine:
         )
         return prefix_match or host_match
 
+    @property
+    def fallback(self) -> str:
+        """The recipe's ``fallback`` policy (``"llm_skill"`` / ``"none"``).
+
+        Exposed so the crawl sink can carry it into :class:`CrawlSourceResult`
+        and the Tier 2 admission gate (``should_enter_tier2``) can refuse to
+        escalate when a recipe explicitly declares ``fallback: none``.
+        """
+        return self._recipe.fallback
+
+    def matches_body(self, body: str) -> bool:
+        """Probe whether ``body`` is parseable by this recipe's first step.
+
+        Used by the OFFICIAL meta-type sub-router (the sink picks one of
+        ``official_sitemap`` / ``official_jsonld`` / ``official_static`` by
+        probing the fetched list page). Routes through the evaluator's public
+        :func:`evaluate_extract` so callers never reach into
+        ``self._recipe.steps[0].extract`` or the evaluator's private helpers.
+
+        Dispatch on the first step's extract ``mode``:
+
+        * ``sitemap`` — body parses to ``<urlset>`` / ``<sitemapindex>`` and at
+          least one ``<url><loc>`` survives the recipe's ``url_filter``.
+        * ``json_ld`` — body carries a ``<script type="application/ld+json">``
+          block that survives the recipe's ``@['@type']=='JobPosting'`` filter.
+        * ``css`` / ``json_path`` — always ``True``: these modes are the static
+          fallback shape and need no content gate (they parse anything), so the
+          OFFICIAL router's ``static`` engine is the universal catch-all.
+
+        Returns ``False`` only when the mode-specific extractor yields zero
+        rows.
+        """
+        # Local import: evaluator pulls in ``extruct`` / ``selectolax``; keep
+        # it out of the import path of callers that never probe a body.
+        from careerops.recipes.evaluator import evaluate_extract
+
+        extract = self._recipe.steps[0].extract
+        if extract.mode in ("sitemap", "json_ld"):
+            return bool(evaluate_extract(extract, body))
+        # css / json_path / unknown: treat as the static fallback (matches
+        # anything) so the OFFICIAL router's ``static`` engine is the
+        # universal catch-all.
+        return True
+
     async def execute(self, request: Any, fetch: Callable[[str], Any]) -> AdapterFetchResult:
         """Run the recipe's steps via the injected ``fetch`` and return the
         assembled :class:`AdapterFetchResult`.

@@ -20,7 +20,6 @@ steps:
   - id: list
     fetch:
       endpoint: "{base_url}"
-      method: GET
     extract:
       mode: json_path
       items_path: "$"

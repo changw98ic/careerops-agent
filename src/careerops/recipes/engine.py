@@ -187,7 +187,12 @@ class RecipeEngine:
             base_url_attr = getattr(request, "base_url", "") or ""
             base_ns["base_url"] = base_url_attr
 
-        steps_ns: dict[str, list[dict]] = run_steps(self._recipe.steps, fetch_one, base_ns)
+        steps_ns: dict[str, list[dict]] = run_steps(
+            self._recipe.steps,
+            fetch_one,
+            base_ns,
+            rate_limit=self._recipe.rate_limit or None,
+        )
         # Multi-step merge is already applied in-place by ``run_steps``; the
         # primary rows are those of the first (list) step. Taking
         # ``next(iter(...))`` is order-preserving on dict (Python 3.7+).

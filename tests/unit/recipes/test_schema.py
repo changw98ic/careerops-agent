@@ -25,7 +25,7 @@ executor_mode: http
 match: {url_patterns: ["boards.greenhouse.io/{slug}"]}
 steps:
   - id: list
-    fetch: {endpoint: "https://x/{slug}", method: GET}
+    fetch: {endpoint: "https://x/{slug}"}
     extract: {mode: json_path, items_path: "$.jobs",
       fields: {title: {path: title}, id: {path: id}}}
 """,
@@ -38,7 +38,7 @@ steps:
     assert r.executor_mode == "http"
     assert r.match.url_patterns == ["boards.greenhouse.io/{slug}"]
     assert r.steps[0].id == "list"
-    assert r.steps[0].fetch.method == "GET"
+    assert r.steps[0].fetch.endpoint == "https://x/{slug}"
     assert r.steps[0].extract.mode == "json_path"
     assert r.steps[0].extract.items_path == "$.jobs"
     assert r.steps[0].extract.fields["title"].path == "title"
@@ -58,7 +58,7 @@ executor_mode: http
 match: {url_patterns: ["x"]}
 steps:
   - id: list
-    fetch: {endpoint: "x", method: GET}
+    fetch: {endpoint: "x"}
     extract: {mode: json_path, items_path: "$.[broken",
       fields: {title: {path: title}}}
 """,

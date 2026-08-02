@@ -35,7 +35,6 @@ steps:
   - id: fetch
     fetch:
       endpoint: "{base_url}"
-      method: GET
     extract:
       mode: css
       fields:

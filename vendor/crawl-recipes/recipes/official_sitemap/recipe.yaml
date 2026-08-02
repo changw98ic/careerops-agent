@@ -32,7 +32,6 @@ steps:
   - id: fetch
     fetch:
       endpoint: "{base_url}"
-      method: GET
     extract:
       mode: sitemap
       url_filter: "\\b(jobs|careers|positions)\\b"

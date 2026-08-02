@@ -35,7 +35,7 @@ executor_mode: http
 match: {{url_patterns: ["x"]}}
 steps:
   - id: list
-    fetch: {{endpoint: "https://x/{{slug}}", method: GET}}
+    fetch: {{endpoint: "https://x/{{slug}}"}}
     extract: {{mode: json_path, items_path: "{items_path}",
       fields: {{title: {{path: title}}}}}}
 """,
@@ -84,7 +84,7 @@ executor_mode: http
 match: {url_patterns: ["x"]}
 steps:
   - id: list
-    fetch: {endpoint: "x", method: GET}
+    fetch: {endpoint: "x"}
     extract: {mode: json_path, items_path: "$.jobs[*].title",
       fields: {title: {path: title}}}
 """,
@@ -106,7 +106,7 @@ steps:
   - id: list
     when: "$.[broken-when"
     foreach: "$.boards[*]"
-    fetch: {endpoint: "x", method: GET}
+    fetch: {endpoint: "x"}
     extract: {mode: json_path, items_path: "$.jobs",
       fields: {title: {path: title}}}
 """,
@@ -127,7 +127,7 @@ match: {url_patterns: ["x"]}
 steps:
   - id: list
     foreach: "$.[nope"
-    fetch: {endpoint: "x", method: GET}
+    fetch: {endpoint: "x"}
     extract: {mode: json_path, items_path: "$.jobs",
       fields: {title: {path: title}}}
 """,
@@ -168,7 +168,7 @@ executor_mode: http
 match: {{url_patterns: ["x"]}}
 steps:
   - id: list
-    fetch: {{endpoint: "https://x/{{slug}}", method: GET}}
+    fetch: {{endpoint: "https://x/{{slug}}"}}
     extract:
       mode: json_path
       items_path: "$.jobs"

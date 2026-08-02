@@ -5,8 +5,8 @@ where to fetch, how to extract structured job fields from the response, and
 how to merge multi-step results. The shape is intentionally permissive
 (strings rather than enums for source identifiers) so new ATS sources can be
 onboarded by authoring YAML rather than editing code; only the fields that
-have a fixed vocabulary (``executor_mode``, HTTP ``method``, extract
-``mode``, ``transform``, ``fallback``) are constrained with ``Literal``.
+have a fixed vocabulary (``executor_mode``, extract ``mode``, ``transform``,
+``fallback``) are constrained with ``Literal``.
 
 The class name ``Field_`` (trailing underscore) avoids shadowing
 :func:`pydantic.Field` which is used to declare defaults on the same module.
@@ -27,13 +27,24 @@ class Match(BaseModel):
 
 
 class Fetch(BaseModel):
-    """HTTP fetch descriptor for a step."""
+    """HTTP fetch descriptor for a step.
+
+    Tier 1 recipes are GET-only against public JSON / HTML / XML endpoints,
+    and the recipe engine itself never opens a socket — the injected
+    ``fetch_one`` callable carries all per-request HTTP context (auth,
+    session, rate-limit state). ``method`` / ``headers`` / ``body`` /
+    ``pagination`` therefore have no executor wiring on this path: POST and
+    cursor pagination are Tier 2 concerns handled by the ``CrawlAgent``
+    skill playbook (see ``vendor/crawl-recipes/skills/workday``), not the
+    declarative recipe. They were declared on the schema but never read by
+    ``fetch_one`` (which only takes the endpoint), so declaring them here
+    was misleading — a recipe setting ``method: POST`` would silently be
+    fetched as GET. Removed per YAGNI; reintroducing them is a Phase B
+    decision when a Tier 1 source genuinely needs them and the executor
+    gains the wiring.
+    """
 
     endpoint: str
-    method: Literal["GET", "POST"] = "GET"
-    headers: dict[str, str] = Field(default_factory=dict)
-    body: str | None = None
-    pagination: dict[str, str] = Field(default_factory=dict)
 
 
 class Field_(BaseModel):

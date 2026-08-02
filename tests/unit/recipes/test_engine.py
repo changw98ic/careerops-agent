@@ -59,13 +59,12 @@ steps:
   - id: list
     fetch:
       endpoint: "https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true"
-      method: GET
     extract: {mode: json_path, items_path: "$.jobs",
       fields: {id: {path: id}, title: {path: title}, description: {path: description}}}
   - id: detail
     when: "$.steps.list[?(@.description=='')]"
     foreach: "$.steps.list[?(@.description=='')]"
-    fetch: {endpoint: "{list_endpoint}/{id}", method: GET}
+    fetch: {endpoint: "{list_endpoint}/{id}"}
     extract: {mode: json_path, fields: {description: {path: content}}}
     merge: {strategy: overwrite_empty}
 """
@@ -78,7 +77,7 @@ executor_mode: http
 match: {url_patterns: ["x"]}
 steps:
   - id: list
-    fetch: {endpoint: "https://x/jobs", method: GET}
+    fetch: {endpoint: "https://x/jobs"}
     extract: {mode: json_path, items_path: "$.jobs",
       fields: {id: {path: id}, title: {path: title}}}
 """

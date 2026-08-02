@@ -26,7 +26,6 @@ steps:
   - id: list
     fetch:
       endpoint: "{base_url}"
-      method: GET
     extract:
       mode: json_path
       items_path: "$.jobs"
@@ -41,7 +40,6 @@ steps:
     foreach: "$.steps.list[?(@.description=='')]"
     fetch:
       endpoint: "{list_endpoint}/{id}"
-      method: GET
     extract:
       mode: json_path
       fields:

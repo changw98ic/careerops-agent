@@ -53,6 +53,7 @@ import hashlib
 import html
 import logging
 import re
+import time
 from collections.abc import Callable
 from urllib.parse import urlsplit, urlunsplit
 from xml.etree import ElementTree
@@ -394,12 +395,20 @@ def run_steps(
     steps: list[Step],
     fetch_one: Callable[[str], object],
     base_ns: dict[str, str],
+    rate_limit: dict[str, int] | None = None,
 ) -> dict[str, list[dict]]:
     """Execute a recipe's ``steps`` in order, returning ``{step_id: [rows]}``.
 
     ``fetch_one(endpoint) -> object`` is the injected fetcher (returns the
     parsed JSON response). ``base_ns`` carries template variables such as
     ``{slug}`` and optionally ``{list_endpoint}``; it is copied, not mutated.
+
+    ``rate_limit`` mirrors :attr:`Recipe.rate_limit` (``{requests_per_minute:
+    60}``). When present and ``requests_per_minute > 0``, every
+    ``fetch_one`` call is preceded by ``time.sleep(60 / requests_per_minute)``
+    so the recipe self-throttles at the declared rate (greenhouse boards ask
+    for 60/min). ``None`` / empty / non-positive values skip throttling —
+    tests pass ``rate_limit=None`` (or omit it) so the suite never sleeps.
 
     Per-step semantics:
 
@@ -417,9 +426,17 @@ def run_steps(
       extract failure is logged and skipped — the failed item emits no row
       and is not merged (its parent list row keeps its current value), then
       iteration continues. This preserves the product contract that list
-      data remains useful when a detail fetch fails. List-step fetches
-      (non-foreach branch) are NOT guarded: a list fetch failure means the
-      run has no primary data, so the exception propagates.
+      data remains useful when a detail fetch fails.
+    * **whole-step fault tolerance** (spec §D "整步失败 → 产出空, 不阻断后续"):
+      a non-foreach (list) step whose ``fetch_one`` raises is caught — the
+      step's slot becomes ``[]`` and execution continues to the next step
+      rather than propagating. A failed list step means the recipe yields
+      zero postings for that run (its detail dependents see an empty
+      ``$.steps.<id>`` and naturally short-circuit); that is preferable to
+      aborting an entire crawl when one ATS board is temporarily down. The
+      failure is logged at WARNING level. ``evaluate_extract`` failures on
+      the list branch are guarded the same way (a malformed body should not
+      abort the run either).
 
     After a non-foreach step runs, the namespace publishes ``list_endpoint``
     derived from that step's endpoint with the query string stripped — this is
@@ -428,6 +445,14 @@ def run_steps(
     ``https://boards-api.greenhouse.io/v1/boards/<slug>/jobs`` from the list
     URL by dropping ``?content=true``).
     """
+    rpm = (rate_limit or {}).get("requests_per_minute") or 0
+    interval = 60.0 / rpm if rpm > 0 else 0.0
+
+    def _throttled_fetch(endpoint: str) -> object:
+        if interval > 0:
+            time.sleep(interval)
+        return fetch_one(endpoint)
+
     ns: dict = {"steps": {}}
     ctx = dict(base_ns)
     for step in steps:
@@ -447,12 +472,9 @@ def run_steps(
                 # no merge — the parent list row keeps its current value, e.g.
                 # empty description) and continue to the next item. This
                 # mirrors the legacy m1_crawl_sink contract: "List data
-                # remains useful on detail failure." List-step fetches (the
-                # ``else`` branch below) are NOT wrapped — a list fetch
-                # failure means the run has no primary data and should
-                # propagate.
+                # remains useful on detail failure."
                 try:
-                    data = fetch_one(ep)
+                    data = _throttled_fetch(ep)
                     drows = evaluate_extract(step.extract, data)
                 except Exception as exc:  # broad guard: see comment above
                     logger.warning(
@@ -467,12 +489,29 @@ def run_steps(
                     _merge_into(item, drows, step.merge.strategy)
         else:
             ep = _render(step.fetch.endpoint, ctx)
-            data = fetch_one(ep)
+            # Whole-step fault tolerance (spec §D): a list-step fetch or
+            # extract failure yields ``[]`` for this step and the run
+            # continues to subsequent steps rather than propagating. The
+            # failed recipe surfaces zero postings (its detail dependents
+            # see an empty parent list and short-circuit via ``when`` /
+            # ``foreach``) — preferable to aborting an entire crawl when
+            # one board is down. Logged at WARNING so operators can see it.
+            try:
+                data = _throttled_fetch(ep)
+                rows = evaluate_extract(step.extract, data)
+            except Exception as exc:
+                logger.warning(
+                    "recipes.list step failed (step=%s endpoint=%s): %s",
+                    step.id,
+                    ep,
+                    exc,
+                )
+                ns["steps"][step.id] = []
+                continue
             # Publish list_endpoint for subsequent detail steps: strip the
             # query string, keep scheme/netloc/path. Matches the legacy
             # _fetch_greenhouse_details derivation.
             parts = urlsplit(ep)
             ctx["list_endpoint"] = urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
-            rows = evaluate_extract(step.extract, data)
         ns["steps"][step.id] = rows
     return ns["steps"]

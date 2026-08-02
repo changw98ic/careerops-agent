@@ -32,8 +32,6 @@ from __future__ import annotations
 
 import hashlib
 
-import pytest
-
 from careerops.recipes.evaluator import apply_field, evaluate_extract, run_steps
 from careerops.recipes.schema import Extract, Field_, Filter, Recipe
 
@@ -337,13 +335,12 @@ steps:
   - id: list
     fetch:
       endpoint: "https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true"
-      method: GET
     extract: {mode: json_path, items_path: "$.jobs",
       fields: {id: {path: id}, title: {path: title}, description: {path: description}}}
   - id: detail
     when: "$.steps.list[?(@.description=='')]"
     foreach: "$.steps.list[?(@.description=='')]"
-    fetch: {endpoint: "{list_endpoint}/{id}", method: GET}
+    fetch: {endpoint: "{list_endpoint}/{id}"}
     extract: {mode: json_path, fields: {description: {path: content}}}
     merge: {strategy: overwrite_empty}
 """
@@ -441,12 +438,12 @@ executor_mode: http
 match: {url_patterns: ["x"]}
 steps:
   - id: list
-    fetch: {endpoint: "https://x/jobs", method: GET}
+    fetch: {endpoint: "https://x/jobs"}
     extract: {mode: json_path, items_path: "$.jobs",
       fields: {id: {path: id}, description: {path: description}}}
   - id: detail
     foreach: "$.steps.list[*]"
-    fetch: {endpoint: "{list_endpoint}/{id}", method: GET}
+    fetch: {endpoint: "{list_endpoint}/{id}"}
     extract: {mode: json_path, fields: {description: {path: content}}}
     merge: {strategy: __STRATEGY__}
 """
@@ -596,20 +593,142 @@ def test_multistep_detail_fetch_failure_skips_item_keeps_list_data():
     assert ns["detail"] == [{"description": "<p>desc for 2</p>"}]
 
 
-def test_multistep_list_step_failure_propagates():
-    """List-step fetch failures are NOT swallowed — the run has no primary
-    data, so the exception must propagate to the caller.
+def test_multistep_list_step_failure_yields_empty_and_continues():
+    """List-step fetch failures yield ``[]`` for that step and the run
+    continues to subsequent steps rather than propagating.
 
-    This pins the scope of the per-item fault tolerance: only foreach
-    (detail) per-item fetches are guarded; the list fetch failing is a hard
-    error.
+    Spec §D "整步失败 → 产出空, 不阻断后续". Concretely, when ``fetch_one``
+    raises for the list endpoint:
+
+    * the failed step's slot becomes ``[]`` (zero postings for this recipe
+      this run — preferable to aborting an entire crawl when one board is
+      down),
+    * subsequent steps still execute. A detail step whose ``foreach``
+      references the now-empty list naturally short-circuits (no items to
+      iterate), so no detail fetches are issued,
+    * ``run_steps`` returns normally — the caller never sees the exception.
+
+    This mirrors the per-item fault tolerance (``test_multistep_detail_fetch_
+    failure_skips_item_keeps_list_data``) lifted to the whole-step level.
     """
     r = Recipe.model_validate(yaml.safe_load(GREENHOUSE_YAML))
 
+    fetched: list[str] = []
+
     def fetch_one(endpoint):
+        fetched.append(endpoint)
         if "jobs?content=true" in endpoint:
             raise RuntimeError("list endpoint down")
         return {"content": "x"}
 
-    with pytest.raises(RuntimeError, match="list endpoint down"):
-        run_steps(r.steps, fetch_one, {"slug": "acme", "list_endpoint": "x"})
+    ns = run_steps(r.steps, fetch_one, {"slug": "acme", "list_endpoint": "x"})
+    # list step yielded empty (not raised)
+    assert ns["list"] == []
+    # detail step still has a slot (it short-circuited via the empty list)
+    assert ns["detail"] == []
+    # only the list endpoint was attempted — detail saw an empty foreach and
+    # did not issue its fetch
+    assert fetched == [
+        "https://boards-api.greenhouse.io/v1/boards/acme/jobs?content=true",
+    ]
+
+
+def test_multistep_list_step_extract_failure_also_yields_empty():
+    """A malformed body that breaks ``evaluate_extract`` on the list branch
+    is guarded the same way as a fetch failure — the step yields ``[]`` and
+    the run continues. (Broadens the whole-step guard beyond transport
+    errors to extract-time errors.)"""
+    r = Recipe.model_validate(yaml.safe_load(GREENHOUSE_YAML))
+
+    def fetch_one(endpoint):
+        if "jobs?content=true" in endpoint:
+            return object()  # non-dict/list → evaluate_extract returns [] safely
+        return {"content": "x"}
+
+    ns = run_steps(r.steps, fetch_one, {"slug": "acme", "list_endpoint": "x"})
+    assert ns["list"] == []
+    assert ns["detail"] == []
+
+
+# ---------------------------------------------------------------------------
+# rate_limit throttling (PR #7 review fix batch 3)
+#
+# ``run_steps`` reads ``rate_limit["requests_per_minute"]`` and sleeps
+# ``60 / rpm`` seconds before every ``fetch_one`` call. Tests monkeypatch
+# ``time.sleep`` so the suite never blocks; production crawls (greenhouse
+# declares 60/min) pay the real throttle.
+# ---------------------------------------------------------------------------
+
+
+def test_run_steps_rate_limit_sleeps_before_each_fetch(monkeypatch):
+    """A non-empty ``rate_limit`` triggers ``time.sleep(60 / rpm)`` before
+    every ``fetch_one`` call (list + per-item detail). Two fetches → two
+    sleeps, each ``60 / 60 == 1.0`` seconds."""
+    sleeps: list[float] = []
+    monkeypatch.setattr(
+        "careerops.recipes.evaluator.time.sleep", lambda s: sleeps.append(s)
+    )
+
+    r = Recipe.model_validate(yaml.safe_load(GREENHOUSE_YAML))
+    list_json = {"jobs": [{"id": "1", "title": "A", "description": ""}]}
+    detail_json = {"content": "filled"}
+
+    def fetch_one(endpoint):
+        return detail_json if endpoint.endswith("/1") else list_json
+
+    run_steps(
+        r.steps,
+        fetch_one,
+        {"slug": "acme", "list_endpoint": "https://x/jobs"},
+        rate_limit={"requests_per_minute": 60},
+    )
+    # list fetch + 1 detail fetch = 2 throttled sleeps, each 1.0s (60/60)
+    assert sleeps == [1.0, 1.0]
+
+
+def test_run_steps_no_rate_limit_does_not_sleep(monkeypatch):
+    """Without ``rate_limit`` (or an empty dict), the run does not sleep at
+    all — unit tests stay fast."""
+    sleeps: list[float] = []
+    monkeypatch.setattr(
+        "careerops.recipes.evaluator.time.sleep", lambda s: sleeps.append(s)
+    )
+
+    r = Recipe.model_validate(yaml.safe_load(GREENHOUSE_YAML))
+    list_json = {"jobs": [{"id": "1", "title": "A", "description": ""}]}
+    detail_json = {"content": "filled"}
+
+    def fetch_one(endpoint):
+        return detail_json if endpoint.endswith("/1") else list_json
+
+    run_steps(
+        r.steps,
+        fetch_one,
+        {"slug": "acme", "list_endpoint": "https://x/jobs"},
+        rate_limit=None,
+    )
+    assert sleeps == []
+
+
+def test_run_steps_rate_limit_zero_or_negative_is_noop(monkeypatch):
+    """A non-positive ``requests_per_minute`` is treated as 'no throttle' so
+    a malformed recipe (e.g. ``{requests_per_minute: 0}``) cannot stall the
+    crawl with infinite sleeps."""
+    sleeps: list[float] = []
+    monkeypatch.setattr(
+        "careerops.recipes.evaluator.time.sleep", lambda s: sleeps.append(s)
+    )
+
+    r = Recipe.model_validate(yaml.safe_load(GREENHOUSE_YAML))
+    list_json = {"jobs": [{"id": "1", "title": "A", "description": ""}]}
+
+    def fetch_one(endpoint):
+        return list_json
+
+    run_steps(
+        r.steps,
+        fetch_one,
+        {"slug": "acme", "list_endpoint": "https://x/jobs"},
+        rate_limit={"requests_per_minute": 0},
+    )
+    assert sleeps == []

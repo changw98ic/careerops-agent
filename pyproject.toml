@@ -20,7 +20,7 @@ dependencies = [
     "jsonschema>=4,<5",
     "langgraph==1.2.9",
     "langgraph-checkpoint-postgres>=3,<4",
-    "cryptography>=48.0.1,<49",
+    "cryptography>=50.0.0,<51",
 ]
 
 [project.scripts]
